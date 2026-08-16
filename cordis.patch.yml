@@ -12,7 +12,7 @@
     - id: prompt-templates
       # Node-resolvable package name — must stay in sync with package.json
       # `name`. Quoted because `@` is a reserved YAML indicator.
-      name: '@deepseek-ai/dsh-prompt-templates'
+      name: '@nelsonlongxiang/dsh-prompt-templates'
       config:
         # The Python backend child: package-local venv interpreter running
         # the extracted template backend's serve command.
