@@ -1,0 +1,22 @@
+# dsh-prompt-templates bundle patch: mounts the prompt-templates plugin into
+# the host composition of a dsh profile. The plugin registers its
+# /plugins/dsh-prompt-templates routes into the shared web server and its
+# settings namespace into the shared settings document, so it needs no realm.
+#
+# Install: `dsh plugin --profile <name> add <this package>` (npm, a local
+# path, or Git). The `dsh plugin` command pnpm-installs the package into the
+# profile and reconciles it into the profile's `dsh.profile.bundles` layer
+# list. The command below resolves the package-local Python venv created by
+# `scripts/bootstrap.mjs` (run by `prepare`), relative to the package root.
+- insert:
+    - id: prompt-templates
+      # Node-resolvable package name — must stay in sync with package.json
+      # `name`. Quoted because `@` is a reserved YAML indicator.
+      name: '@deepseek-ai/dsh-prompt-templates'
+      config:
+        # The Python backend child: package-local venv interpreter running
+        # the extracted template backend's serve command.
+        command: !!js >
+          process.platform === 'win32'
+            ? [require('node:path').join(__dirname, '..', 'python', '.venv', 'Scripts', 'python.exe'), '-m', 'dsh_prompt_templates.cli', 'serve']
+            : [require('node:path').join(__dirname, '..', 'python', '.venv', 'bin', 'python'), '-m', 'dsh_prompt_templates.cli', 'serve']

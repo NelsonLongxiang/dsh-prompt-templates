@@ -1,0 +1,7 @@
+node_modules/
+lib/
+*.tsbuildinfo
+.DS_Store
+python/.venv/
+python/__pycache__/
+python/src/*.egg-info/

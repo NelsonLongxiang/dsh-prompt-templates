@@ -1,0 +1,33 @@
+/* Composer tool-row entry: colors ride the ui-theme alias tokens so the
+   button follows the active light/dark scheme. */
+
+.button,
+.buttonActive {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--dsw-alias-border-inverted);
+  border-radius: 4px;
+  background: none;
+  cursor: pointer;
+  color: var(--dsw-alias-label-secondary);
+  padding: 0;
+}
+
+.button:hover,
+.buttonActive:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.buttonActive {
+  background: var(--dsw-alias-interactive-bg-hover);
+  border-color: var(--dsw-alias-brand-primary);
+  color: var(--dsw-alias-label-primary);
+}
+
+.glyph {
+  font-size: 13px;
+  line-height: 1;
+}
