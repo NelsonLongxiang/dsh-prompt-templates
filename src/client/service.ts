@@ -8,7 +8,7 @@
  * as the registration's bound actions.
  */
 import type { BoundActions } from '@deepseek-ai/dsh-client-ui-slots'
-import type { ClientContext, SessionId } from '@deepseek-ai/dsh-client-runtime/client'
+import type { ClientContext, SessionId, ISessions } from '@deepseek-ai/dsh-client-runtime/client'
 import type { createPromptPanelStore } from './store.ts'
 
 /** The panel store's bound action set (framework-baked, draft params peeled). */
@@ -34,7 +34,7 @@ export interface IPromptPanel {
  */
 export class PromptPanelController implements IPromptPanel {
   #actions: PromptPanelActions | undefined
-  #sessions: ClientContext['sessions'] | undefined
+  #sessions: ISessions | undefined
   #conversation: ClientContext['conversation'] | undefined
   #pendingAutoOpen = false
 
@@ -58,7 +58,7 @@ export class PromptPanelController implements IPromptPanel {
    * @param deps - sessions and conversation services from the plugin closure.
    */
   bind(deps: {
-    sessions: ClientContext['sessions']
+    sessions: ISessions
     conversation: ClientContext['conversation']
   }): void {
     this.#sessions = deps.sessions
