@@ -26,3 +26,7 @@
           process.platform === 'win32'
             ? ['uv', 'run', '--project', process.getBuiltinModule('node:url').fileURLToPath(new URL('node_modules/@nelsonlongxiang/dsh-prompt-templates/python', baseUrl)), 'python', '-m', 'dsh_prompt_templates.cli', 'serve']
             : ['uv', 'run', '--project', process.getBuiltinModule('node:url').fileURLToPath(new URL('node_modules/@nelsonlongxiang/dsh-prompt-templates/python', baseUrl)), 'python', '-m', 'dsh_prompt_templates.cli', 'serve']
+        # Explicit SQLite database path so persistence lands under
+        # $DSH_HOME/ext/prompt-templates/ regardless of cwd or environment drift.
+        dbPath: !!js >
+          `${(process.env.DSH_HOME ?? `${process.getBuiltinModule('node:os').homedir()}/.dsh`).replace(/\\/g, '/')}/ext/prompt-templates/db.sqlite3`
