@@ -41,7 +41,7 @@ importers:
     devDependencies:
       '@nelsonlongxiang/dsh-python-bridge':
         specifier: file:../dsh-python-bridge
-        version: file:../dsh-python-bridge(@deepseek-ai/dsh-subprocess@0.0.1-rc.1(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)))
+        version: file:../dsh-python-bridge(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-subprocess@0.0.1-rc.1(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)))
       '@types/node':
         specifier: ^24.13.3
         version: 24.13.3
@@ -725,8 +725,11 @@ packages:
   '@nelsonlongxiang/dsh-python-bridge@file:../dsh-python-bridge':
     resolution: {directory: ../dsh-python-bridge, type: directory}
     peerDependencies:
+      '@deepseek-ai/cordis': '>=4.0.1-rc.1'
       '@deepseek-ai/dsh-subprocess': '>=0.0.1-rc.1'
     peerDependenciesMeta:
+      '@deepseek-ai/cordis':
+        optional: true
       '@deepseek-ai/dsh-subprocess':
         optional: true
 
@@ -2239,8 +2242,9 @@ snapshots:
       '@tybys/wasm-util': 0.10.3
     optional: true
 
-  '@nelsonlongxiang/dsh-python-bridge@file:../dsh-python-bridge(@deepseek-ai/dsh-subprocess@0.0.1-rc.1(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)))':
+  '@nelsonlongxiang/dsh-python-bridge@file:../dsh-python-bridge(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-subprocess@0.0.1-rc.1(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)))':
     optionalDependencies:
+      '@deepseek-ai/cordis': 4.0.1(@deepseek-ai/cordis-plugin-include@1.0.6)(@deepseek-ai/cordis-plugin-loader@1.0.2)
       '@deepseek-ai/dsh-subprocess': 0.0.1-rc.1(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1))
 
   '@oxc-project/types@0.139.0': {}

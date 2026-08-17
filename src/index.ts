@@ -21,15 +21,14 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import s from '@deepseek-ai/schemastery'
 import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import { PythonBridge, PythonBridgeError } from '@nelsonlongxiang/dsh-python-bridge'
-import type { SubprocessSpawnSpec, SubprocessHandle } from '@deepseek-ai/dsh-subprocess'
 import type { TemplateView } from './types.ts'
 
 export type * from './types.ts'
 
 export const name = 'prompt-templates'
 
-/** Spawns the Python child; the web-server route registration waits for it lazily. */
-export const inject = ['subprocess']
+/** Spawns the Python child through the pythonBridge service; the web-server route registration waits for it lazily. */
+export const inject = ['pythonBridge']
 
 /** Deployment-varying spawn facts for the Python backend child. */
 export interface Config {
@@ -73,9 +72,9 @@ export interface TemplateError {
 
 /**
  * Host plugin body: lazily register the web routes once the web server and
- * this plugin's subprocess seam are both live; headless profiles without a
+ * this plugin's pythonBridge service are both live; headless profiles without a
  * web server never block boot.
- * @param ctx - Host context carrying the subprocess seam.
+ * @param ctx - Host context carrying the pythonBridge service.
  * @param config - validated spawn facts for the Python backend.
  */
 export function apply(ctx: Context, config: Config): void {
@@ -88,13 +87,12 @@ export function apply(ctx: Context, config: Config): void {
   let bridge: PythonBridge | undefined
   const client = (): PythonBridge => {
     if (bridge === undefined) {
-      bridge = new PythonBridge({
+      bridge = ctx.pythonBridge.create({
         argv: resolved.dbPath === undefined
           ? [...resolved.command]
           : [...resolved.command, '--db', resolved.dbPath],
         cwd: resolved.cwd,
         eofGraceMs: resolved.eofGraceMs,
-        spawn: (spec: SubprocessSpawnSpec): SubprocessHandle => ctx.subprocess.spawn(spec),
       })
     }
     return bridge
