@@ -18,11 +18,11 @@
     - id: prompt-templates
       # Node-resolvable package name — must stay in sync with package.json
       # `name`. Quoted because `@` is a reserved YAML indicator.
-      name: '@jf/dsh-prompt-templates'
+      name: '@nelsonlongxiang/dsh-prompt-templates'
       config:
         # The Python backend child: uv-managed package venv running the
         # extracted template backend's serve command.
         command: !!js >
           process.platform === 'win32'
-            ? ['uv', 'run', '--project', process.getBuiltinModule('node:url').fileURLToPath(new URL('node_modules/@jf/dsh-prompt-templates/python', baseUrl)), 'python', '-m', 'dsh_prompt_templates.cli', 'serve']
-            : ['uv', 'run', '--project', process.getBuiltinModule('node:url').fileURLToPath(new URL('node_modules/@jf/dsh-prompt-templates/python', baseUrl)), 'python', '-m', 'dsh_prompt_templates.cli', 'serve']
+            ? ['uv', 'run', '--project', process.getBuiltinModule('node:url').fileURLToPath(new URL('node_modules/@nelsonlongxiang/dsh-prompt-templates/python', baseUrl)), 'python', '-m', 'dsh_prompt_templates.cli', 'serve']
+            : ['uv', 'run', '--project', process.getBuiltinModule('node:url').fileURLToPath(new URL('node_modules/@nelsonlongxiang/dsh-prompt-templates/python', baseUrl)), 'python', '-m', 'dsh_prompt_templates.cli', 'serve']
