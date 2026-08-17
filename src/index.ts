@@ -20,7 +20,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import s from '@deepseek-ai/schemastery'
 import { settingsNamespace } from '@deepseek-ai/dsh-settings'
-import { PythonBridge, PythonBridgeError } from '@nelsonlongxiang/dsh-python-bridge'
+import { PythonBridge, PythonBridgeError } from '@jf/dsh-python-bridge'
 import type { SubprocessSpawnSpec, SubprocessHandle } from '@deepseek-ai/dsh-subprocess'
 import type { TemplateView } from './types.ts'
 

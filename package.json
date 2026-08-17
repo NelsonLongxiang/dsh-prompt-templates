@@ -1,5 +1,5 @@
 {
-  "name": "@nelsonlongxiang/dsh-prompt-templates",
+  "name": "@jf/dsh-prompt-templates",
   "version": "0.2.0",
   "description": "Quick prompt templates for DeepSeek Harness: global and per-session templates, a browser panel, and a Python-backed persistence backend",
   "type": "module",
@@ -48,7 +48,6 @@
   "peerDependencies": {
     "@deepseek-ai/cordis": ">=4.0.1-rc.1",
     "@deepseek-ai/dsh-invariants": ">=0.1.0-rc.6",
-    "@nelsonlongxiang/dsh-python-bridge": ">=0.1.0",
     "@deepseek-ai/dsh-settings": ">=0.1.0-rc.6",
     "@deepseek-ai/dsh-subprocess": ">=0.0.1-rc.1",
     "@deepseek-ai/dsh-client-locale": ">=0.1.0-rc.6",
@@ -57,24 +56,48 @@
     "@deepseek-ai/dsh-client-ui-primitives": ">=0.1.0-rc.6",
     "@deepseek-ai/dsh-client-ui-slots": ">=0.1.0-rc.6",
     "@deepseek-ai/schemastery": ">=3.18.1-rc.1",
-    "react": "^18.2.0"
+    "react": "^18.2.0",
+    "@jf/dsh-python-bridge": ">=0.1.0"
   },
   "peerDependenciesMeta": {
-    "@deepseek-ai/cordis": { "optional": true },
-    "@deepseek-ai/dsh-invariants": { "optional": true },
-    "@nelsonlongxiang/dsh-python-bridge": { "optional": true },
-    "@deepseek-ai/dsh-settings": { "optional": true },
-    "@deepseek-ai/dsh-subprocess": { "optional": true },
-    "@deepseek-ai/dsh-client-locale": { "optional": true },
-    "@deepseek-ai/dsh-client-runtime": { "optional": true },
-    "@deepseek-ai/dsh-client-ui-conversation": { "optional": true },
-    "@deepseek-ai/dsh-client-ui-primitives": { "optional": true },
-    "@deepseek-ai/dsh-client-ui-slots": { "optional": true },
-    "@deepseek-ai/schemastery": { "optional": true },
-    "react": { "optional": true }
+    "@deepseek-ai/cordis": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-invariants": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-settings": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-subprocess": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-client-locale": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-client-runtime": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-client-ui-conversation": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-client-ui-primitives": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-client-ui-slots": {
+      "optional": true
+    },
+    "@deepseek-ai/schemastery": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    },
+    "@jf/dsh-python-bridge": {
+      "optional": true
+    }
   },
   "devDependencies": {
-    "@nelsonlongxiang/dsh-python-bridge": "file:../dsh-python-bridge",
     "@types/node": "^24.13.3",
     "@types/react": "~18.3.1",
     "@types/react-dom": "^18.3.7",
@@ -82,7 +105,8 @@
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "tsdown": "0.22.2",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "@jf/dsh-python-bridge": "file:../dsh-python-bridge"
   },
   "license": "MIT"
 }

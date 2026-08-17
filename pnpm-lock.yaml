@@ -39,7 +39,7 @@ importers:
         specifier: '>=3.18.1-rc.1'
         version: 3.18.1
     devDependencies:
-      '@nelsonlongxiang/dsh-python-bridge':
+      '@jf/dsh-python-bridge':
         specifier: file:../dsh-python-bridge
         version: file:../dsh-python-bridge(@deepseek-ai/dsh-subprocess@0.0.1-rc.1(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)))
       '@types/node':
@@ -699,6 +699,14 @@ packages:
   '@emnapi/wasi-threads@1.2.2':
     resolution: {integrity: sha512-c95qOXkHdydNKhscBTebqEC1CVAZpyqOfVfBzQ1qgzyl3gfeldUjIggDbIZgDKsHLgnsM+igH7TJ/eAasaVuMA==}
 
+  '@jf/dsh-python-bridge@file:../dsh-python-bridge':
+    resolution: {directory: ../dsh-python-bridge, type: directory}
+    peerDependencies:
+      '@deepseek-ai/dsh-subprocess': '>=0.0.1-rc.1'
+    peerDependenciesMeta:
+      '@deepseek-ai/dsh-subprocess':
+        optional: true
+
   '@jridgewell/gen-mapping@0.3.12':
     resolution: {integrity: sha512-OuLGC46TjB5BbN1dH8JULVVZY4WTdkF7tV9Ys6wLL1rubZnCMstOhNHueU5bLCrnRuDhKPDM4g6sw4Bel5Gzqg==}
 
@@ -721,14 +729,6 @@ packages:
     peerDependencies:
       '@emnapi/core': ^1.7.1 || ^2.0.0-alpha.4
       '@emnapi/runtime': ^1.7.1 || ^2.0.0-alpha.4
-
-  '@nelsonlongxiang/dsh-python-bridge@file:../dsh-python-bridge':
-    resolution: {directory: ../dsh-python-bridge, type: directory}
-    peerDependencies:
-      '@deepseek-ai/dsh-subprocess': '>=0.0.1-rc.1'
-    peerDependenciesMeta:
-      '@deepseek-ai/dsh-subprocess':
-        optional: true
 
   '@oxc-project/types@0.139.0':
     resolution: {integrity: sha512-r9gHphtCs+1M7J0pw6Sn/hh/Wpa/iQrOOkrNAlVLF/gHq+/CJmHIWKKUUhdWjcD6CIa8idarspCsASiXCXvFUw==}
@@ -2216,6 +2216,10 @@ snapshots:
       tslib: 2.8.1
     optional: true
 
+  '@jf/dsh-python-bridge@file:../dsh-python-bridge(@deepseek-ai/dsh-subprocess@0.0.1-rc.1(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)))':
+    optionalDependencies:
+      '@deepseek-ai/dsh-subprocess': 0.0.1-rc.1(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1))
+
   '@jridgewell/gen-mapping@0.3.12':
     dependencies:
       '@jridgewell/sourcemap-codec': 1.5.0
@@ -2238,10 +2242,6 @@ snapshots:
       '@emnapi/runtime': 1.11.1
       '@tybys/wasm-util': 0.10.3
     optional: true
-
-  '@nelsonlongxiang/dsh-python-bridge@file:../dsh-python-bridge(@deepseek-ai/dsh-subprocess@0.0.1-rc.1(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)))':
-    optionalDependencies:
-      '@deepseek-ai/dsh-subprocess': 0.0.1-rc.1(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1))
 
   '@oxc-project/types@0.139.0': {}
 
