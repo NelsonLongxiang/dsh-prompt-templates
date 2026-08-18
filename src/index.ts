@@ -20,7 +20,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import s from '@deepseek-ai/schemastery'
 import { settingsNamespace } from '@deepseek-ai/dsh-settings'
-import { PythonBridgeError } from '@nelsonlongxiang/dsh-python-bridge'
+import { DEFAULT_EOF_GRACE_MS, PythonBridgeError, resolveEofGrace } from '@nelsonlongxiang/dsh-python-bridge'
 import type { PythonBridge } from '@nelsonlongxiang/dsh-python-bridge'
 import type { TemplateView } from './types.ts'
 
@@ -49,9 +49,6 @@ export const Config: s<Config> = s.object({
   eofGraceMs: s.number(),
   dbPath: s.string(),
 })
-
-/** Default grace for the child's EOF-driven quiesce. */
-export const DEFAULT_EOF_GRACE_MS = 6_000
 
 /** Structural slice of the web-server service (route registration only). */
 interface WebRouteHost {
@@ -82,7 +79,7 @@ export function apply(ctx: Context, config: Config): void {
   const resolved = {
     command: [...config.command],
     cwd: config.cwd ?? process.cwd(),
-    eofGraceMs: resolveEofGrace(config.eofGraceMs ?? DEFAULT_EOF_GRACE_MS),
+    eofGraceMs: resolveEofGrace(config.eofGraceMs ?? DEFAULT_EOF_GRACE_MS, 'prompt-templates'),
     dbPath: config.dbPath ?? undefined,
   }
   let bridge: PythonBridge | undefined
@@ -220,14 +217,4 @@ function notFound(id: string): unknown {
 /** The business error envelope. */
 function errorBody(code: string, message: string): unknown {
   return { error: { code, message } }
-}
-
-/** Bounded by Node's timer delay ceiling (subprocess `graceMs` contract). */
-function resolveEofGrace(value: number): number {
-  if (!Number.isFinite(value) || value <= 0 || value > 2_147_483_647) {
-    throw new TypeError(
-      `prompt-templates: eofGraceMs must be a positive finite ms, got ${String(value)}`,
-    )
-  }
-  return value
 }
