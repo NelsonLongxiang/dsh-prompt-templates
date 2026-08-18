@@ -15,10 +15,11 @@
 # `process` and `baseUrl` (the profile directory, whose node_modules holds
 # the installed package) — `require`/`__dirname` are not available there.
 - insert:
-    # Shared Python bridge service used by this and other Python-backed plugins.
-    - id: python-bridge
-      name: '@nelsonlongxiang/dsh-python-bridge'
-
+    # Python backend child. The shared `python-bridge` service is provided by
+    # the host profile (typically via @nelsonlongxiang/dsh-native-teams or by
+    # explicitly bundling @nelsonlongxiang/dsh-python-bridge); this patch no
+    # longer declares it to avoid duplicate loader entry ids when multiple
+    # Python-backed plugins are composed.
     - id: prompt-templates
       # Node-resolvable package name — must stay in sync with package.json
       # `name`. Quoted because `@` is a reserved YAML indicator.

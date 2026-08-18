@@ -175,6 +175,8 @@ export function PromptPanel(props: PromptPanelProps) {
   const currentSession = useSessions(s => s.current)
   const [templates, setTemplates] = useState<TemplateView[]>([])
   const [showAdd, setShowAdd] = useState(false)
+  // Live search filter over name + content, case-insensitive.
+  const [query, setQuery] = useState('')
   // In-place editing: the id whose row swaps to the edit form, null = none.
   const [editingId, setEditingId] = useState<string | null>(null)
   // Drag placement: seeded from the persisted position, live-updated while
@@ -262,8 +264,14 @@ export function PromptPanel(props: PromptPanelProps) {
   if (!open) return null
 
   // The full set is loaded; group here — a server-side session filter would
-  // hide global rows (their session_id is NULL and never matches).
-  const globalRows = templates.filter(row => row.scope === 'global')
+  // hide global rows (their session_id is NULL and never matches). The search
+  // query narrows both groups by name + content, case-insensitive.
+  const needle = query.trim().toLowerCase()
+  const matches = (row: TemplateView): boolean =>
+    needle === ''
+    || row.name.toLowerCase().includes(needle)
+    || row.content.toLowerCase().includes(needle)
+  const globalRows = templates.filter(row => row.scope === 'global' && matches(row))
   /** One list row: the edit form while being edited, the rendered row otherwise. */
   const renderTemplateRow = (row: TemplateView) => (
     editingId === row.id
@@ -292,7 +300,9 @@ export function PromptPanel(props: PromptPanelProps) {
         />
       )
   )
-  const sessionRows = templates.filter(row => row.scope === 'session' && row.session_id === sessionId)
+  const sessionRows = templates.filter(
+    row => row.scope === 'session' && row.session_id === sessionId && matches(row),
+  )
   const placement = dragPos ?? persisted
   const placementStyle = placement === null
     ? undefined
@@ -318,9 +328,22 @@ export function PromptPanel(props: PromptPanelProps) {
           ×
         </button>
       </div>
+      <div className={css.searchBar}>
+        <input
+          type="search"
+          className={css.searchInput}
+          value={query}
+          onChange={(e) => { setQuery(e.target.value) }}
+          placeholder={t('panel.search')}
+          aria-label={t('panel.search')}
+        />
+      </div>
       <div className={css.body}>
         {templates.length === 0 && !showAdd && (
           <div className={css.empty}>{t('panel.empty')}</div>
+        )}
+        {templates.length > 0 && needle !== '' && globalRows.length === 0 && sessionRows.length === 0 && (
+          <div className={css.empty}>{t('panel.noMatch')}</div>
         )}
         {globalRows.length > 0 && (
           <div className={css.group}>

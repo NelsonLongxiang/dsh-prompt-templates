@@ -1,6 +1,6 @@
 {
   "name": "@nelsonlongxiang/dsh-prompt-templates",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "Quick prompt templates for DeepSeek Harness: global and per-session templates, a browser panel, and a Python-backed persistence backend",
   "type": "module",
   "main": "lib/index.js",
@@ -56,8 +56,7 @@
     "@deepseek-ai/dsh-client-ui-primitives": ">=0.1.0-rc.6",
     "@deepseek-ai/dsh-client-ui-slots": ">=0.1.0-rc.6",
     "@deepseek-ai/schemastery": ">=3.18.1-rc.1",
-    "react": "^18.2.0",
-    "@nelsonlongxiang/dsh-python-bridge": ">=0.3.0"
+    "react": "^18.2.0"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/cordis": {
@@ -91,9 +90,6 @@
       "optional": true
     },
     "react": {
-      "optional": true
-    },
-    "@nelsonlongxiang/dsh-python-bridge": {
       "optional": true
     }
   },
