@@ -5,3 +5,5 @@ lib/
 python/.venv/
 python/**/__pycache__/
 python/src/*.egg-info/
+
+*.tgz
