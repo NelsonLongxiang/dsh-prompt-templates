@@ -6,6 +6,8 @@ English | [中文](README_zh.md)
 
 Quick prompt templates for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness): global and per-session templates, a right-side browser panel, and a Python-backed SQLite persistence — one self-contained plugin, installable with `dsh plugin`.
 
+![The templates panel](images/image-01.png)
+
 ## Install
 
 ```sh

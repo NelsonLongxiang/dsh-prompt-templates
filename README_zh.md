@@ -6,6 +6,8 @@
 
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 快捷提示词模板：全局与会话级模板、右侧浏览器面板、Python 后端的 SQLite 持久化——一个自包含插件，`dsh plugin` 即装。
 
+![模板面板](images/image-01.png)
+
 ## 安装
 
 ```sh

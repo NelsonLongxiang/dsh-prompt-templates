@@ -1,6 +1,6 @@
 {
   "name": "@nelsonlongxiang/dsh-prompt-templates",
-  "version": "0.2.9",
+  "version": "0.2.10",
   "description": "Quick prompt templates for DeepSeek Harness: global and per-session templates, a browser panel, and a Python-backed persistence backend",
   "type": "module",
   "main": "lib/index.js",
@@ -26,7 +26,8 @@
     "scripts",
     "cordis.patch.yml",
     "README.md",
-    "README_zh.md"
+    "README_zh.md",
+    "images"
   ],
   "dsh": {
     "bundle": {
