@@ -7,3 +7,4 @@ python/**/__pycache__/
 python/src/*.egg-info/
 
 *.tgz
+.npmrc

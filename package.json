@@ -1,6 +1,6 @@
 {
   "name": "@nelsonlongxiang/dsh-prompt-templates",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "description": "Quick prompt templates for DeepSeek Harness: global and per-session templates, a browser panel, and a Python-backed persistence backend",
   "type": "module",
   "main": "lib/index.js",
@@ -19,7 +19,10 @@
   },
   "files": [
     "lib",
-    "python",
+    "python/src",
+    "python/pyproject.toml",
+    "python/uv.lock",
+    "python/README.md",
     "scripts",
     "cordis.patch.yml",
     "README.md"
@@ -41,7 +44,7 @@
     "build": "tsc -p tsconfig.json && tsc -p tsconfig.client.json && tsdown",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json --noEmit",
     "bootstrap:python": "node scripts/bootstrap.mjs",
-    "prepare": "node scripts/bootstrap.mjs",
+    "prepare": "pnpm build && node scripts/bootstrap.mjs",
     "test:python": "uv run --project python pytest",
     "verify": "pnpm typecheck && pnpm test:python"
   },

@@ -22,7 +22,7 @@ if (!existsSync(join(pythonProject, 'pyproject.toml'))) {
 
 const result = spawnSync('uv', ['sync', '--project', pythonProject], {
   stdio: 'inherit',
-  env: { ...process.env, UV_PROJECT_ENVIRONMENT: join(pythonProject, '.venv') },
+  env: { ...process.env, UV_PROJECT_ENVIRONMENT: join(pythonProject, '.venv'), PYTHONDONTWRITEBYTECODE: '1' },
 })
 
 if (result.error !== undefined) {
