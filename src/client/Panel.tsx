@@ -326,9 +326,19 @@ export function PromptPanel(props: PromptPanelProps) {
     row => row.scope === 'session' && row.session_id === sessionId && matches(row),
   )
   const placement = dragPos ?? persisted
+  // With bottom:auto the fixed panel's height is content-driven, so a long
+  // list would stretch past the viewport with no internal scroll. Cap the
+  // height at (viewport - top - margin); the flex column + body's
+  // min-height/overflow then keeps the list scrolling inside the panel.
   const placementStyle = placement === null
     ? undefined
-    : { left: placement.x, top: placement.y, right: 'auto', bottom: 'auto' } as const
+    : {
+        left: placement.x,
+        top: placement.y,
+        right: 'auto',
+        bottom: 'auto',
+        maxHeight: `calc(100vh - ${placement.y}px - 16px)`,
+      } as const
 
   return (
     <div className={css.panel} data-prompt-panel ref={panelRef} style={placementStyle}>
