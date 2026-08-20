@@ -1,7 +1,7 @@
 {
   "name": "@nelsonlongxiang/dsh-prompt-templates",
-  "version": "0.2.12",
-  "description": "Quick prompt templates for DeepSeek Harness: global and per-session templates, a browser panel, and a Python-backed persistence backend",
+  "version": "0.3.0",
+  "description": "Quick prompt templates for DeepSeek Harness: global and per-session templates, a browser panel, and a pure-TS node:sqlite persistence backend",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
@@ -19,11 +19,6 @@
   },
   "files": [
     "lib",
-    "python/src",
-    "python/pyproject.toml",
-    "python/uv.lock",
-    "python/README.md",
-    "scripts",
     "cordis.patch.yml",
     "README.md",
     "README_zh.md",
@@ -45,10 +40,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json && tsc -p tsconfig.client.json && tsdown",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json --noEmit",
-    "bootstrap:python": "node scripts/bootstrap.mjs",
-    "prepare": "pnpm build && node scripts/bootstrap.mjs",
-    "test:python": "uv run --project python pytest",
-    "verify": "pnpm typecheck && pnpm test:python"
+    "prepare": "pnpm build",
+    "verify": "pnpm typecheck"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": ">=4.0.1-rc.1",
@@ -106,8 +99,7 @@
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "tsdown": "0.22.2",
-    "typescript": "^5.9.3",
-    "@nelsonlongxiang/dsh-python-bridge": "file:../dsh-python-bridge"
+    "typescript": "^5.9.3"
   },
   "license": "MIT"
 }

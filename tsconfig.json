@@ -29,8 +29,6 @@
       "@deepseek-ai/dsh-subprocess/*": ["../deepseek-harness/packages/subprocess/subprocess/lib/types/*.d.ts"],
       "@deepseek-ai/dsh-invariants": ["../deepseek-harness/packages/support/invariants/lib/types/index.d.ts"],
       "@deepseek-ai/dsh-invariants/*": ["../deepseek-harness/packages/support/invariants/lib/types/*.d.ts"],
-      "@nelsonlongxiang/dsh-python-bridge": ["../dsh-python-bridge/lib/types/index.d.ts"],
-      "@nelsonlongxiang/dsh-python-bridge/*": ["../dsh-python-bridge/lib/types/*.d.ts"]
     }
   },
   "include": ["src"],

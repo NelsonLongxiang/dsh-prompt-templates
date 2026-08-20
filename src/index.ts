@@ -1,8 +1,8 @@
 /**
- * dsh-prompt-templates host half: spawns the Python backend child through
- * the subprocess seam and exposes template CRUD over web-server routes the
- * browser panel fetches (`/plugins/dsh-prompt-templates/*`). The Python
- * child owns all durable state; this plugin owns the child process, the
+ * dsh-prompt-templates host half: a pure-TS template store over
+ * `node:sqlite` (same schema and database file as the former Python
+ * backend child) exposed over web-server routes the browser panel fetches
+ * (`/plugins/dsh-prompt-templates/*`). The plugin owns the store, the
  * routes, and the settings namespace (panel default-open + placement).
  *
  * Route map (JSON bodies, `Cache-Control: no-store`):
@@ -20,33 +20,20 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import s from '@deepseek-ai/schemastery'
 import { settingsNamespace } from '@deepseek-ai/dsh-settings'
-import { DEFAULT_EOF_GRACE_MS, PythonBridgeError, resolveEofGrace } from '@nelsonlongxiang/dsh-python-bridge'
-import type { PythonBridge } from '@nelsonlongxiang/dsh-python-bridge'
+import { TemplateRuleError, TemplateStore } from './store.ts'
 import type { TemplateView } from './types.ts'
 
 export type * from './types.ts'
 
 export const name = 'prompt-templates'
 
-/** Spawns the Python child through the pythonBridge service; the web-server route registration waits for it lazily. */
-export const inject = ['pythonBridge']
-
-/** Deployment-varying spawn facts for the Python backend child. */
+/** Deployment-varying persistence facts. */
 export interface Config {
-  /** Complete argv; `argv[0]` is the executable running the backend `serve`. */
-  readonly command: string[]
-  /** Absolute working directory for the child. */
-  readonly cwd?: string | null
-  /** Grace (ms) for the stdin-EOF quiesce before terminate escalation. */
-  readonly eofGraceMs?: number | null
-  /** Optional explicit database path forwarded as `--db`. */
+  /** Optional explicit SQLite database path; defaults to `$DSH_HOME/ext/prompt-templates/db.sqlite3`. */
   readonly dbPath?: string | null
 }
 
 export const Config: s<Config> = s.object({
-  command: s.array(s.string()).required(),
-  cwd: s.string(),
-  eofGraceMs: s.number(),
   dbPath: s.string(),
 })
 
@@ -62,6 +49,12 @@ interface WebRouteHost {
 /** Web-server service key candidates, newest first. */
 const WEB_SERVER_KEYS = ['webServer', 'httpServer'] as const
 
+/** Resolve the default database path under `$DSH_HOME` (default `~/.dsh`). */
+function defaultDbPath(): string {
+  const home = process.env['DSH_HOME'] ?? `${process.getBuiltinModule('node:os').homedir()}/.dsh`
+  return `${home.replaceAll('\\', '/')}/ext/prompt-templates/db.sqlite3`
+}
+
 /** Business error envelope shared with the browser face. */
 export interface TemplateError {
   readonly code: string
@@ -69,33 +62,19 @@ export interface TemplateError {
 }
 
 /**
- * Host plugin body: lazily register the web routes once the web server and
- * this plugin's pythonBridge service are both live; headless profiles without a
- * web server never block boot.
- * @param ctx - Host context carrying the pythonBridge service.
- * @param config - validated spawn facts for the Python backend.
+ * Host plugin body: own the template store, register the settings
+ * namespace, and lazily register the web routes once a web server is live;
+ * headless profiles without a web server never block boot.
+ * @param ctx - Host context.
+ * @param config - persistence facts.
  */
 export function apply(ctx: Context, config: Config): void {
-  const resolved = {
-    command: [...config.command],
-    cwd: config.cwd ?? process.cwd(),
-    eofGraceMs: resolveEofGrace(config.eofGraceMs ?? DEFAULT_EOF_GRACE_MS, 'prompt-templates'),
-    dbPath: config.dbPath ?? undefined,
+  let store: TemplateStore | undefined
+  const client = (): TemplateStore => {
+    store ??= new TemplateStore(config.dbPath ?? defaultDbPath())
+    return store
   }
-  let bridge: PythonBridge | undefined
-  const client = (): PythonBridge => {
-    if (bridge === undefined) {
-      bridge = ctx.pythonBridge.create({
-        argv: resolved.dbPath === undefined
-          ? [...resolved.command]
-          : [...resolved.command, '--db', resolved.dbPath],
-        cwd: resolved.cwd,
-        eofGraceMs: resolved.eofGraceMs,
-      })
-    }
-    return bridge
-  }
-  ctx.effect(() => () => { void bridge?.dispose() }, 'prompt-templates: python bridge teardown')
+  ctx.effect(() => () => { store?.close() }, 'prompt-templates: store close')
 
   // Browser preference namespace (panel default-open and remembered
   // position), optional: without a mounted settings provider the client
@@ -128,11 +107,11 @@ export function apply(ctx: Context, config: Config): void {
   })
 }
 
-/** Dispatch one API request against the Python child. */
+/** Dispatch one API request against the template store. */
 async function handle(
   req: IncomingMessage,
   res: ServerResponse,
-  client: () => PythonBridge,
+  client: () => TemplateStore,
 ): Promise<void> {
   const url = new URL(req.url ?? '/', 'http://x')
   const segments = url.pathname.split('/').filter(part => part !== '')
@@ -141,43 +120,43 @@ async function handle(
   const method = req.method ?? 'GET'
   try {
     if (rest.length === 0 && method === 'GET') {
-      const items = await client().call<readonly TemplateView[]>('templates/list', {})
+      const items = client().list()
       return json(res, 200, { items })
     }
     if (rest.length === 0 && method === 'POST') {
       const body = await readJson(req)
-      const template = await client().call<TemplateView>('templates/create', body)
+      const template = client().create(body as unknown as Parameters<TemplateStore['create']>[0])
       return json(res, 200, { template })
     }
     const id = rest[0]
     if (id === undefined) return json(res, 400, errorBody('bad-request', 'missing template id'))
     if (rest.length === 1 && method === 'GET') {
-      const template = await client().call<TemplateView | null>('templates/get', { id })
-      if (template === null) return json(res, 404, notFound(id))
+      const template = client().get(id)
+      if (template === undefined) return json(res, 404, notFound(id))
       return json(res, 200, { template })
     }
     if (rest.length === 1 && method === 'PATCH') {
       const body = await readJson(req)
-      const template = await client().call<TemplateView | null>('templates/update', { id, ...body })
-      if (template === null) return json(res, 404, notFound(id))
+      const template = client().update(id, body as unknown as Parameters<TemplateStore['update']>[1])
+      if (template === undefined) return json(res, 404, notFound(id))
       return json(res, 200, { template })
     }
     if (rest.length === 2 && rest[1] === 'make-global' && method === 'POST') {
-      const template = await client().call<TemplateView | null>('templates/make_global', { id })
-      if (template === null) return json(res, 404, notFound(id))
+      const template = client().makeGlobal(id)
+      if (template === undefined) return json(res, 404, notFound(id))
       return json(res, 200, { template })
     }
     if (rest.length === 1 && method === 'DELETE') {
-      const deleted = await client().call<boolean>('templates/delete', { id })
+      const deleted = client().delete(id)
       return json(res, 200, { deleted })
     }
     return json(res, 405, errorBody('method-not-allowed', `${method} ${url.pathname}`))
   } catch (error) {
-    if (error instanceof PythonBridgeError) {
-      return json(res, 502, errorBody(`python:${String(error.code)}`, error.message))
+    if (error instanceof TemplateRuleError) {
+      return json(res, 400, errorBody('rule-violation', error.message))
     }
     const message = error instanceof Error ? error.message : String(error)
-    return json(res, 500, errorBody('bridge-error', message))
+    return json(res, 500, errorBody('store-error', message))
   }
 }
 
@@ -218,3 +197,7 @@ function notFound(id: string): unknown {
 function errorBody(code: string, message: string): unknown {
   return { error: { code, message } }
 }
+
+export { TemplateStore, TemplateRuleError } from './store.ts'
+export type { TemplateRow } from './store.ts'
+
