@@ -153,6 +153,26 @@ function TemplateForm({ initial, allowScope, sessionId, t, submitLabel, onSubmit
   )
 }
 
+/** Panel width used for viewport clamping (mirrors the CSS `.panel` width). */
+const PANEL_WIDTH = 320
+
+/**
+ * Clamp a restored panel position into the current viewport so a placement
+ * saved on a wider screen (or a monitor that is no longer attached) can never
+ * render the panel unreachable off-screen. Null passes through untouched.
+ * @param position - the persisted placement, if any.
+ * @returns the clamped placement.
+ */
+function clampToViewport(position: PanelPosition | null): PanelPosition | null {
+  if (position === null) return null
+  const maxX = Math.max(0, window.innerWidth - PANEL_WIDTH)
+  const maxY = Math.max(0, window.innerHeight - 40)
+  return {
+    x: Math.min(Math.max(position.x, 0), maxX),
+    y: Math.min(Math.max(position.y, 0), maxY),
+  }
+}
+
 /** Full props of the shell.overlay panel entry. */
 export type PromptPanelProps =
   PropsRuntime<'shell.overlay'>
@@ -181,8 +201,10 @@ export function PromptPanel(props: PromptPanelProps) {
   const [editingId, setEditingId] = useState<string | null>(null)
   // Drag placement: seeded from the persisted position, live-updated while
   // dragging, committed to the settings document on release. A null with no
-  // drag in flight keeps the CSS right-anchored default.
-  const persisted = panelPosition()
+  // drag in flight keeps the CSS right-anchored default. The restored value
+  // is clamped into the current viewport: a position saved on a wider screen
+  // or a second monitor would otherwise render the panel off-screen forever.
+  const persisted = clampToViewport(panelPosition())
   const [dragPos, setDragPos] = useState<PanelPosition | null>(null)
   const dragRef = useRef<{ pointerId: number; offX: number; offY: number } | null>(null)
   const panelRef = useRef<HTMLDivElement | null>(null)
