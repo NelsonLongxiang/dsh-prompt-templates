@@ -115,25 +115,26 @@ async function handle(
 ): Promise<void> {
   const url = new URL(req.url ?? '/', 'http://x')
   const segments = url.pathname.split('/').filter(part => part !== '')
-  // Expect ['plugins', 'dsh-prompt-templates', 'templates', ...rest].
+  // Route namespace: `/plugins/dsh-prompt-templates/<resource>/...`.
+  // `templates` and `categories` are both segments[2]; their operation
+  // remainder starts at index 3. Dispatching categories from rest[0] made
+  // its root URL (`/categories`) indistinguishable from `/templates`.
+  const resource = segments[2]
   const rest = segments.slice(3)
   const method = req.method ?? 'GET'
   try {
-    // Category tabs live at /plugins/dsh-prompt-templates/categories (their
-    // own namespace, not under templates): GET/POST on it, DELETE on
-    // /categories/:name?scope&session_id. This MUST be dispatched before
-    // the template verbs — a bare rest slice of [] is shared with both.
-    if (rest[0] === 'categories') {
-      if (rest.length === 1 && method === 'GET') {
+    // Category tabs: GET/POST /categories, DELETE /categories/:name?scope&session_id.
+    if (resource === 'categories') {
+      if (rest.length === 0 && method === 'GET') {
         return json(res, 200, { items: client().listCategories() })
       }
-      if (rest.length === 1 && method === 'POST') {
+      if (rest.length === 0 && method === 'POST') {
         const body = await readJson(req)
         const category = client().createCategory(body as unknown as Parameters<TemplateStore['createCategory']>[0])
         return json(res, 200, { category })
       }
-      const catName = rest[1]
-      if (catName !== undefined && rest.length === 2 && method === 'DELETE') {
+      const catName = rest[0]
+      if (catName !== undefined && rest.length === 1 && method === 'DELETE') {
         const deleted = client().deleteCategory(
           decodeURIComponent(catName),
           url.searchParams.get('scope') ?? 'global',
@@ -143,6 +144,7 @@ async function handle(
       }
       return json(res, 405, errorBody('method-not-allowed', `${method} ${url.pathname}`))
     }
+    if (resource !== 'templates') return json(res, 404, errorBody('not-found', url.pathname))
     if (rest.length === 0 && method === 'GET') {
       const items = client().list()
       return json(res, 200, { items })
