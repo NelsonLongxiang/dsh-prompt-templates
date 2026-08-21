@@ -132,27 +132,18 @@ export class PromptPanelController implements IPromptPanel {
   }
 
   /**
-   * Interject-send one template: submit its content immediately without
-   * consuming the user's draft — the message queues into a running turn
-   * when busy, and the saved draft is restored once the send settles (only
-   * while the draft stayed empty; typing during flight keeps the user's
-   * newer text).
+   * Interject one template: steer it into the running agent turn. With
+   * steer mode the content interrupts the current turn at its next step
+   * (the same delivery as Cmd/Ctrl+Enter插话发送), rather than queuing
+   * after it. The user's own draft is left untouched.
    * @param sessionId - target session.
    * @param content - template content.
    */
   interject(sessionId: SessionId, content: string): void {
     const input = this.#inputOf(sessionId)
     if (input === undefined) return
-    const saved = input.state.getSnapshot().draft
     input.setDraft(content)
-    input.submit()
-    if (saved === '') return
-    const unsubscribe = input.state.subscribe(() => {
-      const snapshot = input.state.getSnapshot()
-      if (snapshot.phase === 'submitting' || snapshot.phase === 'adjudicating') return
-      unsubscribe()
-      if (input.state.getSnapshot().draft === '') input.setDraft(saved)
-    })
+    input.submit('steer')
   }
 
   /**
@@ -171,7 +162,7 @@ export class PromptPanelController implements IPromptPanel {
   /** Resolve a session's input facade, or undefined when out of reach. */
   #inputOf(sessionId: SessionId): {
     setDraft(text: string): void
-    submit(): void
+    submit(mode?: 'queue' | 'steer'): void
     state: { getSnapshot(): { draft: string, phase: string }, subscribe(fn: () => void): () => void }
   } | undefined {
     const sessions = this.#sessions

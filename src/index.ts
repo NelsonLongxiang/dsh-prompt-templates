@@ -119,19 +119,11 @@ async function handle(
   const rest = segments.slice(3)
   const method = req.method ?? 'GET'
   try {
-    if (rest.length === 0 && method === 'GET') {
-      const items = client().list()
-      return json(res, 200, { items })
-    }
-    if (rest.length === 0 && method === 'POST') {
-      const body = await readJson(req)
-      const template = client().create(body as unknown as Parameters<TemplateStore['create']>[0])
-      return json(res, 200, { template })
-    }
-    const id = rest[0]
-    if (id === undefined) return json(res, 400, errorBody('bad-request', 'missing template id'))
-    // Category tabs: GET/POST /categories, DELETE /categories/:name?scope&session_id.
-    if (id === 'categories') {
+    // Category tabs live at /plugins/dsh-prompt-templates/categories (their
+    // own namespace, not under templates): GET/POST on it, DELETE on
+    // /categories/:name?scope&session_id. This MUST be dispatched before
+    // the template verbs — a bare rest slice of [] is shared with both.
+    if (rest[0] === 'categories') {
       if (rest.length === 1 && method === 'GET') {
         return json(res, 200, { items: client().listCategories() })
       }
@@ -151,6 +143,17 @@ async function handle(
       }
       return json(res, 405, errorBody('method-not-allowed', `${method} ${url.pathname}`))
     }
+    if (rest.length === 0 && method === 'GET') {
+      const items = client().list()
+      return json(res, 200, { items })
+    }
+    if (rest.length === 0 && method === 'POST') {
+      const body = await readJson(req)
+      const template = client().create(body as unknown as Parameters<TemplateStore['create']>[0])
+      return json(res, 200, { template })
+    }
+    const id = rest[0]
+    if (id === undefined) return json(res, 400, errorBody('bad-request', 'missing template id'))
     if (rest.length === 1 && method === 'GET') {
       const template = client().get(id)
       if (template === undefined) return json(res, 404, notFound(id))
