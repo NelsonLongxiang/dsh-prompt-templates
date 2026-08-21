@@ -236,6 +236,21 @@
   color: var(--dsw-alias-label-tertiary);
 }
 
+.cancelBtn {
+  border: 1px solid var(--dsw-alias-border-inverted);
+  background: none;
+  cursor: pointer;
+  padding: 3px 10px;
+  border-radius: 4px;
+  font-size: 11px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.cancelBtn:hover {
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
 .sendBtn {
   border: none;
   background: none;

@@ -104,7 +104,7 @@ function TemplateRow({ template, onInsert, onSend, onInterject, onEdit, onDelete
 }
 
 /** The template inline form: creation (with scope + category pickers) and in-place edit. */
-function TemplateForm({ initial, allowScope, sessionId, categories, t, submitLabel, onSubmit, onDone }: {
+function TemplateForm({ initial, allowScope, sessionId, categories, t, submitLabel, onSubmit, onDone, onCancel }: {
   initial?: { name: string; content: string }
   allowScope: boolean
   sessionId: string | null
@@ -113,6 +113,8 @@ function TemplateForm({ initial, allowScope, sessionId, categories, t, submitLab
   submitLabel: string
   onSubmit: (name: string, content: string, scope: 'global' | 'session', category: string | null) => Promise<boolean>
   onDone: () => void
+  /** Abort without saving: exit the edit state / collapse the create form. */
+  onCancel?: () => void
 }) {
   const [name, setName] = useState(initial?.name ?? '')
   const [content, setContent] = useState(initial?.content ?? '')
@@ -184,6 +186,11 @@ function TemplateForm({ initial, allowScope, sessionId, categories, t, submitLab
         </label>
         <div className={css.addActions}>
           {error !== null && <span className={css.error} role="alert">{error}</span>}
+          {onCancel !== undefined && (
+            <button type="button" className={css.cancelBtn} onClick={onCancel} disabled={busy}>
+              {t('panel.addCancel')}
+            </button>
+          )}
           <button type="button" className={css.saveBtn} onClick={() => void submit()} disabled={busy || name.trim() === '' || content.trim() === ''}>
             {submitLabel}
           </button>
@@ -403,6 +410,7 @@ export function PromptPanel(props: PromptPanelProps) {
           submitLabel={t('panel.addSave')}
           onSubmit={async (name, content, _scope, category) => (await update(row.id, { name, content, category: row.scope === 'global' ? category : category })).ok}
           onDone={() => { setEditingId(null); void load() }}
+          onCancel={() => { setEditingId(null) }}
         />
       )
       : (
@@ -554,6 +562,7 @@ export function PromptPanel(props: PromptPanelProps) {
               return result.ok
             }}
             onDone={() => { setShowAdd(false); void load() }}
+            onCancel={() => { setShowAdd(false) }}
           />
         )}
       </div>
