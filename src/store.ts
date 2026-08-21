@@ -16,10 +16,10 @@ import { randomUUID } from 'node:crypto'
 import { mkdirSync, chmodSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import type { PromptScope, TemplateCreateRequest, TemplateUpdateRequest, TemplateView } from './types.ts'
+import type { CategoryCreateRequest, CategoryView, PromptScope, TemplateCreateRequest, TemplateUpdateRequest, TemplateView } from './types.ts'
 
-/** Schema version gate, matching the Python backend's `TEMPLATES_SCHEMA_VERSION`. */
-const SCHEMA_VERSION = 1
+/** Schema version gate; v2 adds `templates.category` and the `categories` table. */
+const SCHEMA_VERSION = 2
 
 const NAME_MAX = 128
 const DESCRIPTION_MAX = 512
@@ -42,9 +42,30 @@ export interface TemplateRow {
   session_id: string | null
   description: string | null
   position: number
+  category: string | null
   created_at: string
   updated_at: string
 }
+
+/** v2 schema: templates gain `category`; category tabs live in their own table. */
+const SCHEMA_V2_SQL = `CREATE TABLE templates (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  content TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  session_id TEXT,
+  description TEXT,
+  position INTEGER NOT NULL DEFAULT 0,
+  category TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE categories (
+  name TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  session_id TEXT,
+  PRIMARY KEY (scope, session_id, name)
+)`
 
 /** Pure-TS prompt-template store owning one SQLite database file. */
 export class TemplateStore {
@@ -60,17 +81,12 @@ export class TemplateStore {
     this.db.exec('PRAGMA busy_timeout=5000')
     const onDisk = Number((this.db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
     if (onDisk === 0) {
-      this.db.exec(`CREATE TABLE templates (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  content TEXT NOT NULL,
-  scope TEXT NOT NULL,
-  session_id TEXT,
-  description TEXT,
-  position INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-)`)
+      this.db.exec(SCHEMA_V2_SQL)
+      this.db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`)
+    } else if (onDisk === 1) {
+      // v1 → v2: category column (NULL = default tab) + the category tabs table.
+      this.db.exec('ALTER TABLE templates ADD COLUMN category TEXT')
+      this.db.exec('CREATE TABLE categories (name TEXT NOT NULL, scope TEXT NOT NULL, session_id TEXT, PRIMARY KEY (scope, session_id, name))')
       this.db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`)
     } else if (onDisk !== SCHEMA_VERSION) {
       this.db.close()
@@ -131,6 +147,7 @@ export class TemplateStore {
     if (!Number.isInteger(position) || position < 0) {
       throw new TemplateRuleError('position must be a non-negative integer')
     }
+    const category = this.#validatedCategory(data.category, scope, sessionId)
     const clash = this.db.prepare(
       'SELECT id FROM templates WHERE scope = ? AND session_id IS ? AND name = ?',
     ).get(scope, sessionId, data.name)
@@ -146,12 +163,13 @@ export class TemplateStore {
       session_id: sessionId,
       description,
       position,
+      category,
       created_at: now,
       updated_at: now,
     }
     this.db.prepare(
-      'INSERT INTO templates (id, name, content, scope, session_id, description, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    ).run(row.id, row.name, row.content, row.scope, row.session_id, row.description, row.position, row.created_at, row.updated_at)
+      'INSERT INTO templates (id, name, content, scope, session_id, description, position, category, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    ).run(row.id, row.name, row.content, row.scope, row.session_id, row.description, row.position, row.category, row.created_at, row.updated_at)
     return rowToView(row)
   }
 
@@ -181,11 +199,16 @@ export class TemplateStore {
     if (fields['position'] !== undefined && (!Number.isInteger(Number(fields['position'])) || Number(fields['position']) < 0)) {
       throw new TemplateRuleError('position must be a non-negative integer')
     }
+    if (fields['category'] !== undefined) {
+      fields['category'] = this.#validatedCategory(
+        fields['category'] as string | null, row.scope, row.session_id,
+      )
+    }
     const merged = { ...row, ...fields } as TemplateRow
     merged.updated_at = new Date().toISOString().replace('T', ' ').slice(0, 19)
     this.db.prepare(
-      'UPDATE templates SET name = ?, content = ?, description = ?, position = ?, updated_at = ? WHERE id = ?',
-    ).run(merged.name, merged.content, merged.description, merged.position, merged.updated_at, id)
+      'UPDATE templates SET name = ?, content = ?, description = ?, position = ?, category = ?, updated_at = ? WHERE id = ?',
+    ).run(merged.name, merged.content, merged.description, merged.position, merged.category, merged.updated_at, id)
     return rowToView(merged)
   }
 
@@ -208,6 +231,74 @@ export class TemplateStore {
   /** Delete one template; `false` when absent. */
   delete(id: string): boolean {
     return this.db.prepare('DELETE FROM templates WHERE id = ?').run(id).changes > 0
+  }
+
+  /** List user categories: global ones plus one session's, ordered by name. */
+  listCategories(sessionId?: string): CategoryView[] {
+    return (this.db.prepare(
+      "SELECT name, scope, session_id FROM categories WHERE session_id IS NULL OR session_id IS ? ORDER BY name",
+    ).all(sessionId ?? null) as unknown as Array<{ name: string, scope: PromptScope, session_id: string | null }>)
+      .map(row => ({ ...row }))
+  }
+
+  /** Create one category tab; name unique within its (scope, session) partition. */
+  createCategory(data: CategoryCreateRequest): CategoryView {
+    const scope: PromptScope = data.scope ?? 'global'
+    const sessionId = data.session_id ?? null
+    if (typeof data.name !== 'string' || data.name.trim().length < 1 || data.name.length > NAME_MAX) {
+      throw new TemplateRuleError(`category name must be a string of 1..${NAME_MAX} characters`)
+    }
+    if (scope === 'session' && (sessionId === null || sessionId === '')) {
+      throw new TemplateRuleError("scope='session' requires session_id")
+    }
+    if (scope === 'global' && sessionId !== null) {
+      throw new TemplateRuleError("scope='global' must not carry session_id")
+    }
+    const clash = this.db.prepare(
+      'SELECT name FROM categories WHERE scope = ? AND session_id IS ? AND name = ?',
+    ).get(scope, sessionId, data.name)
+    if (clash !== undefined) {
+      throw new TemplateRuleError(`category '${data.name}' already exists in scope ${scope}`)
+    }
+    this.db.prepare('INSERT INTO categories (name, scope, session_id) VALUES (?, ?, ?)')
+      .run(data.name, scope, sessionId)
+    return { name: data.name, scope, session_id: sessionId }
+  }
+
+  /** Delete one category tab; its templates fall back to the default tab (category = NULL). */
+  deleteCategory(name: string, scope: string, sessionId?: string | null): boolean {
+    const existing = this.db.prepare(
+      'SELECT name FROM categories WHERE scope = ? AND session_id IS ? AND name = ?',
+    ).get(scope, sessionId ?? null, name)
+    if (existing === undefined) return false
+    this.db.exec('BEGIN')
+    try {
+      this.db.prepare("UPDATE templates SET category = NULL WHERE category = ? AND scope = ? AND session_id IS ?")
+        .run(name, scope, sessionId ?? null)
+      this.db.prepare('DELETE FROM categories WHERE scope = ? AND session_id IS ? AND name = ?')
+        .run(scope, sessionId ?? null, name)
+      this.db.exec('COMMIT')
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+    return true
+  }
+
+  /**
+   * Validate a template's category against its scope partition: null is
+   * always fine (the default tab); a name must exist as a category of the
+   * same scope partition. Returns the normalized value.
+   */
+  #validatedCategory(category: string | null | undefined, scope: PromptScope, sessionId: string | null): string | null {
+    if (category === undefined || category === null || category === '') return null
+    const existing = this.db.prepare(
+      'SELECT name FROM categories WHERE scope = ? AND session_id IS ? AND name = ?',
+    ).get(scope, sessionId, category)
+    if (existing === undefined) {
+      throw new TemplateRuleError(`category '${category}' does not exist in scope ${scope}`)
+    }
+    return category
   }
 }
 

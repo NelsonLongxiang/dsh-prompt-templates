@@ -5,7 +5,7 @@
  * consumes, so callers never see transport details.
  */
 
-import type { TemplateView } from '../types.ts'
+import type { CategoryView, TemplateView } from '../types.ts'
 
 /** Business error carried by a failed call. */
 export interface TemplateError {
@@ -28,12 +28,37 @@ export async function listTemplates(): Promise<TemplateView[]> {
   return [...body.items ?? []]
 }
 
+/** Load every user category tab (global + all sessions'; the panel filters). */
+export async function listCategories(): Promise<CategoryView[]> {
+  const response = await fetch(`${BASE}/categories`, { cache: 'no-store' })
+  if (!response.ok) return []
+  const body = await response.json() as { items?: CategoryView[] }
+  return [...body.items ?? []]
+}
+
+/** Create one category tab. */
+export async function createCategory(request: {
+  name: string
+  scope: 'global' | 'session'
+  session_id: string | null
+}): Promise<TemplateActionResult> {
+  return mutate('POST', '/categories', request)
+}
+
+/** Delete one category tab (its templates fall back to the default tab). */
+export async function deleteCategory(name: string, scope: 'global' | 'session', sessionId: string | null): Promise<TemplateActionResult> {
+  const params = new URLSearchParams({ scope })
+  if (sessionId !== null) params.set('session_id', sessionId)
+  return mutate('DELETE', `/categories/${encodeURIComponent(name)}?${params.toString()}`)
+}
+
 /** Create one template. */
 export async function createTemplate(request: {
   name: string
   content: string
   scope: 'global' | 'session'
   session_id: string | null
+  category?: string | null
 }): Promise<TemplateActionResult> {
   return mutate('POST', '/templates', request)
 }
@@ -43,6 +68,8 @@ export async function updateTemplate(id: string, request: {
   name?: string
   content?: string
   description?: string | null
+  position?: number
+  category?: string | null
 }): Promise<TemplateActionResult> {
   return mutate('PATCH', `/templates/${encodeURIComponent(id)}`, request)
 }

@@ -7,12 +7,12 @@
  */
 
 import type { TemplateActionResult } from './api.ts'
-import type { TemplateView } from '../types.ts'
+import type { CategoryView, TemplateView } from '../types.ts'
 
 /** One template row the panel renders (the backend record). */
 export type { TemplateView }
 
-export type { TemplateActionResult }
+export type { TemplateActionResult, CategoryView }
 
 /** Persisted panel placement in viewport pixels. */
 export interface PanelPosition {
@@ -24,18 +24,31 @@ export interface PanelPosition {
 export interface PromptPanelFace {
   /** Load the full template set (global + every session's); the component groups rows. */
   refresh: () => Promise<TemplateView[]>
+  /** Load every user category tab (global + all sessions'). */
+  refreshCategories: () => Promise<CategoryView[]>
+  /** Create one category tab (global, or owned by the given session). */
+  createCategory: (request: {
+    name: string
+    scope: 'global' | 'session'
+    session_id: string | null
+  }) => Promise<TemplateActionResult>
+  /** Delete one category tab; its templates fall back to the default tab. */
+  removeCategory: (name: string, scope: 'global' | 'session', sessionId: string | null) => Promise<TemplateActionResult>
   /** Create one template. */
   create: (request: {
     name: string
     content: string
     scope: 'global' | 'session'
     session_id: string | null
+    category?: string | null
   }) => Promise<TemplateActionResult>
-  /** Patch one template by id (name/content/description). */
+  /** Patch one template by id (name/content/description/position/category). */
   update: (id: string, request: {
     name?: string
     content?: string
     description?: string | null
+    position?: number
+    category?: string | null
   }) => Promise<TemplateActionResult>
   /** Delete one template by id. */
   remove: (id: string) => Promise<TemplateActionResult>

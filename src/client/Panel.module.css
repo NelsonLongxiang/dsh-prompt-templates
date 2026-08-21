@@ -74,6 +74,73 @@
   outline-offset: -1px;
 }
 
+/* Category tabs: one wrap row of pill tabs under the search bar. */
+.tabsBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px 0;
+}
+
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  border: 1px solid var(--dsw-alias-border-inverted);
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 11px;
+  color: var(--dsw-alias-label-secondary);
+  background: none;
+}
+
+.tab > button {
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 11px;
+  color: inherit;
+  padding: 0;
+}
+
+.tabActive {
+  border-color: var(--dsw-alias-state-business-primary);
+  color: var(--dsw-alias-label-primary);
+}
+
+.tabDelete {
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 0 2px;
+  border-radius: 3px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.tabDelete:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.tabAdd {
+  border: 1px dashed var(--dsw-alias-border-inverted);
+  border-radius: 999px;
+  background: none;
+  cursor: pointer;
+  padding: 2px 6px;
+  display: inline-flex;
+  align-items: center;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.tabAdd:hover {
+  color: var(--dsw-alias-label-primary);
+  border-color: var(--dsw-alias-state-business-primary);
+}
+
 .body {
   flex: 1;
   /* flex children of the column panel need an explicit floor for the

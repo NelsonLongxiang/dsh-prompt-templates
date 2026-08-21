@@ -23,6 +23,9 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type { TemplateView } from '../types.ts'
 import {
   listTemplates,
+  listCategories,
+  createCategory,
+  deleteCategory,
   createTemplate,
   updateTemplate,
   deleteTemplate,
@@ -91,6 +94,13 @@ export function apply(ctx: ClientContext): void {
   // the global rows (their session_id is NULL and never matches).
   const panelFace: PromptPanelFace = {
     refresh: listTemplates,
+    refreshCategories: listCategories,
+    createCategory: (request) => {
+      return createCategory(request)
+    },
+    removeCategory: (name, scope, sessionId) => {
+      return deleteCategory(name, scope, sessionId)
+    },
     create: (request) => {
       return createTemplate(request)
     },

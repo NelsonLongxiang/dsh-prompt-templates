@@ -130,6 +130,27 @@ async function handle(
     }
     const id = rest[0]
     if (id === undefined) return json(res, 400, errorBody('bad-request', 'missing template id'))
+    // Category tabs: GET/POST /categories, DELETE /categories/:name?scope&session_id.
+    if (id === 'categories') {
+      if (rest.length === 1 && method === 'GET') {
+        return json(res, 200, { items: client().listCategories() })
+      }
+      if (rest.length === 1 && method === 'POST') {
+        const body = await readJson(req)
+        const category = client().createCategory(body as unknown as Parameters<TemplateStore['createCategory']>[0])
+        return json(res, 200, { category })
+      }
+      const catName = rest[1]
+      if (catName !== undefined && rest.length === 2 && method === 'DELETE') {
+        const deleted = client().deleteCategory(
+          decodeURIComponent(catName),
+          url.searchParams.get('scope') ?? 'global',
+          url.searchParams.get('session_id'),
+        )
+        return json(res, 200, { deleted })
+      }
+      return json(res, 405, errorBody('method-not-allowed', `${method} ${url.pathname}`))
+    }
     if (rest.length === 1 && method === 'GET') {
       const template = client().get(id)
       if (template === undefined) return json(res, 404, notFound(id))
