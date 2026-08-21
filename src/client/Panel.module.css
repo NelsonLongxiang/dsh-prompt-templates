@@ -160,6 +160,15 @@
   color: var(--dsw-alias-label-tertiary);
 }
 
+.interjectBtn {
+  border: none;
+  background: none;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
 .sendBtn {
   border: none;
   background: none;

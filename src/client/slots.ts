@@ -47,10 +47,12 @@ export interface PromptPanelFace {
   savePanelPosition: (position: PanelPosition) => void
   /** Forget the placement and return to the right-anchored default. */
   resetPanelPosition: () => void
-  /** Append the content to the session's composer draft. */
+  /** Insert the content at the session composer's caret position. */
   insert: (sessionId: string, content: string) => void
   /** Fill the draft and submit it immediately (same as pressing send). */
   send: (sessionId: string, content: string) => void
+  /** Submit the content immediately while preserving the user's draft (interject). */
+  interject: (sessionId: string, content: string) => void
 }
 
 /** The composer entry's injected face: toggle the panel. */

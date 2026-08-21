@@ -8,28 +8,31 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { PointerEvent as ReactPointerEvent } from 'react'
 import { PropsLocale, PropsRuntime, PropsStore } from '@deepseek-ai/dsh-client-ui-slots'
-import { IconEditOutline16, IconGlobeOutline14, IconPlusOutline16, IconSendOutline16, IconTrashOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconEditOutline16, IconGlobeOutline14, IconPlusOutline16, IconQueueOutline14, IconSendOutline16, IconTrashOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { TemplateView } from '../types.ts'
 import type { PromptPanelFace, PanelPosition } from './slots.ts'
 import { createPromptPanelStore } from './store.ts'
 import type { PromptTemplateKey } from './locales.ts'
 import css from './Panel.module.css'
 
-/** One template row: click the body to append, send/edit/delete icons beside;
- * the make-global action appears only on session-scoped rows. */
+/** One template row: click the body to insert at the caret, interject/send/
+ * edit/delete icons beside; the make-global action appears only on
+ * session-scoped rows. Every row control suppresses mousedown default so
+ * the composer textarea keeps its focus and selection. */
 interface RowProps {
   template: TemplateView
   onInsert: (content: string) => void
   onSend: (content: string) => void
+  onInterject: (content: string) => void
   onEdit: (id: string) => void
   onDelete: (id: string) => void
   onMakeGlobal?: (id: string) => void
   t: (key: PromptTemplateKey) => string
 }
 
-function TemplateRow({ template, onInsert, onSend, onEdit, onDelete, onMakeGlobal, t }: RowProps) {
+function TemplateRow({ template, onInsert, onSend, onInterject, onEdit, onDelete, onMakeGlobal, t }: RowProps) {
   return (
-    <div className={css.row} data-prompt-template>
+    <div className={css.row} data-prompt-template onMouseDown={(e) => { e.preventDefault() }}>
       <button
         type="button"
         className={css.insert}
@@ -38,6 +41,15 @@ function TemplateRow({ template, onInsert, onSend, onEdit, onDelete, onMakeGloba
       >
         <span className={css.name}>{template.name}</span>
         <span className={css.preview}>{template.content}</span>
+      </button>
+      <button
+        type="button"
+        className={css.interjectBtn}
+        onClick={() => { onInterject(template.content) }}
+        aria-label={t('panel.interject')}
+        title={t('panel.interject')}
+      >
+        <IconQueueOutline14 size={12} />
       </button>
       <button
         type="button"
@@ -187,7 +199,7 @@ export type PromptPanelProps =
 export function PromptPanel(props: PromptPanelProps) {
   const {
     useStore, useSessions, refresh, create, update, remove, makeGlobal,
-    insert, send,
+    insert, send, interject,
     panelPosition, savePanelPosition, resetPanelPosition,
     actions, t,
   } = props
@@ -229,6 +241,11 @@ export function PromptPanel(props: PromptPanelProps) {
     if (sessionId === null) return
     send(sessionId, content)
   }, [send, sessionId])
+
+  const handleInterject = useCallback((content: string) => {
+    if (sessionId === null) return
+    interject(sessionId, content)
+  }, [interject, sessionId])
 
   const handleRemove = useCallback(async (id: string) => {
     const result = await remove(id)
@@ -315,6 +332,7 @@ export function PromptPanel(props: PromptPanelProps) {
           template={row}
           onInsert={(c) => { handleInsert(c) }}
           onSend={(c) => { handleSend(c) }}
+          onInterject={(c) => { handleInterject(c) }}
           onEdit={(id) => { setEditingId(id) }}
           onDelete={(id) => { void handleRemove(id) }}
           onMakeGlobal={row.scope === 'session' ? (id) => { void handleMakeGlobal(id) } : undefined}

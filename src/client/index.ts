@@ -109,6 +109,9 @@ export function apply(ctx: ClientContext): void {
     send: (sessionId: string, content: string) => {
       controller.send(sessionId as SessionId, content)
     },
+    interject: (sessionId: string, content: string) => {
+      controller.interject(sessionId as SessionId, content)
+    },
     panelPosition: (): PanelPosition | null => {
       const snapshot = uiSettings.getSnapshot()
       if (snapshot.status !== 'ready') return null

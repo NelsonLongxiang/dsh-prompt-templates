@@ -11,6 +11,21 @@ import type { BoundActions } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ClientContext, SessionId, ISessions } from '@deepseek-ai/dsh-client-runtime/client'
 import type { createPromptPanelStore } from './store.ts'
 
+/**
+ * Locate the composer textarea for one draft. The input machine publishes
+ * no caret, so the caret can only be read from the DOM: of every textarea
+ * on the page, the one whose value equals the draft snapshot is the
+ * composer (the panel's own form fields never hold the draft). Falls back
+ * to null when no match exists (detached DOM, session switched mid-click).
+ */
+function composerTextarea(draft: string): HTMLTextAreaElement | null {
+  if (typeof document === 'undefined') return null
+  for (const el of Array.from(document.querySelectorAll('textarea'))) {
+    if (el.value === draft) return el
+  }
+  return null
+}
+
 /** The panel store's bound action set (framework-baked, draft params peeled). */
 export type PromptPanelActions = BoundActions<ReturnType<typeof createPromptPanelStore>>
 
@@ -18,8 +33,10 @@ export type PromptPanelActions = BoundActions<ReturnType<typeof createPromptPane
 export interface IPromptPanel {
   /** Flip the panel open/closed. */
   toggle(): void
-  /** Insert one template's content into a session's composer draft. */
+  /** Insert one template's content into a session's composer draft at the caret. */
   insert(sessionId: SessionId, content: string): void
+  /** Submit one template's content immediately, preserving the user's draft. */
+  interject(sessionId: SessionId, content: string): void
   /** Fill the draft with one template's content and submit it immediately. */
   send(sessionId: SessionId, content: string): void
   /**
@@ -84,8 +101,13 @@ export class PromptPanelController implements IPromptPanel {
   }
 
   /**
-   * Append one template's content to a session's composer draft. An empty
-   * draft takes the content verbatim; a non-empty draft joins with a newline.
+   * Insert one template's content into a session's composer draft at the
+   * live caret position (selection, when a range is selected, is replaced).
+   * The caret lives only in the DOM textarea — the input machine publishes
+   * no caret — so the composer textarea is located by matching its value
+   * against the draft snapshot; when no textarea is found the content falls
+   * back to an end-append (empty draft takes it verbatim, non-empty joins
+   * with a newline).
    * @param sessionId - target session.
    * @param content - template content.
    */
@@ -93,7 +115,44 @@ export class PromptPanelController implements IPromptPanel {
     const input = this.#inputOf(sessionId)
     if (input === undefined) return
     const draft = input.state.getSnapshot().draft
-    input.setDraft(draft === '' ? content : `${draft}\n${content}`)
+    const textarea = composerTextarea(draft)
+    if (textarea === null) {
+      input.setDraft(draft === '' ? content : `${draft}\n${content}`)
+      return
+    }
+    const start = textarea.selectionStart ?? draft.length
+    const end = textarea.selectionEnd ?? start
+    const next = `${draft.slice(0, start)}${content}${draft.slice(end)}`
+    const caret = start + content.length
+    input.setDraft(next)
+    // Return focus and land the caret after the inserted text; the panel
+    // rows preventDefault on mousedown, so the textarea never lost focus.
+    textarea.focus()
+    textarea.setSelectionRange(caret, caret)
+  }
+
+  /**
+   * Interject-send one template: submit its content immediately without
+   * consuming the user's draft — the message queues into a running turn
+   * when busy, and the saved draft is restored once the send settles (only
+   * while the draft stayed empty; typing during flight keeps the user's
+   * newer text).
+   * @param sessionId - target session.
+   * @param content - template content.
+   */
+  interject(sessionId: SessionId, content: string): void {
+    const input = this.#inputOf(sessionId)
+    if (input === undefined) return
+    const saved = input.state.getSnapshot().draft
+    input.setDraft(content)
+    input.submit()
+    if (saved === '') return
+    const unsubscribe = input.state.subscribe(() => {
+      const snapshot = input.state.getSnapshot()
+      if (snapshot.phase === 'submitting' || snapshot.phase === 'adjudicating') return
+      unsubscribe()
+      if (input.state.getSnapshot().draft === '') input.setDraft(saved)
+    })
   }
 
   /**
@@ -113,7 +172,7 @@ export class PromptPanelController implements IPromptPanel {
   #inputOf(sessionId: SessionId): {
     setDraft(text: string): void
     submit(): void
-    state: { getSnapshot(): { draft: string } }
+    state: { getSnapshot(): { draft: string, phase: string }, subscribe(fn: () => void): () => void }
   } | undefined {
     const sessions = this.#sessions
     const conversation = this.#conversation
