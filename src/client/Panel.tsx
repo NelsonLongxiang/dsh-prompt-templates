@@ -533,11 +533,11 @@ export function PromptPanel(props: PromptPanelProps) {
         />
       )}
       <div className={css.body}>
-        {templates.length === 0 && !showAdd && (
-          <div className={css.empty}>{t('panel.empty')}</div>
-        )}
-        {templates.length > 0 && needle !== '' && tabRows.length === 0 && (
-          <div className={css.empty}>{t('panel.noMatch')}</div>
+        {/* Empty states: the whole library is empty, or the active tab (with
+            or without a search needle) holds no rows — both show the empty
+            copy instead of a silently missing list area. */}
+        {tabRows.length === 0 && !showAdd && !showCatForm && (
+          <div className={css.empty}>{needle !== '' ? t('panel.noMatch') : t('panel.empty')}</div>
         )}
         {tabRows.length > 0 && (
           <div className={css.group} onDragOver={(e) => { e.preventDefault() }}>
