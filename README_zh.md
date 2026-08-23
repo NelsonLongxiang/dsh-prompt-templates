@@ -44,6 +44,30 @@ cordis.patch.yml      Bundle patch：挂插件行
 - 模板内容只有经用户主动插入才作为普通用户文本进入模型请求——绝不自动注入任何提示词
 - 面板仅经 Host 的插件路由访问 host 存储；无额外监听、无外联网络
 
+## 数据同步 CLI
+
+包内提供确定性的本地 CLI，用于跨 DSH home 对比、合并提示词模板数据库；禁止直接远程写库。
+
+```sh
+# 导出 schema-v2 快照（确定性排序 + data_sha256）
+dsh-prompt-templates export --db /path/to/db.sqlite3 --out snapshot.json --output=json
+
+# 对比快照（加 --fail-on-diff 时发现差异返回 exit 1）
+dsh-prompt-templates diff left.json right.json --output=json --fail-on-diff
+
+# 只生成合并 JSON；同时间异内容或同名异 ID 默认阻断
+dsh-prompt-templates merge base.json incoming.json --strategy newer --out merged.json --output=json
+
+# 导入默认只 dry-run：先审核 summary_sha256 与数据库 hash
+dsh-prompt-templates import --db /path/to/db.sqlite3 --in merged.json --output=json
+
+# 显式 apply 才写；绑定两个已审核值，先备份，再执行单事务
+dsh-prompt-templates import --db /path/to/db.sqlite3 --in merged.json --apply \
+  --expect-db-sha256 <db-sha256> --confirm-summary-hash <dry-run-summary-sha256> --output=json
+```
+
+`import` 仅按模板 ID 插入/更新，绝不自动删除；未知字段、错误 schema、hash 漂移、同名异 ID，以及超过 `--max-changes`（默认 100）的变更均阻断。
+
 ## 开发
 
 ```sh
@@ -54,7 +78,7 @@ pnpm build             # tsc host + tsc client + tsdown 浏览器 bundle
 
 ## 已知限制
 
-- **插入是追加到草稿**——光标位置插入暂缓
+- **插入感知光标**——点击模板会替换当前选区，或插入到光标位置
 - **会话模板需要当前会话**——无会话打开时只能用全局模板
 
 ## 许可证

@@ -44,6 +44,30 @@ The store is pure TS inside the host half; no child process is spawned.
 - Template content reaches a model request only as ordinary user text the user chose to insert — no automatic injection into any prompt
 - The panel talks to the host store over the Host's plugin routes only; no extra listener, no outbound network
 
+## Database sync CLI
+
+The package ships a deterministic, local-only CLI for comparing and merging prompt-template databases across DSH homes. It never writes a remote database directly.
+
+```sh
+# Export a schema-v2 snapshot (canonical order + data_sha256)
+dsh-prompt-templates export --db /path/to/db.sqlite3 --out snapshot.json --output=json
+
+# Compare two snapshots (exit 1 with --fail-on-diff)
+dsh-prompt-templates diff left.json right.json --output=json --fail-on-diff
+
+# Merge into a JSON artifact only; equal-time or name conflicts block by default
+dsh-prompt-templates merge base.json incoming.json --strategy newer --out merged.json --output=json
+
+# Dry-run import (the default): review summary_sha256 and database hash
+dsh-prompt-templates import --db /path/to/db.sqlite3 --in merged.json --output=json
+
+# Apply only after binding both reviewed values; creates a backup, then one transaction
+dsh-prompt-templates import --db /path/to/db.sqlite3 --in merged.json --apply \
+  --expect-db-sha256 <db-sha256> --confirm-summary-hash <dry-run-summary-sha256> --output=json
+```
+
+`import` inserts/updates by template id and never prunes rows. It rejects unknown snapshot fields, unsupported schemas, mismatched hashes, same-name/different-id conflicts, and changes above `--max-changes` (default 100).
+
 ## Development
 
 ```sh
@@ -54,7 +78,7 @@ pnpm build             # tsc host + tsc client + tsdown browser bundle
 
 ## Known limitations
 
-- **Insert appends to the draft** — caret-position insert is deferred
+- **Insert is caret-aware** — clicking a template replaces the current selection or inserts at the caret
 - **Session templates need a current session** — with no session open, only global templates are reachable
 
 ## License
