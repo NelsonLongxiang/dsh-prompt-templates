@@ -1,6 +1,6 @@
 {
   "name": "@nelsonlongxiang/dsh-prompt-templates",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Quick prompt templates for DeepSeek Harness: global and per-session templates, a browser panel, and a pure-TS node:sqlite persistence backend",
   "type": "module",
   "main": "lib/index.js",
@@ -44,8 +44,10 @@
     "build": "tsc -p tsconfig.json && tsc -p tsconfig.client.json && tsdown",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json --noEmit",
     "test:cli": "node --experimental-strip-types --test tests/*.test.ts",
+    "test:package": "node tests/cli-package.mjs",
     "prepare": "pnpm build",
-    "verify": "pnpm typecheck && pnpm test:cli"
+    "verify": "pnpm typecheck && pnpm test:cli",
+    "verify:release": "pnpm verify && pnpm build && pnpm test:package"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": ">=4.0.1-rc.1",
