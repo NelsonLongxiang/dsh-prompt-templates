@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 
+const expectedVersion = JSON.parse(readFileSync(resolve('package.json'), 'utf8')).version
 const scratch = mkdtempSync(join(tmpdir(), 'pt-cli-package-'))
 try {
   const packed = spawnSync('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', scratch], { encoding: 'utf8', shell: process.platform === 'win32' })
@@ -14,7 +15,7 @@ try {
   const installed = spawnSync('npm', ['install', tarball, '--ignore-scripts', '--no-package-lock', '--omit=optional', '--prefix', prefix], { encoding: 'utf8', shell: process.platform === 'win32' })
   assert.equal(installed.status, 0, installed.stderr)
   const packageJson = JSON.parse(readFileSync(join(prefix, 'node_modules', '@nelsonlongxiang', 'dsh-prompt-templates', 'package.json'), 'utf8'))
-  assert.equal(packageJson.version, '0.5.1')
+  assert.equal(packageJson.version, expectedVersion)
   assert.equal(packageJson.bin['dsh-prompt-templates'].replace(/^\.\//, ''), 'lib/cli/main.js')
   const bin = join(prefix, 'node_modules', '.bin', process.platform === 'win32' ? 'dsh-prompt-templates.cmd' : 'dsh-prompt-templates')
   const result = spawnSync(bin, ['--help'], { encoding: 'utf8', shell: process.platform === 'win32' })

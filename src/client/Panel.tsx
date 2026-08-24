@@ -11,6 +11,7 @@ import { PropsLocale, PropsRuntime, PropsStore } from '@deepseek-ai/dsh-client-u
 import { IconEditOutline16, IconGlobeOutline14, IconPlusOutline16, IconQueueOutline14, IconSendOutline16, IconTrashOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { CategoryView, TemplateView } from '../types.ts'
 import type { PromptPanelFace, PanelPosition } from './slots.ts'
+import { filterTemplateRows } from './filter.ts'
 import { createPromptPanelStore } from './store.ts'
 import type { PromptTemplateKey } from './locales.ts'
 import css from './Panel.module.css'
@@ -28,21 +29,22 @@ interface RowProps {
   onEdit: (id: string) => void
   onDelete: (id: string) => void
   onMakeGlobal?: (id: string) => void
+  sortable: boolean
   onDragStart: (id: string) => void
   onDropOn: (id: string) => void
   t: (key: PromptTemplateKey) => string
 }
 
-function TemplateRow({ template, onInsert, onSend, onInterject, onEdit, onDelete, onMakeGlobal, onDragStart, onDropOn, t }: RowProps) {
+function TemplateRow({ template, onInsert, onSend, onInterject, onEdit, onDelete, onMakeGlobal, sortable, onDragStart, onDropOn, t }: RowProps) {
   return (
     <div
       className={css.row}
       data-prompt-template
       onMouseDown={(e) => { e.preventDefault() }}
-      draggable
-      onDragStart={() => { onDragStart(template.id) }}
-      onDragOver={(e) => { e.preventDefault() }}
-      onDrop={(e) => { e.preventDefault(); e.stopPropagation(); onDropOn(template.id) }}
+      draggable={sortable}
+      onDragStart={() => { if (sortable) onDragStart(template.id) }}
+      onDragOver={(e) => { if (sortable) e.preventDefault() }}
+      onDrop={(e) => { if (sortable) { e.preventDefault(); e.stopPropagation(); onDropOn(template.id) } }}
     >
       <button
         type="button"
@@ -349,14 +351,6 @@ export function PromptPanel(props: PromptPanelProps) {
 
   if (!open) return null
 
-  // The full set is loaded; filtering happens here. The search query
-  // narrows by name + content, case-insensitive.
-  const needle = query.trim().toLowerCase()
-  const matches = (row: TemplateView): boolean =>
-    needle === ''
-    || row.name.toLowerCase().includes(needle)
-    || row.content.toLowerCase().includes(needle)
-
   // Visible user-category tabs: global ones always, session ones only for
   // the current session.
   const visibleCategories = categories.filter(
@@ -368,16 +362,10 @@ export function PromptPanel(props: PromptPanelProps) {
   // A deleted (or no-longer-visible) category tab falls back to 全局.
   const effectiveTab = activeTab.startsWith('cat:') && activeCategory === undefined ? 'global' : activeTab
 
-  // The active tab decides the visible partition; rows sort by position.
-  const tabRows = templates.filter((row) => {
-    if (!matches(row)) return false
-    if (effectiveTab === 'global') return row.scope === 'global' && row.category === null
-    if (effectiveTab === 'session') return row.scope === 'session' && row.session_id === sessionId && row.category === null
-    return activeCategory !== undefined
-      && row.category === activeCategory.name
-      && row.scope === activeCategory.scope
-      && (activeCategory.scope === 'global' || row.session_id === sessionId)
-  })
+  // With no query the active tab owns the list. A query searches across every
+  // category, but never leaks another session's private templates.
+  const needle = query.trim().toLowerCase()
+  const tabRows = filterTemplateRows(templates, query, effectiveTab, activeCategory, sessionId)
 
   // Drop one dragged row onto another: reorder within the tab by writing the
   // full position sequence back (idempotent and partition-local).
@@ -423,6 +411,7 @@ export function PromptPanel(props: PromptPanelProps) {
           onEdit={(id) => { setEditingId(id) }}
           onDelete={(id) => { void handleRemove(id) }}
           onMakeGlobal={row.scope === 'session' ? (id) => { void handleMakeGlobal(id) } : undefined}
+          sortable={needle === ''}
           onDragStart={(id) => { dragRowRef.current = id }}
           onDropOn={(id) => { handleRowDrop(id) }}
           t={t}
