@@ -11,7 +11,8 @@ import { PropsLocale, PropsRuntime, PropsStore } from '@deepseek-ai/dsh-client-u
 import { IconEditOutline16, IconGlobeOutline14, IconPlusOutline16, IconQueueOutline14, IconSendOutline16, IconTrashOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { CategoryView, TemplateView } from '../types.ts'
 import type { PromptPanelFace, PanelPosition } from './slots.ts'
-import { filterTemplateRows } from './filter.ts'
+import { filterTemplateRows, searchableTemplateRows } from './filter.ts'
+import { GITHUB_REPOSITORY_URL, PLUGIN_VERSION, templateCountLabel } from './meta.ts'
 import { createPromptPanelStore } from './store.ts'
 import type { PromptTemplateKey } from './locales.ts'
 import css from './Panel.module.css'
@@ -366,6 +367,8 @@ export function PromptPanel(props: PromptPanelProps) {
   // category, but never leaks another session's private templates.
   const needle = query.trim().toLowerCase()
   const tabRows = filterTemplateRows(templates, query, effectiveTab, activeCategory, sessionId)
+  const searchableCount = searchableTemplateRows(templates, sessionId).length
+  const countLabel = templateCountLabel(tabRows.length, searchableCount, needle !== '')
 
   // Drop one dragged row onto another: reorder within the tab by writing the
   // full position sequence back (idempotent and partition-local).
@@ -443,7 +446,12 @@ export function PromptPanel(props: PromptPanelProps) {
         onPointerUp={onHeaderPointerUp}
         onDoubleClick={onHeaderDoubleClick}
       >
-        <span className={css.title}>{t('panel.title')}</span>
+        <span className={css.titleGroup}>
+          <span className={css.title}>{t('panel.title')}</span>
+          <span className={css.countBadge} data-template-count title={needle !== '' ? t('panel.searchCount') : t('panel.tabCount')}>
+            {countLabel}
+          </span>
+        </span>
         <button
           type="button"
           className={css.closeBtn}
@@ -556,6 +564,18 @@ export function PromptPanel(props: PromptPanelProps) {
         )}
       </div>
       <div className={css.footer}>
+        <span className={css.meta}>
+          <span data-plugin-version>v{PLUGIN_VERSION}</span>
+          <a
+            className={css.githubLink}
+            href={GITHUB_REPOSITORY_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={t('panel.github')}
+          >
+            GitHub ↗
+          </a>
+        </span>
         <button type="button" className={css.addBtn} onClick={() => { setShowAdd(v => !v) }}>
           <IconPlusOutline16 size={12} /> {t('panel.add')}
         </button>

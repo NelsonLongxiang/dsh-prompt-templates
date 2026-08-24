@@ -6,6 +6,13 @@ import type { CategoryView, TemplateView } from '../types.ts'
  * session's private templates are searchable. With no query, the active tab
  * keeps its normal partition/category semantics.
  */
+/** All templates a search is allowed to inspect (global + current session). */
+export function searchableTemplateRows(templates: readonly TemplateView[], sessionId: string | null): TemplateView[] {
+  return templates.filter(row =>
+    row.scope === 'global' || (row.scope === 'session' && row.session_id === sessionId),
+  )
+}
+
 export function filterTemplateRows(
   templates: readonly TemplateView[],
   query: string,
@@ -18,10 +25,7 @@ export function filterTemplateRows(
     row.name.toLowerCase().includes(needle) || row.content.toLowerCase().includes(needle)
 
   if (needle !== '') {
-    return templates.filter(row =>
-      matches(row)
-      && (row.scope === 'global' || (row.scope === 'session' && row.session_id === sessionId)),
-    )
+    return searchableTemplateRows(templates, sessionId).filter(matches)
   }
 
   return templates.filter((row) => {

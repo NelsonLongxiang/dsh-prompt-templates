@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { CategoryView, TemplateView } from '../src/types.ts'
-import { filterTemplateRows } from '../src/client/filter.ts'
+import { filterTemplateRows, searchableTemplateRows } from '../src/client/filter.ts'
 
 function row(id: string, name: string, content: string, scope: 'global' | 'session', sessionId: string | null, category: string | null): TemplateView {
   return { id, name, content, scope, session_id: sessionId, description: null, position: 0, category, created_at: '2026-01-01 00:00:00', updated_at: '2026-01-01 00:00:00' }
@@ -34,4 +34,9 @@ test('global search is case-insensitive across names and content', () => {
 
 test('global search never leaks another session private template', () => {
   assert.deepEqual(filterTemplateRows(rows, 'other private', 'session', undefined, 'session-a'), [])
+})
+
+test('searchable count includes all globals and current-session private rows only', () => {
+  assert.deepEqual(searchableTemplateRows(rows, 'session-a').map(item => item.id), ['g-default', 'g-active', 'g-other', 's-current'])
+  assert.equal(searchableTemplateRows(rows, null).length, 3)
 })

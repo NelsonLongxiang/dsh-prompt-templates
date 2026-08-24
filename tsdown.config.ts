@@ -54,9 +54,11 @@ const CSS_VIRTUAL_SUFFIX = '.mjs'
  * rename cannot leave the client half registering a stale id (a mismatch
  * fails only in the browser, after the host half has already loaded fine).
  */
-const PLUGIN_ID: string = JSON.parse(
+const PACKAGE_MANIFEST: { name: string; version: string } = JSON.parse(
   readFileSync(new URL('./package.json', import.meta.url), 'utf8'),
-).name
+)
+const PLUGIN_ID = PACKAGE_MANIFEST.name
+const PLUGIN_VERSION = PACKAGE_MANIFEST.version
 
 const config: UserConfig = {
   name: `${PLUGIN_ID}/client`,
@@ -69,6 +71,7 @@ const config: UserConfig = {
   clean: false,
   external: [...CLIENT_EXTERNALS],
   define: {
+    '__PROMPT_TEMPLATES_VERSION__': JSON.stringify(PLUGIN_VERSION),
     'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV ?? 'production'),
     'import.meta.env.MODE': JSON.stringify(process.env.NODE_ENV ?? 'production'),
     'import.meta.env': JSON.stringify({ MODE: process.env.NODE_ENV ?? 'production' }),
