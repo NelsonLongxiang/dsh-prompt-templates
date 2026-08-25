@@ -52,6 +52,57 @@ export function exportDatabase(dbPath: string, filters: { scope?: 'global' | 'se
   } finally { db.close() }
 }
 
+/** One search hit row projected for agent consumption. */
+export interface SearchHit {
+  readonly id: string
+  readonly name: string
+  readonly content: string
+  readonly scope: 'global' | 'session'
+  readonly category: string | null
+  readonly updated_at: string
+}
+
+export interface SearchOptions {
+  /** Case-insensitive substring over name + content; empty matches everything. */
+  readonly query?: string
+  /** Narrow to one category name (any scope partition the category rules allow). */
+  readonly category?: string
+  /** Include this session's private templates in addition to all globals. */
+  readonly sessionId?: string
+  readonly limit: number
+}
+
+export interface SearchResult {
+  readonly items: readonly SearchHit[]
+  readonly total: number
+  readonly limit: number
+  readonly matched_scopes: readonly ('global' | 'session')[]
+}
+
+/**
+ * Read-only template search for agents. Privacy boundary mirrors the panel:
+ * every global template is searchable; session-private rows only when the
+ * caller names that session via sessionId. Never searches other sessions.
+ */
+export function searchTemplates(dbPath: string, options: SearchOptions): SearchResult {
+  const snapshot = exportDatabase(dbPath, options.sessionId !== undefined ? {} : { scope: 'global' })
+  const needle = (options.query ?? '').trim().toLowerCase()
+  let rows = snapshot.templates.filter(row =>
+    options.sessionId === undefined
+      ? row.scope === 'global'
+      : (row.scope === 'global' || (row.scope === 'session' && row.session_id === options.sessionId)),
+  )
+  if (options.category !== undefined) rows = rows.filter(row => row.category === options.category)
+  if (needle !== '') rows = rows.filter(row => row.name.toLowerCase().includes(needle) || row.content.toLowerCase().includes(needle))
+  rows = rows.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
+  const total = rows.length
+  const scopes = [...new Set(rows.map(row => row.scope))].sort()
+  const items = rows.slice(0, options.limit).map(row => ({
+    id: row.id, name: row.name, content: row.content, scope: row.scope, category: row.category, updated_at: row.updated_at,
+  }))
+  return { items, total, limit: options.limit, matched_scopes: scopes }
+}
+
 /**
  * Logical database hash: the canonical schema/categories/templates snapshot,
  * not raw file bytes. This works against a live WAL database on Windows

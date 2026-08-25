@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { databaseSha256, exportDatabase, ImportBlockedError, importDatabase } from './database.ts'
+import { databaseSha256, exportDatabase, ImportBlockedError, importDatabase, searchTemplates } from './database.ts'
 import { canonicalJson, diffSnapshots, mergeSnapshots, parseSnapshot, type DataSnapshot, type MergeStrategy } from './model.ts'
 
 interface Envelope {
@@ -20,8 +20,10 @@ Usage:
   dsh-prompt-templates merge <base.json> <incoming.json> --strategy newer|keep-base|keep-incoming --out <json> [--allow-name-conflicts] [--output human|json]
   dsh-prompt-templates import --db <path> --in <json> [--apply --expect-db-sha256 <sha> --confirm-summary-hash <sha>] [--backup-out <path>] [--max-changes <n>] [--output human|json]
   dsh-prompt-templates db-sha256 --db <path> [--output human|json]
+  dsh-prompt-templates search --db <path> [--query <text>] [--category <name>] [--session-id <id>] [--limit <n>] [--output human|json]
 
 Import is dry-run by default. --apply requires --expect-db-sha256 and creates a SQLite backup before one atomic transaction.
+Search is read-only: globals always searchable; session-private rows only with --session-id (never other sessions).
 `
 
 export async function run(argv: readonly string[]): Promise<number> {
@@ -89,6 +91,21 @@ export async function run(argv: readonly string[]): Promise<number> {
         break
       }
       case 'db-sha256': data = { sha256: databaseSha256(required(argv, '--db')) }; break
+      case 'search': {
+        const db = required(argv, '--db')
+        const limitRaw = valueAfter(argv, '--limit') ?? '20'
+        const limit = Number(limitRaw)
+        if (!Number.isSafeInteger(limit) || limit < 1) throw new UsageError('--limit must be a positive integer')
+        const sessionId = valueAfter(argv, '--session-id')
+        if (sessionId === '') throw new UsageError('--session-id must be non-empty')
+        data = searchTemplates(db, {
+          limit,
+          ...(valueAfter(argv, '--query') !== undefined ? { query: valueAfter(argv, '--query') } : {}),
+          ...(valueAfter(argv, '--category') !== undefined ? { category: valueAfter(argv, '--category') } : {}),
+          ...(sessionId !== undefined ? { sessionId } : {}),
+        })
+        break
+      }
       default: throw new UsageError(`unknown command: ${command}`)
     }
     output(jsonOutput, { success: exit === 0, data, request_id: requestId, meta: { duration_ms: Math.round(performance.now() - started) } }, data)
