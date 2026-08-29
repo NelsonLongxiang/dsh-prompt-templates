@@ -1,6 +1,6 @@
 {
   "name": "@nelsonlongxiang/dsh-prompt-templates",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "Quick prompt templates for DeepSeek Harness: global and per-session templates, a browser panel, and a pure-TS node:sqlite persistence backend",
   "type": "module",
   "main": "lib/index.js",
@@ -51,57 +51,21 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": ">=4.0.1-rc.1",
+    "@deepseek-ai/dsh-client-locale": ">=0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-store": "*",
+    "@deepseek-ai/dsh-client-ui-conversation": ">=0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-ui-layout": ">=0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-ui-primitives": ">=0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-ui-settings": ">=0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-ui-slots": ">=0.1.0-rc.6",
     "@deepseek-ai/dsh-invariants": ">=0.1.0-rc.6",
     "@deepseek-ai/dsh-settings": ">=0.1.0-rc.6",
     "@deepseek-ai/dsh-subprocess": ">=0.1.0-rc.6",
-    "@deepseek-ai/dsh-client-locale": ">=0.1.0-rc.6",
-    "@deepseek-ai/dsh-client-runtime": ">=0.1.0-rc.6",
-    "@deepseek-ai/dsh-client-ui-conversation": ">=0.1.0-rc.6",
-    "@deepseek-ai/dsh-client-ui-layout": ">=0.1.0-rc.6",
-    "@deepseek-ai/dsh-client-ui-settings": ">=0.1.0-rc.6",
-    "@deepseek-ai/dsh-client-ui-primitives": ">=0.1.0-rc.6",
-    "@deepseek-ai/dsh-client-ui-slots": ">=0.1.0-rc.6",
     "@deepseek-ai/schemastery": ">=3.18.1-rc.1",
     "react": "^18.2.0"
   },
   "peerDependenciesMeta": {
-    "@deepseek-ai/cordis": {
-      "optional": true
-    },
-    "@deepseek-ai/dsh-invariants": {
-      "optional": true
-    },
-    "@deepseek-ai/dsh-settings": {
-      "optional": true
-    },
-    "@deepseek-ai/dsh-subprocess": {
-      "optional": true
-    },
-    "@deepseek-ai/dsh-client-locale": {
-      "optional": true
-    },
-    "@deepseek-ai/dsh-client-runtime": {
-      "optional": true
-    },
-    "@deepseek-ai/dsh-client-ui-conversation": {
-      "optional": true
-    },
-    "@deepseek-ai/dsh-client-ui-layout": {
-      "optional": true
-    },
-    "@deepseek-ai/dsh-client-ui-settings": {
-      "optional": true
-    },
-    "@deepseek-ai/dsh-client-ui-primitives": {
-      "optional": true
-    },
-    "@deepseek-ai/dsh-client-ui-slots": {
-      "optional": true
-    },
-    "@deepseek-ai/schemastery": {
-      "optional": true
-    },
-    "react": {
+    "@deepseek-ai/dsh-client-store": {
       "optional": true
     }
   },

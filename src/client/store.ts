@@ -10,7 +10,7 @@
  * Module level exports the factory only (de-facto singleton prohibition —
  * see ui-layout's store).
  */
-import { defineStore, type EngineStoreHandle } from '@deepseek-ai/dsh-client-runtime/client'
+import { defineStore, type EngineStoreHandle } from '@deepseek-ai/dsh-client-store'
 
 /** Panel state: open flag plus the one-shot default-open marker. */
 type PromptPanelState = { open: boolean; everOpened: boolean }
