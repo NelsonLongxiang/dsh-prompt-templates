@@ -361,13 +361,21 @@ export function PromptPanel(props: PromptPanelProps) {
 
   // Flip one row's auto-inject switch. First-time setup (no interval yet)
   // routes into the edit form, where the interval gets typed and confirmed.
+  // A failed toggle surfaces the envelope error next to the list instead of
+  // failing silently — the switch only flips after a confirmed write.
+  const [rowError, setRowError] = useState<string | null>(null)
   const handleToggleInject = useCallback(async (template: TemplateView) => {
     if (!template.inject_enabled && template.inject_every === null) {
       setEditingId(template.id)
       return
     }
     const result = await update(template.id, { inject_enabled: !template.inject_enabled })
-    if (result.ok) void load()
+    if (result.ok) {
+      setRowError(null)
+      void load()
+    } else {
+      setRowError(result.error.message)
+    }
   }, [update, load])
 
   // Drag-by-header: capture the pointer, track the offset, clamp so the
@@ -604,6 +612,11 @@ export function PromptPanel(props: PromptPanelProps) {
         />
       )}
       <div className={css.body}>
+        {/* Row-toggle failures surface here, above the list, until the next
+            successful write clears them. */}
+        {rowError !== null && (
+          <div className={css.error} role="alert" data-prompt-row-error>{t('panel.error')} · {rowError}</div>
+        )}
         {/* Empty states: the whole library is empty, or the active tab (with
             or without a search needle) holds no rows — both show the empty
             copy instead of a silently missing list area. */}

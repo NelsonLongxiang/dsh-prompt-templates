@@ -142,6 +142,14 @@ test('v2 databases migrate to v3 in place, defaults off', () => {
     assert.equal(updated?.inject_every, 6)
   } finally {
     store.close()
+  }
+  // Reopening the migrated file hits the version gate again and still works:
+  // user_version=3 persisted, so the migration is idempotent across restarts.
+  const reopened = new TemplateStore(path)
+  try {
+    assert.equal(reopened.list()[0]?.inject_every, 6)
+  } finally {
+    reopened.close()
     cleanup()
   }
 })

@@ -1,7 +1,7 @@
 # Spec：模板定时自动注入（每 N 轮次、可开关、持久化）
 
 - 仓库：`dsh-prompt-templates`（独立插件仓库，master）
-- 状态：**spec 待评审**（未实现，未动任何代码）
+- 状态：**已实现**（feat/auto-inject @ e8108e3 + 审查修复提交；graph loop 审查裁决 WARN/零阻塞；运行时条目待 3081 端到端与发布门禁）
 - 目标版本：0.10.0
 - 撰写日期：2026-08-30
 - 取证基线：deepseek-harness checkout `D:\workspace\deepseek-harness`（本地 master 工作区，只读分析）；本文所有 `core.md`/`runtime-types.ts`/`tool-skill` 行号均出自该 checkout。

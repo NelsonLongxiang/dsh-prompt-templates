@@ -105,14 +105,24 @@ export class TemplateStore {
     if (onDisk === 0) {
       this.db.exec(SCHEMA_V3_SQL)
       this.db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`)
-    } else if (onDisk === 1) {
-      // v1 → v3: v2's category column + tabs table, then the inject columns.
-      this.db.exec('ALTER TABLE templates ADD COLUMN category TEXT')
-      this.db.exec('CREATE TABLE categories (name TEXT NOT NULL, scope TEXT NOT NULL, session_id TEXT, PRIMARY KEY (scope, session_id, name))')
-      this.#migrateToV3()
-    } else if (onDisk === 2) {
-      // v2 → v3: auto-inject columns on templates.
-      this.#migrateToV3()
+    } else if (onDisk === 1 || onDisk === 2) {
+      // Migration DDL runs in ONE transaction: a crash mid-way rolls back to
+      // the intact previous schema instead of stranding a half-altered table
+      // (same BEGIN/COMMIT posture as the category delete below).
+      this.db.exec('BEGIN')
+      try {
+        if (onDisk === 1) {
+          this.db.exec('ALTER TABLE templates ADD COLUMN category TEXT')
+          this.db.exec('CREATE TABLE categories (name TEXT NOT NULL, scope TEXT NOT NULL, session_id TEXT, PRIMARY KEY (scope, session_id, name))')
+        }
+        this.db.exec('ALTER TABLE templates ADD COLUMN inject_enabled INTEGER NOT NULL DEFAULT 0')
+        this.db.exec('ALTER TABLE templates ADD COLUMN inject_every INTEGER')
+        this.db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`)
+        this.db.exec('COMMIT')
+      } catch (error) {
+        this.db.exec('ROLLBACK')
+        throw error
+      }
     } else if (onDisk !== SCHEMA_VERSION) {
       this.db.close()
       throw new Error(`${dbPath} has schema version ${onDisk}, incompatible with this build (expected ${SCHEMA_VERSION})`)
@@ -120,13 +130,6 @@ export class TemplateStore {
     if (dbPath !== ':memory:') {
       try { chmodSync(dbPath, 0o600) } catch { /* best-effort */ }
     }
-  }
-
-  /** v2 → v3 migration: auto-inject switch (off) and interval (unconfigured). */
-  #migrateToV3(): void {
-    this.db.exec('ALTER TABLE templates ADD COLUMN inject_enabled INTEGER NOT NULL DEFAULT 0')
-    this.db.exec('ALTER TABLE templates ADD COLUMN inject_every INTEGER')
-    this.db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`)
   }
 
   /** Close the underlying database handle. */
