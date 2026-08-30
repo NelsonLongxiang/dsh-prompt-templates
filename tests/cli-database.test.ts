@@ -7,6 +7,22 @@ import { TemplateStore } from '../src/store.ts'
 import { databaseSha256, exportDatabase, importDatabase } from '../src/cli/database.ts'
 import { createSnapshot } from '../src/cli/model.ts'
 
+/** Template literal with the inject facts defaulted, for compact fixtures. */
+function row(over: {
+  id: string
+  name: string
+  content: string
+  position: number
+  category?: string | null
+}): Omit<import('../src/types.ts').TemplateView, 'inject_enabled' | 'inject_every'> & { inject_enabled: boolean, inject_every: number | null } {
+  return {
+    scope: 'global', session_id: null, description: null,
+    inject_enabled: false, inject_every: null,
+    created_at: '2026-01-01 00:00:00', updated_at: '2026-01-01 00:00:00',
+    ...over,
+  }
+}
+
 function tempDb(): string {
   const path = join(mkdtempSync(join(tmpdir(), 'pt-cli-')), 'db.sqlite3')
   const store = new TemplateStore(path)
@@ -20,10 +36,9 @@ test('export is deterministic business data and import defaults to zero-write dr
   const path = tempDb()
   const beforeHash = databaseSha256(path)
   const current = exportDatabase(path)
-  const incoming = createSnapshot(current.categories, [...current.templates, {
-    id: 'incoming', name: 'new', content: 'new', scope: 'global', session_id: null,
-    description: null, position: 1, category: 'ops', created_at: '2026-01-01 00:00:00', updated_at: '2026-01-01 00:00:00',
-  }])
+  const incoming = createSnapshot(current.categories, [...current.templates, row({
+    id: 'incoming', name: 'new', content: 'new', position: 1, category: 'ops',
+  })])
   const result = await importDatabase(path, incoming, { apply: false, maxChanges: 10 })
   assert.equal(result.applied, false)
   assert.equal(result.plan.template_inserts, 1)
@@ -50,10 +65,9 @@ test('zero-change apply is idempotent for global categories with null session_id
 test('apply requires the expected db hash, creates backup and commits atomically', async () => {
   const path = tempDb()
   const current = exportDatabase(path)
-  const incoming = createSnapshot(current.categories, [...current.templates, {
-    id: 'incoming', name: 'new', content: 'new', scope: 'global', session_id: null,
-    description: null, position: 1, category: 'ops', created_at: '2026-01-01 00:00:00', updated_at: '2026-01-01 00:00:00',
-  }])
+  const incoming = createSnapshot(current.categories, [...current.templates, row({
+    id: 'incoming', name: 'new', content: 'new', position: 1, category: 'ops',
+  })])
   await assert.rejects(() => importDatabase(path, incoming, { apply: true, maxChanges: 10 }), /expect-db-sha256/)
   await assert.rejects(() => importDatabase(path, incoming, { apply: true, maxChanges: 10, expectedDbSha256: 'bad' }), /confirm-summary-hash/)
   const dry = await importDatabase(path, incoming, { apply: false, maxChanges: 10 })
@@ -67,14 +81,10 @@ test('apply requires the expected db hash, creates backup and commits atomically
 test('a mid-transaction sqlite failure rolls every prior insert back', async () => {
   const path = tempDb()
   const current = exportDatabase(path)
-  const valid = {
-    id: 'first', name: 'first', content: 'first', scope: 'global' as const, session_id: null,
-    description: null, position: 1, category: 'ops', created_at: '2026-01-01 00:00:00', updated_at: '2026-01-01 00:00:00',
-  }
-  const invalid = {
-    id: 'second', name: 'second', content: 'second', scope: 'global' as const, session_id: null,
-    description: {} as unknown as string, position: 2, category: 'ops', created_at: '2026-01-01 00:00:00', updated_at: '2026-01-01 00:00:00',
-  }
+  const valid = row({ id: 'first', name: 'first', content: 'first', position: 1, category: 'ops' })
+  const invalid = row({ id: 'second', name: 'second', content: 'second', position: 2, category: 'ops' })
+  // One unbindable field exercises the atomic rollback of a mid-flight batch.
+  ;(invalid as Record<string, unknown>)['description'] = {}
   const incoming = createSnapshot(current.categories, [...current.templates, valid, invalid])
   const dry = await importDatabase(path, incoming, { apply: false, maxChanges: 10 })
   await assert.rejects(() => importDatabase(path, incoming, {
@@ -86,10 +96,9 @@ test('a mid-transaction sqlite failure rolls every prior insert back', async () 
 test('max changes blocks before backup or write', async () => {
   const path = tempDb()
   const current = exportDatabase(path)
-  const incoming = createSnapshot(current.categories, [...current.templates, {
-    id: 'incoming', name: 'new', content: 'new', scope: 'global', session_id: null,
-    description: null, position: 1, category: 'ops', created_at: '2026-01-01 00:00:00', updated_at: '2026-01-01 00:00:00',
-  }])
+  const incoming = createSnapshot(current.categories, [...current.templates, row({
+    id: 'incoming', name: 'new', content: 'new', position: 1, category: 'ops',
+  })])
   const before = databaseSha256(path)
   await assert.rejects(() => importDatabase(path, incoming, { apply: true, maxChanges: 0, expectedDbSha256: before }), /exceeding/)
   assert.equal(databaseSha256(path), before)

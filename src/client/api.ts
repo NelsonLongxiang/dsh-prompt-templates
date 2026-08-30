@@ -59,6 +59,8 @@ export async function createTemplate(request: {
   scope: 'global' | 'session'
   session_id: string | null
   category?: string | null
+  inject_enabled?: boolean
+  inject_every?: number | null
 }): Promise<TemplateActionResult> {
   return mutate('POST', '/templates', request)
 }
@@ -70,6 +72,8 @@ export async function updateTemplate(id: string, request: {
   description?: string | null
   position?: number
   category?: string | null
+  inject_enabled?: boolean
+  inject_every?: number | null
 }): Promise<TemplateActionResult> {
   return mutate('PATCH', `/templates/${encodeURIComponent(id)}`, request)
 }

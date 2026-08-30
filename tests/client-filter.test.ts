@@ -4,7 +4,7 @@ import type { CategoryView, TemplateView } from '../src/types.ts'
 import { filterTemplateRows, searchableTemplateRows } from '../src/client/filter.ts'
 
 function row(id: string, name: string, content: string, scope: 'global' | 'session', sessionId: string | null, category: string | null): TemplateView {
-  return { id, name, content, scope, session_id: sessionId, description: null, position: 0, category, created_at: '2026-01-01 00:00:00', updated_at: '2026-01-01 00:00:00' }
+  return { id, name, content, scope, session_id: sessionId, description: null, position: 0, category, inject_enabled: false, inject_every: null, created_at: '2026-01-01 00:00:00', updated_at: '2026-01-01 00:00:00' }
 }
 
 const active: CategoryView = { name: 'active', scope: 'global', session_id: null }

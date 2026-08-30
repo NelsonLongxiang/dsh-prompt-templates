@@ -41,14 +41,18 @@ export interface PromptPanelFace {
     scope: 'global' | 'session'
     session_id: string | null
     category?: string | null
+    inject_enabled?: boolean
+    inject_every?: number | null
   }) => Promise<TemplateActionResult>
-  /** Patch one template by id (name/content/description/position/category). */
+  /** Patch one template by id (name/content/description/position/category/inject facts). */
   update: (id: string, request: {
     name?: string
     content?: string
     description?: string | null
     position?: number
     category?: string | null
+    inject_enabled?: boolean
+    inject_every?: number | null
   }) => Promise<TemplateActionResult>
   /** Delete one template by id. */
   remove: (id: string) => Promise<TemplateActionResult>

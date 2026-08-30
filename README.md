@@ -21,17 +21,27 @@ No Python toolchain required — since 0.3.0 the host half persists templates th
 ## What you get
 
 - **Global + per-session templates** — globals apply everywhere; session templates stay private to one conversation and can be promoted to global in one click
+- **Scheduled auto-injection** — per-template switch and interval: the host re-surfaces an enabled template into the model context at the first request of every Nth round, persisted in SQLite and logged as a durable session event
 - **Insert or send** — one click appends the template into the draft; send-now dispatches immediately; edit, delete, and make-global all live in the row
 - **Search & scroll** — filter the list as you type, reliable scrolling for long collections
 - **Drag to reposition, double-click to reset** — the panel remembers where you put it
 - **Durable by design** — templates persist in SQLite through a pure-TS store (`node:sqlite`) owned by the host plugin and closed with its lifecycle
+
+## Auto-inject
+
+Each template (global or session-scoped) carries its own **switch + interval N**. When on, the host injects the template at the first request of every Nth round of the conversation — N=5 means rounds 5, 10, 15, …; rounds count user→assistant exchanges and keep their numbering across restarts.
+
+- The injected content arrives as one durable `<system-reminder>` user message recorded in the session log (source kind `prompt-template-schedule`), so replays and audits reconstruct exactly what the model saw
+- A boundary round is never injected twice, even across restarts or step retries
+- Config persists in the plugin's SQLite database (schema v3); the deployment can silence everything with `injectEnabled: false` in the patch config
 
 ## How it works
 
 ```text
 src/                  TypeScript plugin (host half + browser half)
   index.ts            Host: owns the TS store, exposes the HTTP routes
-  store.ts            Pure-TS template store over node:sqlite
+  store.ts            Pure-TS template store over node:sqlite (schema v3)
+  inject.ts           Host: scheduled auto-injection on the pre-step waterfall
   client/             Browser: panel UI registered into shell.overlay and
                       conversation.input.right
 cordis.patch.yml      Bundle patch: mounts the plugin row
@@ -41,7 +51,7 @@ The store is pure TS inside the host half; no child process is spawned.
 
 ## Security
 
-- Template content reaches a model request only as ordinary user text the user chose to insert — no automatic injection into any prompt
+- Template content reaches a model request in exactly two ways: as ordinary user text the user chose to insert, or as scheduled auto-injection of templates where the switch was explicitly enabled — every injection is a durable session event
 - The panel talks to the host store over the Host's plugin routes only; no extra listener, no outbound network
 
 ## Database sync CLI
@@ -49,7 +59,7 @@ The store is pure TS inside the host half; no child process is spawned.
 The package ships a deterministic, local-only CLI for comparing and merging prompt-template databases across DSH homes. It never writes a remote database directly.
 
 ```sh
-# Export a schema-v2 snapshot (canonical order + data_sha256)
+# Export a schema-v3 snapshot (canonical order + data_sha256)
 dsh-prompt-templates export --db /path/to/db.sqlite3 --out snapshot.json --output=json
 
 # Compare two snapshots (exit 1 with --fail-on-diff)
@@ -66,7 +76,7 @@ dsh-prompt-templates import --db /path/to/db.sqlite3 --in merged.json --apply \
   --expect-db-sha256 <db-sha256> --confirm-summary-hash <dry-run-summary-sha256> --output=json
 ```
 
-`import` inserts/updates by template id and never prunes rows. It rejects unknown snapshot fields, unsupported schemas, mismatched hashes, same-name/different-id conflicts, and changes above `--max-changes` (default 100).
+`import` inserts/updates by template id and never prunes rows. It rejects unknown snapshot fields, unsupported schemas, mismatched hashes, same-name/different-id conflicts, and changes above `--max-changes` (default 100). Schema-v2 snapshots (pre-auto-inject) still import — the inject facts default to off; exports are always v3.
 
 ## Development
 

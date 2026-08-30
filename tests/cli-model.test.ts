@@ -4,7 +4,7 @@ import type { TemplateView } from '../src/types.ts'
 import { createSnapshot, diffSnapshots, mergeSnapshots, parseSnapshot } from '../src/cli/model.ts'
 
 function row(id: string, name: string, updated_at: string, content = `content-${id}`): TemplateView {
-  return { id, name, content, scope: 'global', session_id: null, description: null, position: 0, category: null, created_at: '2026-01-01 00:00:00', updated_at }
+  return { id, name, content, scope: 'global', session_id: null, description: null, position: 0, category: null, inject_enabled: false, inject_every: null, created_at: '2026-01-01 00:00:00', updated_at }
 }
 
 test('canonical snapshot round trips and rejects unknown fields', () => {

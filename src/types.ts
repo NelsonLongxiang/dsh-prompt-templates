@@ -20,6 +20,10 @@ export interface TemplateView {
   readonly position: number
   /** Category name; `null` = one of the default tabs (全局/会话模板). */
   readonly category: string | null
+  /** Auto-inject switch: the host injects this template every N rounds. */
+  readonly inject_enabled: boolean
+  /** Injection interval in rounds; `null` when never configured. */
+  readonly inject_every: number | null
   /** ISO timestamp without timezone, as emitted by the backend. */
   readonly created_at: string
   readonly updated_at: string
@@ -42,6 +46,8 @@ export interface TemplateCreateRequest {
   readonly description?: string | null
   readonly position?: number
   readonly category?: string | null
+  readonly inject_enabled?: boolean
+  readonly inject_every?: number | null
 }
 
 /** Update payload; every field optional. */
@@ -51,6 +57,8 @@ export interface TemplateUpdateRequest {
   readonly description?: string | null
   readonly position?: number
   readonly category?: string | null
+  readonly inject_enabled?: boolean
+  readonly inject_every?: number | null
 }
 
 /** Category create payload. */

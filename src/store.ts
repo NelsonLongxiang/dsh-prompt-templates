@@ -1,13 +1,18 @@
 /**
  * Pure-TS template store over `node:sqlite`, replacing the former Python
  * backend child. Owns the same SQLite database file and schema
- * (`templates` table, `user_version` 1), so an existing
- * `$DSH_HOME/ext/prompt-templates/db.sqlite3` keeps working unchanged.
+ * (`templates` + `categories` tables, `user_version` 3), so an existing
+ * `$DSH_HOME/ext/prompt-templates/db.sqlite3` keeps working and migrates
+ * in place.
  *
  * Business rules ported verbatim from the Python store:
  *   - a template name is unique within its scope partition `(scope, session_id)`
  *   - `scope='session'` requires `session_id`; `scope='global'` must not carry one
  *   - make-global rejects already-global rows and global name collisions
+ * and extended in v3 with the auto-inject facts:
+ *   - `inject_enabled` toggles per-round scheduled injection
+ *   - `inject_every` is the interval in rounds (1..injectMaxEvery); it is
+ *     required whenever `inject_enabled` is on and may persist while off
  *
  * @module dsh-prompt-templates/store
  */
@@ -18,8 +23,11 @@ import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import type { CategoryCreateRequest, CategoryView, PromptScope, TemplateCreateRequest, TemplateUpdateRequest, TemplateView } from './types.ts'
 
-/** Schema version gate; v2 adds `templates.category` and the `categories` table. */
-const SCHEMA_VERSION = 2
+/** Schema version gate; v3 adds `templates.inject_enabled`/`inject_every`. */
+const SCHEMA_VERSION = 3
+
+/** Upper bound of the inject interval when the deployment config omits one. */
+export const DEFAULT_INJECT_MAX_EVERY = 1000
 
 const NAME_MAX = 128
 const DESCRIPTION_MAX = 512
@@ -43,12 +51,16 @@ export interface TemplateRow {
   description: string | null
   position: number
   category: string | null
+  /** Storage truth for the auto-inject switch: 1 = on, 0 = off. */
+  inject_enabled: 0 | 1
+  /** Injection interval in rounds; `null` when never configured. */
+  inject_every: number | null
   created_at: string
   updated_at: string
 }
 
-/** v2 schema: templates gain `category`; category tabs live in their own table. */
-const SCHEMA_V2_SQL = `CREATE TABLE templates (
+/** v3 schema: templates gain the auto-inject columns; category tabs in their own table. */
+const SCHEMA_V3_SQL = `CREATE TABLE templates (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   content TEXT NOT NULL,
@@ -57,6 +69,8 @@ const SCHEMA_V2_SQL = `CREATE TABLE templates (
   description TEXT,
   position INTEGER NOT NULL DEFAULT 0,
   category TEXT,
+  inject_enabled INTEGER NOT NULL DEFAULT 0,
+  inject_every INTEGER,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -67,11 +81,19 @@ CREATE TABLE categories (
   PRIMARY KEY (scope, session_id, name)
 )`
 
+/** Storage options a deployment may tune. */
+export interface TemplateStoreOptions {
+  /** Upper bound accepted for `inject_every`; defaults to {@link DEFAULT_INJECT_MAX_EVERY}. */
+  readonly injectMaxEvery?: number
+}
+
 /** Pure-TS prompt-template store owning one SQLite database file. */
 export class TemplateStore {
+  readonly #injectMaxEvery: number
   private readonly db: DatabaseSync
 
-  constructor(dbPath: string) {
+  constructor(dbPath: string, options: TemplateStoreOptions = {}) {
+    this.#injectMaxEvery = options.injectMaxEvery ?? DEFAULT_INJECT_MAX_EVERY
     if (dbPath !== ':memory:') {
       mkdirSync(dirname(dbPath), { recursive: true })
       try { chmodSync(dirname(dbPath), 0o700) } catch { /* best-effort on non-POSIX */ }
@@ -81,13 +103,16 @@ export class TemplateStore {
     this.db.exec('PRAGMA busy_timeout=5000')
     const onDisk = Number((this.db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
     if (onDisk === 0) {
-      this.db.exec(SCHEMA_V2_SQL)
+      this.db.exec(SCHEMA_V3_SQL)
       this.db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`)
     } else if (onDisk === 1) {
-      // v1 → v2: category column (NULL = default tab) + the category tabs table.
+      // v1 → v3: v2's category column + tabs table, then the inject columns.
       this.db.exec('ALTER TABLE templates ADD COLUMN category TEXT')
       this.db.exec('CREATE TABLE categories (name TEXT NOT NULL, scope TEXT NOT NULL, session_id TEXT, PRIMARY KEY (scope, session_id, name))')
-      this.db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`)
+      this.#migrateToV3()
+    } else if (onDisk === 2) {
+      // v2 → v3: auto-inject columns on templates.
+      this.#migrateToV3()
     } else if (onDisk !== SCHEMA_VERSION) {
       this.db.close()
       throw new Error(`${dbPath} has schema version ${onDisk}, incompatible with this build (expected ${SCHEMA_VERSION})`)
@@ -95,6 +120,13 @@ export class TemplateStore {
     if (dbPath !== ':memory:') {
       try { chmodSync(dbPath, 0o600) } catch { /* best-effort */ }
     }
+  }
+
+  /** v2 → v3 migration: auto-inject switch (off) and interval (unconfigured). */
+  #migrateToV3(): void {
+    this.db.exec('ALTER TABLE templates ADD COLUMN inject_enabled INTEGER NOT NULL DEFAULT 0')
+    this.db.exec('ALTER TABLE templates ADD COLUMN inject_every INTEGER')
+    this.db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`)
   }
 
   /** Close the underlying database handle. */
@@ -112,6 +144,16 @@ export class TemplateStore {
     if (conditions.length > 0) sql += ` WHERE ${conditions.join(' AND ')}`
     sql += ' ORDER BY position, created_at'
     return (this.db.prepare(sql).all(...args) as unknown as TemplateRow[]).map(rowToView)
+  }
+
+  /**
+   * List injection-enabled templates that apply to one session: global ones
+   * plus the session's own, ordered by position then creation time.
+   */
+  listInjectable(sessionId: string): TemplateView[] {
+    return (this.db.prepare(
+      "SELECT * FROM templates WHERE inject_enabled = 1 AND (scope = 'global' OR (scope = 'session' AND session_id = ?)) ORDER BY position, created_at",
+    ).all(sessionId) as unknown as TemplateRow[]).map(rowToView)
   }
 
   /** Fetch one template; `undefined` when absent. */
@@ -148,6 +190,7 @@ export class TemplateStore {
       throw new TemplateRuleError('position must be a non-negative integer')
     }
     const category = this.#validatedCategory(data.category, scope, sessionId)
+    const inject = this.#validatedInject(data.inject_enabled, data.inject_every)
     const clash = this.db.prepare(
       'SELECT id FROM templates WHERE scope = ? AND session_id IS ? AND name = ?',
     ).get(scope, sessionId, data.name)
@@ -164,12 +207,14 @@ export class TemplateStore {
       description,
       position,
       category,
+      inject_enabled: inject.enabled ? 1 : 0,
+      inject_every: inject.every,
       created_at: now,
       updated_at: now,
     }
     this.db.prepare(
-      'INSERT INTO templates (id, name, content, scope, session_id, description, position, category, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    ).run(row.id, row.name, row.content, row.scope, row.session_id, row.description, row.position, row.category, row.created_at, row.updated_at)
+      'INSERT INTO templates (id, name, content, scope, session_id, description, position, category, inject_enabled, inject_every, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    ).run(row.id, row.name, row.content, row.scope, row.session_id, row.description, row.position, row.category, row.inject_enabled, row.inject_every, row.created_at, row.updated_at)
     return rowToView(row)
   }
 
@@ -204,11 +249,21 @@ export class TemplateStore {
         fields['category'] as string | null, row.scope, row.session_id,
       )
     }
+    // Auto-inject facts resolve against the CURRENT row: an omitted field
+    // keeps its stored value, and the pair is validated as a whole.
+    const inject = this.#validatedInject(
+      fields['inject_enabled'] as boolean | undefined,
+      fields['inject_every'] as number | null | undefined,
+      row.inject_enabled === 1,
+      row.inject_every,
+    )
     const merged = { ...row, ...fields } as TemplateRow
+    merged.inject_enabled = inject.enabled ? 1 : 0
+    merged.inject_every = inject.every
     merged.updated_at = new Date().toISOString().replace('T', ' ').slice(0, 19)
     this.db.prepare(
-      'UPDATE templates SET name = ?, content = ?, description = ?, position = ?, category = ?, updated_at = ? WHERE id = ?',
-    ).run(merged.name, merged.content, merged.description, merged.position, merged.category, merged.updated_at, id)
+      'UPDATE templates SET name = ?, content = ?, description = ?, position = ?, category = ?, inject_enabled = ?, inject_every = ?, updated_at = ? WHERE id = ?',
+    ).run(merged.name, merged.content, merged.description, merged.position, merged.category, merged.inject_enabled, merged.inject_every, merged.updated_at, id)
     return rowToView(merged)
   }
 
@@ -300,9 +355,32 @@ export class TemplateStore {
     }
     return category
   }
+
+  /**
+   * Validate the auto-inject pair as a whole. Omitted fields fall back to
+   * the current row's values (create has none); enabling requires a whole
+   * interval within 1..injectMaxEvery, while disabling may keep the old
+   * interval so re-enabling needs no retyping.
+   */
+  #validatedInject(
+    enabled: boolean | undefined,
+    every: number | null | undefined,
+    currentEnabled = false,
+    currentEvery: number | null = null,
+  ): { enabled: boolean, every: number | null } {
+    const resolvedEnabled = enabled ?? currentEnabled
+    const resolvedEvery = every === undefined ? currentEvery : every
+    if (resolvedEvery !== null && (!Number.isInteger(resolvedEvery) || resolvedEvery < 1 || resolvedEvery > this.#injectMaxEvery)) {
+      throw new TemplateRuleError(`inject_every must be an integer between 1 and ${this.#injectMaxEvery}`)
+    }
+    if (resolvedEnabled && resolvedEvery === null) {
+      throw new TemplateRuleError('inject_every is required when inject is enabled')
+    }
+    return { enabled: resolvedEnabled, every: resolvedEvery }
+  }
 }
 
 /** Map one database row to the wire view (field names are already snake_case). */
 function rowToView(row: TemplateRow): TemplateView {
-  return { ...row }
+  return { ...row, inject_enabled: row.inject_enabled === 1 }
 }
