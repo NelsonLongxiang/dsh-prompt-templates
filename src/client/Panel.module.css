@@ -315,6 +315,66 @@
   color: var(--dsw-alias-state-business-primary);
 }
 
+/* Auto-inject row toggle: dim glyph when off, tinted badge with the
+   interval when on. Text-only so no primitive icon is spent on it. */
+.injectBtn {
+  border: none;
+  background: none;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.injectBtn:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.injectBtnActive {
+  border: 1px solid var(--dsw-alias-state-business-primary);
+  background: none;
+  cursor: pointer;
+  padding: 3px 5px;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--dsw-alias-state-business-primary);
+}
+
+.injectBtnActive:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+/* Inject facts line inside the create/edit form. */
+.injectRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.injectLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.injectEveryInput {
+  width: 52px;
+  border: 1px solid var(--dsw-alias-border-inverted);
+  border-radius: 4px;
+  padding: 2px 4px;
+  font-size: 11px;
+  font-family: inherit;
+  background: var(--dsw-specific-input-major);
+  color: var(--dsw-alias-label-primary);
+}
+
 .deleteBtn:hover {
   background: var(--dsw-alias-interactive-bg-hover-danger);
   color: var(--dsw-alias-state-error-primary);
