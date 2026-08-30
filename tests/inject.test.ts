@@ -27,6 +27,7 @@ test('boundary predicate: positive integer turns only', () => {
   assert.equal(isBoundaryTurn(1, 1), true)
   assert.equal(isBoundaryTurn(3, 5), false)
   assert.equal(isBoundaryTurn(4, 5), false)
+  assert.equal(isBoundaryTurn(6, 5), false)
   assert.equal(isBoundaryTurn(0, 5), false)
   assert.equal(isBoundaryTurn(5, 0), false)
   assert.equal(isBoundaryTurn(5.5, 5), false)
@@ -54,12 +55,14 @@ test('renderInjectionMessage frames one reminder with durable source records', (
   const message = renderInjectionMessage(10, [
     { id: 'a', name: '推动', content: 'keep moving', every: 5 },
     { id: 'b', name: 'weird"name', content: 'line one\nline two', every: 10 },
+    { id: 'c', name: 'A&B<C>', content: 'x', every: 1 },
   ])
   assert.equal(message.source.kind, 'prompt-template-schedule')
   assert.equal(message.source.turn, 10)
   assert.deepEqual(message.source.templates, [
     { id: 'a', name: '推动', every: 5 },
     { id: 'b', name: 'weird"name', every: 10 },
+    { id: 'c', name: 'A&B<C>', every: 1 },
   ])
   const text = message.content[0].type === 'text' ? message.content[0].text : ''
   assert.match(text, /^<system-reminder>/)
@@ -67,6 +70,7 @@ test('renderInjectionMessage frames one reminder with durable source records', (
   assert.match(text, /turn 10/)
   assert.ok(text.includes('<template name="推动" every="5">\nkeep moving\n</template>'))
   assert.ok(text.includes('<template name="weird&quot;name" every="10">\nline one\nline two\n</template>'))
+  assert.ok(text.includes('<template name="A&amp;B&lt;C&gt;" every="1">'))
 })
 
 test('alreadyInjectedAtTurn scans the window backward for the source kind and turn', () => {

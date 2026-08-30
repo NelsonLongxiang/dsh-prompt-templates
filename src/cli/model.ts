@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import type { CategoryView, TemplateView } from '../types.ts'
+import { DEFAULT_INJECT_MAX_EVERY } from '../store.ts'
 
 export const SNAPSHOT_SCHEMA_VERSION = 3
 
@@ -230,6 +231,11 @@ function booleanField(value: unknown, label: string): boolean {
 function nullablePositiveInteger(value: unknown, label: string): number | null {
   if (value === null) return null
   if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) throw new Error(`${label} must be a positive integer or null`)
+  // Snapshots interchange under the default interval bound: an out-of-range N
+  // imported offline would poison later store patches that fall back to the
+  // stored value. Deployments with a larger injectMaxEvery export/import via
+  // that deployment's own store, not through the snapshot bound.
+  if (value > DEFAULT_INJECT_MAX_EVERY) throw new Error(`${label} must be at most ${DEFAULT_INJECT_MAX_EVERY}`)
   return value
 }
 function parseScope(value: unknown, label: string): 'global' | 'session' {
