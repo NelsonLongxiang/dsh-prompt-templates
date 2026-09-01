@@ -1,10 +1,7 @@
 {
   "name": "@nelsonlongxiang/dsh-prompt-templates",
-<<<<<<< HEAD
   "version": "0.11.0",
-=======
-  "version": "0.10.1",
->>>>>>> origin/master
+  "version": "0.11.1",
   "description": "Quick prompt templates for DeepSeek Harness: global and per-session templates, a browser panel, and a pure-TS node:sqlite persistence backend",
   "type": "module",
   "main": "lib/index.js",
