@@ -21,7 +21,11 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import s from '@deepseek-ai/schemastery'
-import { settingsNamespace } from '@deepseek-ai/dsh-settings'
+// Type-only: dsh-settings's declaration merging puts `ctx.settings` on
+// Context (alpha.3 removed the runtime settingsNamespace helper, but the
+// type mount stays — an empty type import keeps it without pulling the
+// deleted helper).
+import type { } from '@deepseek-ai/dsh-settings'
 import { registerAutoInject } from './inject.ts'
 import { DEFAULT_INJECT_MAX_EVERY, TemplateRuleError, TemplateStore } from './store.ts'
 import type { TemplateView } from './types.ts'
@@ -96,7 +100,10 @@ export function apply(ctx: Context, config: Config): void {
   // position), optional: without a mounted settings provider the client
   // scope simply reports unavailable.
   ctx.inject(['settings'], (settingsCtx) => {
-    settingsCtx.settings.register(settingsNamespace('prompt-templates'), s.object({
+    // alpha.3 (a6bc39da75) removed the runtime settingsNamespace helper and
+    // takes plain namespace strings matching /^[a-z][a-z0-9-]*$/ — the
+    // ui-theme paradigm. 'prompt-templates' matches the pattern as-is.
+    settingsCtx.settings.register('prompt-templates', s.object({
       defaultOpen: s.boolean().default(false),
       panel: s.object({ x: s.number(), y: s.number() }),
     }))
