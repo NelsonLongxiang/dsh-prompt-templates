@@ -166,7 +166,10 @@ export function registerAutoInject(ctx: Context, config: AutoInjectConfig, store
       const state = sessions.get(sessionId) ?? { scanned: 0, injectedTurns: new Set<number>() }
       sessions.set(sessionId, state)
       if (state.injectedTurns.has(turn)) return decision
-      const events = agent.session.events as unknown as readonly InjectionEventProbe[]
+      // alpha.4 removed the session.events getter: prefer the snapshotEvents()
+      // frozen full-log snapshot, fall back to the legacy array, then empty.
+      const sessionLike = agent.session as unknown as { snapshotEvents?: () => readonly InjectionEventProbe[]; events?: readonly InjectionEventProbe[] }
+      const events = (typeof sessionLike.snapshotEvents === 'function' ? sessionLike.snapshotEvents() : sessionLike.events) ?? [] as unknown as readonly InjectionEventProbe[]
       // Compaction or a log rewrite can shrink the array: memo indexes would
       // go stale, so fall back to a full rescan.
       if (events.length < state.scanned) state.scanned = 0
