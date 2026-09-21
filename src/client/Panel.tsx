@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { PointerEvent as ReactPointerEvent } from 'react'
 import { PropsLocale, PropsRuntime, PropsStore } from '@deepseek-ai/dsh-client-ui-slots'
-import { IconEditOutline16, IconGlobeOutline14, IconPlusOutline16, IconQueueOutline14, IconSendOutline16, IconTrashOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconEditOutline16, IconGlobeOutline14, IconPlusOutline16, IconQueueOutline14, IconSendOutline14, IconTrashOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { CategoryView, TemplateView } from '../types.ts'
 import type { PromptPanelFace, PanelPosition } from './slots.ts'
 import { filterTemplateRows, searchableTemplateRows } from './filter.ts'
@@ -87,7 +87,7 @@ function TemplateRow({ template, onInsert, onSend, onInterject, onEdit, onDelete
         aria-label={t('panel.sendNow')}
         title={t('panel.sendNow')}
       >
-        <IconSendOutline16 size={12} />
+        <IconSendOutline14 size={12} />
       </button>
       {onMakeGlobal !== undefined && (
         <button
