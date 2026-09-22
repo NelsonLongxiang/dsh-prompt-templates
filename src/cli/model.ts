@@ -1,13 +1,19 @@
 import { createHash } from 'node:crypto'
 import type { CategoryView, TemplateView } from '../types.ts'
+import { DEFAULT_INJECT_MAX_EVERY } from '../store.ts'
 
-export const SNAPSHOT_SCHEMA_VERSION = 2
+export const SNAPSHOT_SCHEMA_VERSION = 3
 
-const TEMPLATE_KEYS = ['id', 'name', 'content', 'scope', 'session_id', 'description', 'position', 'category', 'created_at', 'updated_at'] as const
+/** Schema 2 (pre-auto-inject) snapshots still import; inject facts default off. */
+const SUPPORTED_SCHEMA_VERSIONS: readonly unknown[] = [2, 3]
+
+const TEMPLATE_KEYS = ['id', 'name', 'content', 'scope', 'session_id', 'description', 'position', 'category', 'inject_enabled', 'inject_every', 'created_at', 'updated_at'] as const
+/** Key set of schema-2 template records (no auto-inject facts). */
+const TEMPLATE_KEYS_V2: readonly string[] = TEMPLATE_KEYS.filter(key => key !== 'inject_enabled' && key !== 'inject_every')
 const CATEGORY_KEYS = ['name', 'scope', 'session_id'] as const
 
 export interface DataSnapshot {
-  readonly schema_version: 2
+  readonly schema_version: 3
   readonly categories: readonly CategoryView[]
   readonly templates: readonly TemplateView[]
   readonly data_sha256: string
@@ -56,10 +62,11 @@ export interface MergeConflict {
 export function parseSnapshot(value: unknown): DataSnapshot {
   const root = object(value, 'snapshot')
   exactKeys(root, ['schema_version', 'categories', 'templates', 'data_sha256', 'exported_at', 'source'], 'snapshot')
-  if (root.schema_version !== SNAPSHOT_SCHEMA_VERSION) throw new Error(`unsupported schema_version ${String(root.schema_version)} (expected 2)`)
+  if (!SUPPORTED_SCHEMA_VERSIONS.includes(root.schema_version)) throw new Error(`unsupported schema_version ${String(root.schema_version)} (expected 2 or 3)`)
+  const version = root.schema_version as 2 | 3
   if (!Array.isArray(root.categories) || !Array.isArray(root.templates)) throw new Error('categories and templates must be arrays')
   const categories = root.categories.map((entry, index) => parseCategory(entry, `categories[${index}]`))
-  const templates = root.templates.map((entry, index) => parseTemplate(entry, `templates[${index}]`))
+  const templates = root.templates.map((entry, index) => parseTemplate(entry, `templates[${index}]`, version))
   const canonical = canonicalData(categories, templates)
   if (typeof root.data_sha256 !== 'string') throw new Error('data_sha256 must be a string')
   const expected = dataHash(canonical)
@@ -175,13 +182,15 @@ function parseCategory(value: unknown, label: string): CategoryView {
   return { name, scope, session_id: sessionId }
 }
 
-function parseTemplate(value: unknown, label: string): TemplateView {
+function parseTemplate(value: unknown, label: string, version: 2 | 3): TemplateView {
   const item = object(value, label)
-  exactKeys(item, TEMPLATE_KEYS, label)
+  exactKeys(item, version === 2 ? TEMPLATE_KEYS_V2 : TEMPLATE_KEYS, label)
   const scope = parseScope(item.scope, `${label}.scope`)
   const sessionId = nullableString(item.session_id, `${label}.session_id`)
   scopeSession(scope, sessionId, label)
   if (!Number.isInteger(item.position) || Number(item.position) < 0) throw new Error(`${label}.position must be a non-negative integer`)
+  const inject_enabled = version === 3 ? booleanField(item.inject_enabled, `${label}.inject_enabled`) : false
+  const inject_every = version === 3 ? nullablePositiveInteger(item.inject_every, `${label}.inject_every`) : null
   return {
     id: nonEmpty(item.id, `${label}.id`),
     name: nonEmpty(item.name, `${label}.name`),
@@ -191,6 +200,8 @@ function parseTemplate(value: unknown, label: string): TemplateView {
     description: nullableString(item.description, `${label}.description`),
     position: Number(item.position),
     category: nullableString(item.category, `${label}.category`),
+    inject_enabled,
+    inject_every,
     created_at: nonEmpty(item.created_at, `${label}.created_at`),
     updated_at: nonEmpty(item.updated_at, `${label}.updated_at`),
   }
@@ -211,6 +222,20 @@ function nonEmpty(value: unknown, label: string): string {
 function nullableString(value: unknown, label: string): string | null {
   if (value === null) return null
   if (typeof value !== 'string') throw new Error(`${label} must be a string or null`)
+  return value
+}
+function booleanField(value: unknown, label: string): boolean {
+  if (typeof value !== 'boolean') throw new Error(`${label} must be a boolean`)
+  return value
+}
+function nullablePositiveInteger(value: unknown, label: string): number | null {
+  if (value === null) return null
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) throw new Error(`${label} must be a positive integer or null`)
+  // Snapshots interchange under the default interval bound: an out-of-range N
+  // imported offline would poison later store patches that fall back to the
+  // stored value. Deployments with a larger injectMaxEvery export/import via
+  // that deployment's own store, not through the snapshot bound.
+  if (value > DEFAULT_INJECT_MAX_EVERY) throw new Error(`${label} must be at most ${DEFAULT_INJECT_MAX_EVERY}`)
   return value
 }
 function parseScope(value: unknown, label: string): 'global' | 'session' {

@@ -3,7 +3,9 @@
  * `node:sqlite` (same schema and database file as the former Python
  * backend child) exposed over web-server routes the browser panel fetches
  * (`/plugins/dsh-prompt-templates/*`). The plugin owns the store, the
- * routes, and the settings namespace (panel default-open + placement).
+ * routes, the settings namespace (panel default-open + placement), and the
+ * scheduled auto-injection listener that re-surfaces inject-enabled
+ * templates every N rounds.
  *
  * Route map (JSON bodies, `Cache-Control: no-store`):
  *   GET    /plugins/dsh-prompt-templates/templates        → { items }
@@ -19,8 +21,13 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import s from '@deepseek-ai/schemastery'
-import { settingsNamespace } from '@deepseek-ai/dsh-settings'
-import { TemplateRuleError, TemplateStore } from './store.ts'
+// Type-only: dsh-settings's declaration merging puts `ctx.settings` on
+// Context (alpha.3 removed the runtime settingsNamespace helper, but the
+// type mount stays — an empty type import keeps it without pulling the
+// deleted helper).
+import type { } from '@deepseek-ai/dsh-settings'
+import { registerAutoInject } from './inject.ts'
+import { DEFAULT_INJECT_MAX_EVERY, TemplateRuleError, TemplateStore } from './store.ts'
 import type { TemplateView } from './types.ts'
 
 export type * from './types.ts'
@@ -31,10 +38,16 @@ export const name = 'prompt-templates'
 export interface Config {
   /** Optional explicit SQLite database path; defaults to `$DSH_HOME/ext/prompt-templates/db.sqlite3`. */
   readonly dbPath?: string | null
+  /** Scheduled-injection master switch; `false` keeps the listener pass-through. */
+  readonly injectEnabled?: boolean
+  /** Upper bound accepted for a template's inject interval (`inject_every`). */
+  readonly injectMaxEvery?: number
 }
 
 export const Config: s<Config> = s.object({
   dbPath: s.string(),
+  injectEnabled: s.boolean().default(true),
+  injectMaxEvery: s.number().default(DEFAULT_INJECT_MAX_EVERY),
 })
 
 /** Structural slice of the web-server service (route registration only). */
@@ -71,16 +84,26 @@ export interface TemplateError {
 export function apply(ctx: Context, config: Config): void {
   let store: TemplateStore | undefined
   const client = (): TemplateStore => {
-    store ??= new TemplateStore(config.dbPath ?? defaultDbPath())
+    store ??= new TemplateStore(config.dbPath ?? defaultDbPath(), {
+      injectMaxEvery: config.injectMaxEvery ?? DEFAULT_INJECT_MAX_EVERY,
+    })
     return store
   }
   ctx.effect(() => () => { store?.close() }, 'prompt-templates: store close')
+
+  // Scheduled auto-injection rides the agent loop's pre-step waterfall and
+  // shares the route's store; it needs no web server, so headless profiles
+  // inject too.
+  registerAutoInject(ctx, { enabled: config.injectEnabled ?? true }, client)
 
   // Browser preference namespace (panel default-open and remembered
   // position), optional: without a mounted settings provider the client
   // scope simply reports unavailable.
   ctx.inject(['settings'], (settingsCtx) => {
-    settingsCtx.settings.register(settingsNamespace('prompt-templates'), s.object({
+    // alpha.3 (a6bc39da75) removed the runtime settingsNamespace helper and
+    // takes plain namespace strings matching /^[a-z][a-z0-9-]*$/ — the
+    // ui-theme paradigm. 'prompt-templates' matches the pattern as-is.
+    settingsCtx.settings.register('prompt-templates', s.object({
       defaultOpen: s.boolean().default(false),
       panel: s.object({ x: s.number(), y: s.number() }),
     }))

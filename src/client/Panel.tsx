@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { PointerEvent as ReactPointerEvent } from 'react'
 import { PropsLocale, PropsRuntime, PropsStore } from '@deepseek-ai/dsh-client-ui-slots'
-import { IconEditOutline16, IconGlobeOutline14, IconPlusOutline16, IconQueueOutline14, IconSendOutline16, IconTrashOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconEditOutline16, IconGlobeOutline14, IconPlusOutline16, IconQueueOutline14, IconSendOutline14, IconTrashOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { CategoryView, TemplateView } from '../types.ts'
 import type { PromptPanelFace, PanelPosition } from './slots.ts'
 import { filterTemplateRows, searchableTemplateRows } from './filter.ts'
@@ -30,13 +30,18 @@ interface RowProps {
   onEdit: (id: string) => void
   onDelete: (id: string) => void
   onMakeGlobal?: (id: string) => void
+  /** Flip the row's auto-inject switch (rows without an interval route to the edit form). */
+  onToggleInject: (template: TemplateView) => void
   sortable: boolean
   onDragStart: (id: string) => void
   onDropOn: (id: string) => void
   t: (key: PromptTemplateKey) => string
 }
 
-function TemplateRow({ template, onInsert, onSend, onInterject, onEdit, onDelete, onMakeGlobal, sortable, onDragStart, onDropOn, t }: RowProps) {
+function TemplateRow({ template, onInsert, onSend, onInterject, onEdit, onDelete, onMakeGlobal, onToggleInject, sortable, onDragStart, onDropOn, t }: RowProps) {
+  const injectTitle = template.inject_enabled && template.inject_every !== null
+    ? `${t('panel.inject')} · ${template.inject_every}`
+    : t('panel.inject')
   return (
     <div
       className={css.row}
@@ -58,6 +63,16 @@ function TemplateRow({ template, onInsert, onSend, onInterject, onEdit, onDelete
       </button>
       <button
         type="button"
+        className={template.inject_enabled ? css.injectBtnActive : css.injectBtn}
+        onClick={() => { onToggleInject(template) }}
+        aria-label={t('panel.inject')}
+        aria-pressed={template.inject_enabled}
+        title={injectTitle}
+      >
+        ⟳{template.inject_enabled && template.inject_every !== null ? template.inject_every : ''}
+      </button>
+      <button
+        type="button"
         className={css.interjectBtn}
         onClick={() => { onInterject(template.content) }}
         aria-label={t('panel.interject')}
@@ -72,7 +87,7 @@ function TemplateRow({ template, onInsert, onSend, onInterject, onEdit, onDelete
         aria-label={t('panel.sendNow')}
         title={t('panel.sendNow')}
       >
-        <IconSendOutline16 size={12} />
+        <IconSendOutline14 size={12} />
       </button>
       {onMakeGlobal !== undefined && (
         <button
@@ -108,13 +123,13 @@ function TemplateRow({ template, onInsert, onSend, onInterject, onEdit, onDelete
 
 /** The template inline form: creation (with scope + category pickers) and in-place edit. */
 function TemplateForm({ initial, allowScope, sessionId, categories, t, submitLabel, onSubmit, onDone, onCancel }: {
-  initial?: { name: string; content: string }
+  initial?: { name: string; content: string; injectEnabled?: boolean; injectEvery?: number | null }
   allowScope: boolean
   sessionId: string | null
   categories: readonly CategoryView[]
   t: (key: PromptTemplateKey) => string
   submitLabel: string
-  onSubmit: (name: string, content: string, scope: 'global' | 'session', category: string | null) => Promise<boolean>
+  onSubmit: (name: string, content: string, scope: 'global' | 'session', category: string | null, injectEnabled: boolean, injectEvery: number | null) => Promise<boolean>
   onDone: () => void
   /** Abort without saving: exit the edit state / collapse the create form. */
   onCancel?: () => void
@@ -123,6 +138,10 @@ function TemplateForm({ initial, allowScope, sessionId, categories, t, submitLab
   const [content, setContent] = useState(initial?.content ?? '')
   const [scope, setScope] = useState<'global' | 'session'>('global')
   const [category, setCategory] = useState<string | null>(null)
+  // Auto-inject facts: the interval edits as text so a half-typed value never
+  // silently rounds; it is parsed (and rejected) on submit only.
+  const [injectOn, setInjectOn] = useState(initial?.injectEnabled ?? false)
+  const [injectEvery, setInjectEvery] = useState(initial?.injectEvery != null ? String(initial.injectEvery) : '5')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -134,16 +153,25 @@ function TemplateForm({ initial, allowScope, sessionId, categories, t, submitLab
       setError(t('panel.error'))
       return
     }
+    let every: number | null = null
+    if (injectOn) {
+      const parsed = Number(injectEvery)
+      if (!Number.isInteger(parsed) || parsed < 1) {
+        setError(t('panel.error'))
+        return
+      }
+      every = parsed
+    }
     setBusy(true)
     setError(null)
-    const ok = await onSubmit(trimmedName, trimmedContent, scope, category)
+    const ok = await onSubmit(trimmedName, trimmedContent, scope, category, injectOn, every)
     setBusy(false)
     if (!ok) {
       setError(t('panel.error'))
       return
     }
     onDone()
-  }, [name, content, scope, category, allowScope, sessionId, onSubmit, t, onDone])
+  }, [name, content, scope, category, injectOn, injectEvery, allowScope, sessionId, onSubmit, t, onDone])
 
   // Categories selectable for the CURRENT scope pick (matching partition).
   const scopeCategories = categories.filter(
@@ -168,6 +196,30 @@ function TemplateForm({ initial, allowScope, sessionId, categories, t, submitLab
         rows={3}
         aria-label={t('panel.addContent')}
       />
+      <div className={css.injectRow}>
+        <label className={css.injectLabel}>
+          <input
+            type="checkbox"
+            checked={injectOn}
+            onChange={(e) => { setInjectOn(e.target.checked) }}
+          />
+          {t('panel.inject')}
+        </label>
+        {injectOn && (
+          <label className={css.injectLabel}>
+            <input
+              className={css.injectEveryInput}
+              type="number"
+              min={1}
+              step={1}
+              value={injectEvery}
+              onChange={(e) => { setInjectEvery(e.target.value) }}
+              aria-label={t('panel.injectEvery')}
+            />
+            {t('panel.injectEvery')}
+          </label>
+        )}
+      </div>
       <div className={css.addRow}>
         {allowScope && (
           <label className={css.scopeLabel}>
@@ -307,6 +359,25 @@ export function PromptPanel(props: PromptPanelProps) {
     if (result.ok) void load()
   }, [makeGlobal, load])
 
+  // Flip one row's auto-inject switch. First-time setup (no interval yet)
+  // routes into the edit form, where the interval gets typed and confirmed.
+  // A failed toggle surfaces the envelope error next to the list instead of
+  // failing silently — the switch only flips after a confirmed write.
+  const [rowError, setRowError] = useState<string | null>(null)
+  const handleToggleInject = useCallback(async (template: TemplateView) => {
+    if (!template.inject_enabled && template.inject_every === null) {
+      setEditingId(template.id)
+      return
+    }
+    const result = await update(template.id, { inject_enabled: !template.inject_enabled })
+    if (result.ok) {
+      setRowError(null)
+      void load()
+    } else {
+      setRowError(result.error.message)
+    }
+  }, [update, load])
+
   // Drag-by-header: capture the pointer, track the offset, clamp so the
   // header always stays reachable inside the viewport, commit on release.
   const onHeaderPointerDown = (event: ReactPointerEvent<HTMLDivElement>): void => {
@@ -393,13 +464,23 @@ export function PromptPanel(props: PromptPanelProps) {
       ? (
         <TemplateForm
           key={row.id}
-          initial={{ name: row.name, content: row.content }}
+          initial={{ name: row.name, content: row.content, injectEnabled: row.inject_enabled, injectEvery: row.inject_every }}
           allowScope={false}
           sessionId={sessionId}
           categories={visibleCategories}
           t={t}
           submitLabel={t('panel.addSave')}
-          onSubmit={async (name, content, _scope, category) => (await update(row.id, { name, content, category: row.scope === 'global' ? category : category })).ok}
+          onSubmit={async (name, content, _scope, category, injectEnabled, injectEvery) => {
+            // Disabling keeps the stored interval: only enabling sends a new one.
+            const result = await update(row.id, {
+              name,
+              content,
+              category,
+              inject_enabled: injectEnabled,
+              ...(injectEnabled ? { inject_every: injectEvery } : {}),
+            })
+            return result.ok
+          }}
           onDone={() => { setEditingId(null); void load() }}
           onCancel={() => { setEditingId(null) }}
         />
@@ -414,6 +495,7 @@ export function PromptPanel(props: PromptPanelProps) {
           onEdit={(id) => { setEditingId(id) }}
           onDelete={(id) => { void handleRemove(id) }}
           onMakeGlobal={row.scope === 'session' ? (id) => { void handleMakeGlobal(id) } : undefined}
+          onToggleInject={(tpl) => { void handleToggleInject(tpl) }}
           sortable={needle === ''}
           onDragStart={(id) => { dragRowRef.current = id }}
           onDropOn={(id) => { handleRowDrop(id) }}
@@ -530,6 +612,11 @@ export function PromptPanel(props: PromptPanelProps) {
         />
       )}
       <div className={css.body}>
+        {/* Row-toggle failures surface here, above the list, until the next
+            successful write clears them. */}
+        {rowError !== null && (
+          <div className={css.error} role="alert" data-prompt-row-error>{t('panel.error')} · {rowError}</div>
+        )}
         {/* Empty states: the whole library is empty, or the active tab (with
             or without a search needle) holds no rows — both show the empty
             copy instead of a silently missing list area. */}
@@ -548,13 +635,15 @@ export function PromptPanel(props: PromptPanelProps) {
             t={t}
             allowScope
             submitLabel={t('panel.addSave')}
-            onSubmit={async (name, content, scope, category) => {
+            onSubmit={async (name, content, scope, category, injectEnabled, injectEvery) => {
               const result = await create({
                 name,
                 content,
                 scope,
                 session_id: scope === 'session' ? sessionId : null,
                 category,
+                inject_enabled: injectEnabled,
+                inject_every: injectEvery,
               })
               return result.ok
             }}

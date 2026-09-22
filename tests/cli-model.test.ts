@@ -4,7 +4,7 @@ import type { TemplateView } from '../src/types.ts'
 import { createSnapshot, diffSnapshots, mergeSnapshots, parseSnapshot } from '../src/cli/model.ts'
 
 function row(id: string, name: string, updated_at: string, content = `content-${id}`): TemplateView {
-  return { id, name, content, scope: 'global', session_id: null, description: null, position: 0, category: null, created_at: '2026-01-01 00:00:00', updated_at }
+  return { id, name, content, scope: 'global', session_id: null, description: null, position: 0, category: null, inject_enabled: false, inject_every: null, created_at: '2026-01-01 00:00:00', updated_at }
 }
 
 test('canonical snapshot round trips and rejects unknown fields', () => {
@@ -13,6 +13,39 @@ test('canonical snapshot round trips and rejects unknown fields', () => {
   assert.deepEqual(parseSnapshot(JSON.parse(JSON.stringify(snapshot))), snapshot)
   assert.throws(() => parseSnapshot({ ...snapshot, extra: true }), /unknown fields/)
   assert.throws(() => parseSnapshot({ ...snapshot, data_sha256: 'bad' }), /data_sha256 mismatch/)
+})
+
+test('schema-2 snapshots import with inject facts defaulted off', () => {
+  const expected = createSnapshot([], [row('1', 'A', '2026-01-01 00:00:00')])
+  // A v2 record carries no inject keys at all (exact key set of the old schema).
+  const { inject_enabled: _enabled, inject_every: _every, ...v2Template } = row('1', 'A', '2026-01-01 00:00:00')
+  const v2 = {
+    schema_version: 2,
+    categories: [],
+    templates: [v2Template],
+    data_sha256: expected.data_sha256,
+  }
+  const parsed = parseSnapshot(v2)
+  assert.equal(parsed.schema_version, 3)
+  assert.equal(parsed.templates[0]?.inject_enabled, false)
+  assert.equal(parsed.templates[0]?.inject_every, null)
+  // v2 records reject v3-only keys loudly instead of silently absorbing them.
+  assert.throws(() => parseSnapshot({ ...v2, templates: [row('1', 'A', '2026-01-01 00:00:00')] }), /unknown fields/)
+  // Out-of-range intervals are rejected at the interchange bound.
+  const over = createSnapshot([], [{ ...row('1', 'A', '2026-01-01 00:00:00'), inject_every: 1001 }])
+  assert.throws(() => parseSnapshot({ ...over, schema_version: 3 }), /at most 1000/)
+})
+
+test('diff and merge treat inject facts as ordinary compared fields', () => {
+  const left = createSnapshot([], [row('1', 'A', '2026-01-01 00:00:00')])
+  const right = createSnapshot([], [{ ...row('1', 'A', '2026-01-02 00:00:00'), inject_enabled: true, inject_every: 5 }])
+  const diff = diffSnapshots(left, right)
+  assert.equal(diff.identical, false)
+  assert.deepEqual(diff.templates.changed[0]?.fields.sort(), ['inject_enabled', 'inject_every', 'updated_at'])
+  const merged = mergeSnapshots(left, right, 'newer')
+  assert.equal(merged.conflicts.length, 0)
+  assert.equal(merged.snapshot?.templates.find(item => item.id === '1')?.inject_enabled, true)
+  assert.equal(merged.snapshot?.templates.find(item => item.id === '1')?.inject_every, 5)
 })
 
 test('diff finds ids, fields, names and category compound keys', () => {
