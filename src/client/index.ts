@@ -21,8 +21,6 @@ import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 // Type-only: pulls the UI renderer's Context merge (ctx.slots).
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
-// Type-only: pulls the settingsScope Context merge.
-import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type { TemplateView } from '../types.ts'
 import {
   listTemplates,
@@ -36,7 +34,8 @@ import {
 } from './api.ts'
 import { PromptPanel } from './Panel.tsx'
 import { PanelButton } from './PanelButton.tsx'
-import { createPromptPanelStore } from './store.ts'
+import { createPromptPanelPrefsStore, createPromptPanelStore } from './store.ts'
+
 import { PromptPanelController, type IPromptPanel } from './service.ts'
 import type { PromptPanelActions } from './service.ts'
 import type { PromptPanelFace, PromptPanelToggleFace, PanelPosition } from './slots.ts'
@@ -68,14 +67,9 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 const NS = 'promptTemplates'
 
 /** Required services: slots, sessions, locale, conversation, and settings scope. */
-export const inject = ['slots', 'sessions', 'locale', 'conversation', 'settingsScope']
+export const inject = ['slots', 'sessions', 'locale', 'conversation']
 
 /** The promptTemplates settings section (registered host-side; optional). */
-interface PromptTemplatesSettings {
-  readonly defaultOpen?: boolean
-  readonly panel?: { readonly x: number; readonly y: number }
-}
-
 /**
  * Client plugin body: the shell.overlay panel owns the store; the controller
  * bridges its actions to the composer entry and performs inserts.
@@ -88,13 +82,17 @@ export function apply(ctx: ClientContext): void {
   controller.bind({ sessions: ctx.sessions, conversation: ctx.conversation })
   ctx.effect(() => ctx.reflect.provide('promptPanel', controller), 'ui-prompt-templates: panel service')
 
-  const uiSettings = ctx.settingsScope.bind<PromptTemplatesSettings>({ namespace: 'prompt-templates' })
 
   // The panel's business face, created exactly once: the `refresh` identity
   // feeds the panel's load-effect dependency array, so a fresh object per
   // inject evaluation would loop the effect. refresh pulls EVERYTHING and
   // the component groups rows — a server-side session_id filter would hide
   // the global rows (their session_id is NULL and never matches).
+  // Persisted prefs binding, filled by the overlay seat's inject (the seat
+  // owns the store instance; the face reads through these closures).
+  let prefsActions: { setPosition: (x: number, y: number) => void; resetPosition: () => void } | undefined
+  let prefsSnapshot: (() => { panel: { x: number; y: number } | null }) | undefined
+
   const panelFace: PromptPanelFace = {
     refresh: listTemplates,
     refreshCategories: listCategories,
@@ -125,37 +123,15 @@ export function apply(ctx: ClientContext): void {
     interject: (sessionId: string, content: string) => {
       controller.interject(sessionId as SessionId, content)
     },
-    panelPosition: (): PanelPosition | null => {
-      const snapshot = uiSettings.getSnapshot()
-      if (snapshot.status !== 'ready') return null
-      const panel = snapshot.value?.panel
-      if (panel === undefined) return null
-      return typeof panel.x === 'number' && typeof panel.y === 'number' ? panel : null
-    },
+    panelPosition: (): PanelPosition | null => prefsSnapshot?.().panel ?? null,
     savePanelPosition: (position: PanelPosition) => {
-      void uiSettings.set('panel', { x: Math.round(position.x), y: Math.round(position.y) })
+      prefsActions?.setPosition(position.x, position.y)
     },
     resetPanelPosition: () => {
-      void uiSettings.unset('panel')
+      prefsActions?.resetPosition()
     },
   }
 
-  // Settings-driven default open: applied once per store lifetime, only
-  // while the user has never touched the panel. The scope is a snapshot
-  // source, so the subscription re-checks when the host document lands (the
-  // initial read usually races the settings transport). Before the entry
-  // renders, openOnce parks the request and attach() replays it.
-  const applyDefaultOpen = (): void => {
-    const snapshot = uiSettings.getSnapshot()
-    if (snapshot.status === 'ready' && snapshot.value?.defaultOpen === true) {
-      controller.openOnce()
-    }
-  }
-  ctx.effect(() => {
-    const unsubscribe = uiSettings.subscribe(applyDefaultOpen)
-    return () => { unsubscribe() }
-  }, 'ui-prompt-templates: default-open watch')
-  applyDefaultOpen()
 
   // The shell.overlay entry: root scope, owns the panel store; the inject
   // hook hands the bound actions to the controller and the shared face.
@@ -165,9 +141,14 @@ export function apply(ctx: ClientContext): void {
     order: 10,
     locale: NS,
     store: createPromptPanelStore,
-    inject: (actions: PromptPanelActions): PromptPanelFace => {
+    inject: (actions: PromptPanelActions, store?): PromptPanelFace => {
       // attach is a side effect on the controller; the face is the data verbs.
       controller.attach(actions)
+      if (store !== undefined) {
+        const s = store as unknown as { actions: { setPosition: (x: number, y: number) => void; resetPosition: () => void }; getSnapshot: () => { panel: { x: number; y: number } | null } }
+        prefsActions = s.actions
+        prefsSnapshot = () => s.getSnapshot()
+      }
       return panelFace
     },
   }, PromptPanel))

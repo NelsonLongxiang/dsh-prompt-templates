@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { PointerEvent as ReactPointerEvent } from 'react'
 import { PropsLocale, PropsRuntime, PropsStore } from '@deepseek-ai/dsh-client-ui-slots'
-import { IconEditOutline16, IconGlobeOutline14, IconPlusOutline16, IconQueueOutline14, IconSendOutline14, IconTrashOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconEditOutlineRegular, IconGlobeOutlineRegular, IconPlusOutlineRegular, IconQueueOutlineRegular, IconSendOutlineRegular, IconTrashOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { CategoryView, TemplateView } from '../types.ts'
 import type { PromptPanelFace, PanelPosition } from './slots.ts'
 import { filterTemplateRows, searchableTemplateRows } from './filter.ts'
@@ -78,7 +78,7 @@ function TemplateRow({ template, onInsert, onSend, onInterject, onEdit, onDelete
         aria-label={t('panel.interject')}
         title={t('panel.interject')}
       >
-        <IconQueueOutline14 size={12} />
+        <IconQueueOutlineRegular size={12} />
       </button>
       <button
         type="button"
@@ -87,7 +87,7 @@ function TemplateRow({ template, onInsert, onSend, onInterject, onEdit, onDelete
         aria-label={t('panel.sendNow')}
         title={t('panel.sendNow')}
       >
-        <IconSendOutline14 size={12} />
+        <IconSendOutlineRegular size={12} />
       </button>
       {onMakeGlobal !== undefined && (
         <button
@@ -97,7 +97,7 @@ function TemplateRow({ template, onInsert, onSend, onInterject, onEdit, onDelete
           aria-label={t('panel.makeGlobal')}
           title={t('panel.makeGlobal')}
         >
-          <IconGlobeOutline14 size={12} />
+          <IconGlobeOutlineRegular size={12} />
         </button>
       )}
       <button
@@ -107,7 +107,7 @@ function TemplateRow({ template, onInsert, onSend, onInterject, onEdit, onDelete
         aria-label={t('panel.edit')}
         title={t('panel.edit')}
       >
-        <IconEditOutline16 size={12} />
+        <IconEditOutlineRegular size={12} />
       </button>
       <button
         type="button"
@@ -115,7 +115,7 @@ function TemplateRow({ template, onInsert, onSend, onInterject, onEdit, onDelete
         onClick={() => { onDelete(template.id) }}
         aria-label={t('panel.delete')}
       >
-        <IconTrashOutline16 size={12} />
+        <IconTrashOutlineRegular size={12} />
       </button>
     </div>
   )
@@ -295,7 +295,7 @@ export function PromptPanel(props: PromptPanelProps) {
     actions, t,
   } = props
   const open = useStore(s => s.open)
-  const currentSession = useSessions(s => s.current)
+  const currentSession = useSessions(s => s.ids[0] ?? null)
   const [templates, setTemplates] = useState<TemplateView[]>([])
   const [categories, setCategories] = useState<CategoryView[]>([])
   const [showAdd, setShowAdd] = useState(false)
@@ -600,7 +600,7 @@ export function PromptPanel(props: PromptPanelProps) {
           title={t('panel.newCategory')}
           onClick={() => { setShowCatForm(v => !v) }}
         >
-          <IconPlusOutline16 size={10} />
+          <IconPlusOutlineRegular size={10} />
         </button>
       </div>
       {showCatForm && (
@@ -666,7 +666,7 @@ export function PromptPanel(props: PromptPanelProps) {
           </a>
         </span>
         <button type="button" className={css.addBtn} onClick={() => { setShowAdd(v => !v) }}>
-          <IconPlusOutline16 size={12} /> {t('panel.add')}
+          <IconPlusOutlineRegular size={12} /> {t('panel.add')}
         </button>
       </div>
     </div>

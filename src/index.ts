@@ -96,19 +96,6 @@ export function apply(ctx: Context, config: Config): void {
   // inject too.
   registerAutoInject(ctx, { enabled: config.injectEnabled ?? true }, client)
 
-  // Browser preference namespace (panel default-open and remembered
-  // position), optional: without a mounted settings provider the client
-  // scope simply reports unavailable.
-  ctx.inject(['settings'], (settingsCtx) => {
-    // alpha.3 (a6bc39da75) removed the runtime settingsNamespace helper and
-    // takes plain namespace strings matching /^[a-z][a-z0-9-]*$/ — the
-    // ui-theme paradigm. 'prompt-templates' matches the pattern as-is.
-    settingsCtx.settings.register('prompt-templates', s.object({
-      defaultOpen: s.boolean().default(false),
-      panel: s.object({ x: s.number(), y: s.number() }),
-    }))
-  })
-
   let routesRegistered = false
   const registerRoutes = (): void => {
     if (routesRegistered) return

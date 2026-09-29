@@ -54,3 +54,21 @@ export type PromptPanelActions = {
   close: (draft: PromptPanelState) => void
   openOnce: (draft: PromptPanelState) => void
 }
+
+/** Persisted panel preferences (position + remembered default-open). */
+interface PromptPanelPrefs {
+  defaultOpen: boolean
+  panel: { x: number; y: number } | null
+}
+
+/** Complete write set for the persisted preferences. */
+export function createPromptPanelPrefsStore() {
+  return defineStore({
+    persist: 'prompt-templates.panel',
+    init: (): PromptPanelPrefs => ({ defaultOpen: false, panel: null }),
+    actions: {
+      setPosition: (d, x: number, y: number) => { d.panel = { x: Math.round(x), y: Math.round(y) } },
+      resetPosition: (d) => { d.panel = null },
+    },
+  })
+}
