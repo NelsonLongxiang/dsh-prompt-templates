@@ -14,18 +14,15 @@ import type { ISessions } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { createPromptPanelStore } from './store.ts'
 
 /**
- * Locate the composer textarea for one draft. The input machine publishes
- * no caret, so the caret can only be read from the DOM: of every textarea
- * on the page, the one whose value equals the draft snapshot is the
- * composer (the panel's own form fields never hold the draft). Falls back
- * to null when no match exists (detached DOM, session switched mid-click).
+ * The live insertion span the input face hands out: a [start, end) range in
+ * the draft's text coordinates plus the draft revision it was captured
+ * against. A stale revision (or a locked admission transaction) makes
+ * `insertText` decline instead of applying at the wrong place.
  */
-function composerTextarea(draft: string): HTMLTextAreaElement | null {
-  if (typeof document === 'undefined') return null
-  for (const el of Array.from(document.querySelectorAll('textarea'))) {
-    if (el.value === draft) return el
-  }
-  return null
+export interface InsertionSpan {
+  start: number
+  end: number
+  draftRev: number
 }
 
 /** The panel store's bound action set (framework-baked, draft params peeled). */
@@ -35,6 +32,16 @@ export type PromptPanelActions = BoundActions<ReturnType<typeof createPromptPane
 export interface IPromptPanel {
   /** Flip the panel open/closed. */
   toggle(): void
+  /**
+   * Record the session whose composer entry was clicked — the panel's
+   * delivery target for insert/send/interject and session-scoped templates.
+   * The session-scoped composer entry calls this at click time, replacing
+   * the pre-0.2.0 `SessionListState.current` lookup (the 0.2.0 session list
+   * has no selection field; `ids[0]` is merely the newest list row).
+   */
+  setTargetSession(sessionId: SessionId): void
+  /** The delivery target: the composer that last opened the panel. */
+  targetSession(): SessionId | undefined
   /** Insert one template's content into a session's composer draft at the caret. */
   insert(sessionId: SessionId, content: string): void
   /** Submit one template's content immediately, preserving the user's draft. */
@@ -56,6 +63,8 @@ export class PromptPanelController implements IPromptPanel {
   #sessions: ISessions | undefined
   #conversation: ClientContext['conversation'] | undefined
   #pendingAutoOpen = false
+  /** Session whose composer entry last opened the panel (delivery target). */
+  #targetSession: SessionId | undefined
 
   /**
    * Adopt the shell.overlay entry's bound store actions. Called from that
@@ -89,6 +98,16 @@ export class PromptPanelController implements IPromptPanel {
     this.#require().toggle()
   }
 
+  /** Record the panel's delivery target (called by the composer entry at click). */
+  setTargetSession(sessionId: SessionId): void {
+    this.#targetSession = sessionId
+  }
+
+  /** The session whose composer last opened the panel, if any. */
+  targetSession(): SessionId | undefined {
+    return this.#targetSession
+  }
+
   /**
    * Apply the settings-driven default open, at most once per store lifetime
    * and never after any user interaction with the panel. Before the entry's
@@ -105,32 +124,30 @@ export class PromptPanelController implements IPromptPanel {
   /**
    * Insert one template's content into a session's composer draft at the
    * live caret position (selection, when a range is selected, is replaced).
-   * The caret lives only in the DOM textarea — the input machine publishes
-   * no caret — so the composer textarea is located by matching its value
-   * against the draft snapshot; when no textarea is found the content falls
-   * back to an end-append (empty draft takes it verbatim, non-empty joins
-   * with a newline).
+   * The caret path goes through the input face's provide-channel pair —
+   * capture the caret span with its draft revision, then apply through the
+   * face so the editor lands it as one undoable edit. The pair declines on
+   * a stale revision or a locked admission transaction (submitting /
+   * adjudicating), and older runtimes without the channel simply lack the
+   * member; both fall back to an end-append over the draft snapshot (empty
+   * draft takes the content verbatim, non-empty joins with a newline).
    * @param sessionId - target session.
    * @param content - template content.
    */
   insert(sessionId: SessionId, content: string): void {
     const input = this.#inputOf(sessionId)
     if (input === undefined) return
-    const draft = input.state.getSnapshot().draft
-    const textarea = composerTextarea(draft)
-    if (textarea === null) {
-      input.setDraft(draft === '' ? content : `${draft}\n${content}`)
-      return
+    const actions = input.actions
+    if (actions !== undefined) {
+      try {
+        const span = actions.captureInsertion()
+        if (span !== undefined && actions.insertText(content, span)) return
+      } catch {
+        // The channel is best-effort; the append path below always works.
+      }
     }
-    const start = textarea.selectionStart ?? draft.length
-    const end = textarea.selectionEnd ?? start
-    const next = `${draft.slice(0, start)}${content}${draft.slice(end)}`
-    const caret = start + content.length
-    input.setDraft(next)
-    // Return focus and land the caret after the inserted text; the panel
-    // rows preventDefault on mousedown, so the textarea never lost focus.
-    textarea.focus()
-    textarea.setSelectionRange(caret, caret)
+    const draft = input.state.getSnapshot().draft
+    input.setDraft(draft === '' ? content : `${draft}\n${content}`)
   }
 
   /**
@@ -166,6 +183,15 @@ export class PromptPanelController implements IPromptPanel {
     setDraft(text: string): void
     submit(mode?: 'queue' | 'steer'): void
     state: { getSnapshot(): { draft: string, phase: string }, subscribe(fn: () => void): () => void }
+    /**
+     * The stable provide-channel action face (0.2.0 input shell): the
+     * revision-guarded caret insertion pair. Optional so older runtimes
+     * (textarea composers) keep working through the append fallback.
+     */
+    actions?: {
+      captureInsertion(): InsertionSpan
+      insertText(text: string, span: InsertionSpan): boolean
+    }
   } | undefined {
     const sessions = this.#sessions
     const conversation = this.#conversation

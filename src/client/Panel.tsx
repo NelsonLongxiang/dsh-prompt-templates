@@ -288,14 +288,18 @@ export type PromptPanelProps =
  */
 export function PromptPanel(props: PromptPanelProps) {
   const {
-    useStore, useSessions, refresh, refreshCategories, createCategory, removeCategory,
+    useStore, refresh, refreshCategories, createCategory, removeCategory,
     create, update, remove, makeGlobal,
-    insert, send, interject,
+    insert, send, interject, targetSession,
     panelPosition, savePanelPosition, resetPanelPosition,
     actions, t,
   } = props
   const open = useStore(s => s.open)
-  const currentSession = useSessions(s => s.ids[0] ?? null)
+  // Delivery target: the composer whose button opened the panel. The 0.2.0
+  // session list has no selection field (SessionListState.current is gone),
+  // so guessing ids[0] would target the newest list row — a foreign session
+  // on any busy host. The composer entry attaches the real id at click time.
+  const currentSession = targetSession()
   const [templates, setTemplates] = useState<TemplateView[]>([])
   const [categories, setCategories] = useState<CategoryView[]>([])
   const [showAdd, setShowAdd] = useState(false)

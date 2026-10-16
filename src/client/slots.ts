@@ -1,9 +1,10 @@
 /**
  * Injected faces of the prompt-templates entries. The panel slot
  * ('shell.overlay') is root-scoped, so its inject factory receives no
- * session id — the component reads the current session through the standard
- * kit. The composer entry ('conversation.input.right') is session-scoped and
- * carries the panel toggle.
+ * session id — the delivery target arrives from the composer entry: the
+ * session-scoped 'conversation.input.right' button reports its sessionId
+ * at click time and the panel reads it back through the face. The composer
+ * entry carries the panel toggle plus that target attachment.
  */
 
 import type { TemplateActionResult } from './api.ts'
@@ -70,10 +71,23 @@ export interface PromptPanelFace {
   send: (sessionId: string, content: string) => void
   /** Submit the content immediately while preserving the user's draft (interject). */
   interject: (sessionId: string, content: string) => void
+  /**
+   * The session whose composer entry opened the panel — the delivery target
+   * for insert/send/interject and the scope of session-scoped templates.
+   * Null before any composer has attached (session tabs stay disabled).
+   */
+  targetSession: () => string | null
 }
 
 /** The composer entry's injected face: toggle the panel. */
 export interface PromptPanelToggleFace {
   /** Flip the panel open/closed. */
   toggle: () => void
+  /**
+   * Attach the panel to one composer's session. The session-scoped button
+   * calls this with its standard-kit sessionId prop at click time, right
+   * before toggling — the clicked composer wins, which is exactly the
+   * session the user is working in (split views included).
+   */
+  attachSession: (sessionId: string) => void
 }

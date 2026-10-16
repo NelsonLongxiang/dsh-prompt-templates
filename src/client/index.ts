@@ -123,6 +123,7 @@ export function apply(ctx: ClientContext): void {
     interject: (sessionId: string, content: string) => {
       controller.interject(sessionId as SessionId, content)
     },
+    targetSession: (): string | null => controller.targetSession() ?? null,
     panelPosition: (): PanelPosition | null => prefsSnapshot?.().panel ?? null,
     savePanelPosition: (position: PanelPosition) => {
       prefsActions?.setPosition(position.x, position.y)
@@ -153,7 +154,8 @@ export function apply(ctx: ClientContext): void {
     },
   }, PromptPanel))
 
-  // The composer entry: session scope, toggles the panel via the controller.
+  // The composer entry: session scope, attaches the panel to this composer's
+  // session at click time and toggles it via the controller.
   ctx.slots.inject('conversation.input.right', () => ctx.slots.register({
     name: 'conversation.input.right',
     id: 'prompt-templates',
@@ -161,6 +163,7 @@ export function apply(ctx: ClientContext): void {
     locale: NS,
     inject: (): PromptPanelToggleFace => ({
       toggle: () => { controller.toggle() },
+      attachSession: (sessionId: string) => { controller.setTargetSession(sessionId as SessionId) },
     }),
   }, PanelButton))
 }

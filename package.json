@@ -1,6 +1,6 @@
 {
   "name": "@nelsonlongxiang/dsh-prompt-templates",
-  "version": "0.11.4",
+  "version": "0.11.5",
   "description": "Quick prompt templates for DeepSeek Harness: global and per-session templates, a browser panel, and a pure-TS node:sqlite persistence backend",
   "type": "module",
   "main": "lib/index.js",
@@ -34,7 +34,6 @@
     "client": {
       "platform": "web",
       "inject": [
-        "@deepseek-ai/dsh-client-runtime",
         "@deepseek-ai/dsh-client-locale",
         "@deepseek-ai/dsh-client-ui-conversation"
       ]
