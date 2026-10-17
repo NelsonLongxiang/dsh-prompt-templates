@@ -11,7 +11,7 @@ export const name = 'prompt-templates-invariant'
 /** Service required before the companion can reserve package ownership. */
 export const inject = ['invariants']
 
-/** No runtime invariant: the durable truth lives in the Python SQLite backend. */
+/** No runtime invariant: the store owns its data integrity in SQLite directly. */
 const install: InvariantInstaller = () => {}
 
 /** Register this package's invariant companion. */

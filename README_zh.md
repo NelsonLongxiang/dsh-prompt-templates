@@ -22,7 +22,7 @@ dsh plugin --profile web add @nelsonlongxiang/dsh-prompt-templates
 
 - **全局 + 会话模板**——全局处处生效；会话模板只属于当前对话，一键提升为全局
 - **定时自动注入**——每条模板独立开关 + 间隔 N：开启后 host 在对话每第 N 轮的首个请求自动注入该模板，配置持久化于 SQLite，注入本身落为持久会话事件
-- **插入或直发**——一键追加进草稿；send-now 立即发送；编辑、删除、转全局都在行内
+- **插入或直发**——一键插入到 composer 光标处（或替换当前选区）；send-now 立即发送；编辑、删除、转全局都在行内
 - **搜索与滚动**——边输入边过滤，长列表滚动可靠
 - **拖拽定位、双击复位**——面板记住你放的位置
 - **设计即持久**——模板经纯 TS 存储（`node:sqlite`）落 SQLite，由 host 插件持有并随其生命周期关闭
@@ -42,6 +42,8 @@ src/                  TypeScript 插件（host 面 + 浏览器面）
   index.ts            Host：持有 TS 存储，暴露 HTTP 路由
   store.ts            纯 TS 模板存储（node:sqlite，schema v3）
   inject.ts           Host：挂在 pre-step waterfall 上的定时注入
+  invariant.ts        Host：注册本包的 invariant 伴生插件
+  cli/                随 bin 发布的同步 CLI（export/diff/merge/import）
   client/             浏览器：面板 UI 注册进 shell.overlay 与
                       conversation.input.right
 cordis.patch.yml      Bundle patch：挂插件行
@@ -88,7 +90,6 @@ pnpm build             # tsc host + tsc client + tsdown 浏览器 bundle
 
 ## 已知限制
 
-- **插入感知光标**——点击模板会替换当前选区，或插入到光标位置
 - **会话模板需要当前会话**——无会话打开时只能用全局模板
 
 ## 许可证

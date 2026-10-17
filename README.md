@@ -22,7 +22,7 @@ No Python toolchain required — since 0.3.0 the host half persists templates th
 
 - **Global + per-session templates** — globals apply everywhere; session templates stay private to one conversation and can be promoted to global in one click
 - **Scheduled auto-injection** — per-template switch and interval: the host re-surfaces an enabled template into the model context at the first request of every Nth round, persisted in SQLite and logged as a durable session event
-- **Insert or send** — one click appends the template into the draft; send-now dispatches immediately; edit, delete, and make-global all live in the row
+- **Insert or send** — one click inserts the template at the composer caret (or replaces the current selection); send-now dispatches immediately; edit, delete, and make-global all live in the row
 - **Search & scroll** — filter the list as you type, reliable scrolling for long collections
 - **Drag to reposition, double-click to reset** — the panel remembers where you put it
 - **Durable by design** — templates persist in SQLite through a pure-TS store (`node:sqlite`) owned by the host plugin and closed with its lifecycle
@@ -42,6 +42,8 @@ src/                  TypeScript plugin (host half + browser half)
   index.ts            Host: owns the TS store, exposes the HTTP routes
   store.ts            Pure-TS template store over node:sqlite (schema v3)
   inject.ts           Host: scheduled auto-injection on the pre-step waterfall
+  invariant.ts        Host: registers the package's invariant companion
+  cli/                The sync CLI (export/diff/merge/import) shipped as bin
   client/             Browser: panel UI registered into shell.overlay and
                       conversation.input.right
 cordis.patch.yml      Bundle patch: mounts the plugin row
@@ -88,7 +90,6 @@ pnpm build             # tsc host + tsc client + tsdown browser bundle
 
 ## Known limitations
 
-- **Insert is caret-aware** — clicking a template replaces the current selection or inserts at the caret
 - **Session templates need a current session** — with no session open, only global templates are reachable
 
 ## License

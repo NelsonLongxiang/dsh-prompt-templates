@@ -18,18 +18,7 @@
     "rewriteRelativeImportExtensions": true,
     "types": ["node"],
     "ignoreDeprecations": "5.0",
-    "baseUrl": ".",
-    "paths": {
-      "@deepseek-ai/cordis": ["../deepseek-harness/vendor/cordis/lib/types/index.d.ts"],
-      "@deepseek-ai/cordis/*": ["../deepseek-harness/vendor/cordis/lib/types/*.d.ts"],
-      "@deepseek-ai/schemastery": ["../deepseek-harness/vendor/schemastery/lib/types/index.d.ts"],
-      "@deepseek-ai/dsh-settings": ["../deepseek-harness/packages/settings/settings/lib/types/index.d.ts"],
-      "@deepseek-ai/dsh-settings/*": ["../deepseek-harness/packages/settings/settings/lib/types/*.d.ts"],
-      "@deepseek-ai/dsh-subprocess": ["../deepseek-harness/packages/subprocess/subprocess/lib/types/index.d.ts"],
-      "@deepseek-ai/dsh-subprocess/*": ["../deepseek-harness/packages/subprocess/subprocess/lib/types/*.d.ts"],
-      "@deepseek-ai/dsh-invariants": ["../deepseek-harness/packages/support/invariants/lib/types/index.d.ts"],
-      "@deepseek-ai/dsh-invariants/*": ["../deepseek-harness/packages/support/invariants/lib/types/*.d.ts"],
-    }
+    "baseUrl": "."
   },
   "include": ["src"],
   "exclude": ["src/client"]
