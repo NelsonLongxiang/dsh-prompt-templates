@@ -5,7 +5,7 @@
  * consumes, so callers never see transport details.
  */
 
-import type { CategoryView, TemplateView } from '../types.ts'
+import type { CategoryView, InjectionStatusView, TemplateView } from '../types.ts'
 
 /** Business error carried by a failed call. */
 export interface TemplateError {
@@ -26,6 +26,14 @@ export async function listTemplates(): Promise<TemplateView[]> {
   if (!response.ok) return []
   const body = await response.json() as { items?: TemplateView[] }
   return [...body.items ?? []]
+}
+
+/** Poll a session's latest scheduled injection; null when none since boot (badges hide). */
+export async function injectStatus(sessionId: string): Promise<InjectionStatusView | null> {
+  const response = await fetch(`${BASE}/inject-status?session_id=${encodeURIComponent(sessionId)}`, { cache: 'no-store' })
+  if (!response.ok) return null
+  const body = await response.json() as { status?: InjectionStatusView | null }
+  return body.status ?? null
 }
 
 /** Load every user category tab (global + all sessions'; the panel filters). */

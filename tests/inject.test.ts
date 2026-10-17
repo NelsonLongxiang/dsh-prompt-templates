@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { TemplateView } from '../src/types.ts'
-import { alreadyInjectedAtTurn, dueTemplates, isBoundaryTurn, renderInjectionMessage } from '../src/inject.ts'
+import { alreadyInjectedAtTurn, dueTemplates, InjectionTracker, isBoundaryTurn, renderInjectionMessage } from '../src/inject.ts'
 
 function template(over: Partial<TemplateView> = {}): TemplateView {
   return {
@@ -95,4 +95,19 @@ test('alreadyInjectedAtTurn scans the window backward for the source kind and tu
   assert.equal(alreadyInjectedAtTurn([], 0, 5), false)
   // Unreadable or foreign sources never match, never throw.
   assert.equal(alreadyInjectedAtTurn([{ type: 'user/message', data: {} }, { type: 'user/message', data: { source: 'garbage' } }], 0, 5), false)
+})
+
+test('InjectionTracker: per-session last-write wins, unknown sessions read null', () => {
+  const tracker = new InjectionTracker()
+  assert.equal(tracker.status('s1'), null)
+  tracker.note('s1', { turn: 10, at: 1_000, templates: ['推动'] })
+  tracker.note('s2', { turn: 5, at: 2_000, templates: ['a', 'b'] })
+  assert.deepEqual(tracker.status('s1'), { turn: 10, at: 1_000, templates: ['推动'] })
+  assert.deepEqual(tracker.status('s2'), { turn: 5, at: 2_000, templates: ['a', 'b'] })
+  assert.equal(tracker.status('unknown'), null)
+  // A later injection overwrites the same session's entry in full.
+  tracker.note('s1', { turn: 20, at: 3_000, templates: ['x'] })
+  assert.deepEqual(tracker.status('s1'), { turn: 20, at: 3_000, templates: ['x'] })
+  // Sessions stay isolated after the overwrite.
+  assert.deepEqual(tracker.status('s2'), { turn: 5, at: 2_000, templates: ['a', 'b'] })
 })

@@ -48,7 +48,7 @@ export function PromptPanel(props: PromptPanelProps) {
   const {
     useStore, refresh, refreshCategories, createCategory, removeCategory,
     create, update, remove, makeGlobal,
-    insert, send, interject, targetSession, targetVersion, subscribeTarget,
+    insert, send, interject, injectStatus, targetSession, targetVersion, subscribeTarget,
     panelPosition, savePanelPosition, resetPanelPosition,
     actions, t,
   } = props
@@ -140,7 +140,7 @@ export function PromptPanel(props: PromptPanelProps) {
   const libraryFace: TemplateLibraryFace = {
     refresh, refreshCategories, createCategory, removeCategory,
     create, update, remove, makeGlobal,
-    insert, send, interject,
+    insert, send, interject, injectStatus,
   }
 
   return (

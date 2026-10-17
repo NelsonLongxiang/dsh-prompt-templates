@@ -28,6 +28,7 @@ import type { TemplateView } from '../types.ts'
 import {
   listTemplates,
   listCategories,
+  injectStatus,
   createCategory,
   deleteCategory,
   createTemplate,
@@ -127,6 +128,7 @@ export function apply(ctx: ClientContext): void {
     interject: (sessionId: string, content: string) => {
       controller.interject(sessionId as SessionId, content)
     },
+    injectStatus,
   }
 
   // Persisted prefs binding, filled by the overlay seat's inject (the seat

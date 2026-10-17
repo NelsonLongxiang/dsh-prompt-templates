@@ -9,7 +9,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { IconEditOutlineRegular, IconGlobeOutlineRegular, IconPlusOutlineRegular, IconQueueOutlineRegular, IconSendOutlineRegular, IconTrashOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { CategoryView, TemplateView } from '../types.ts'
+import type { CategoryView, InjectionStatusView, TemplateView } from '../types.ts'
 import type { TemplateLibraryFace } from './slots.ts'
 import { filterTemplateRows, searchableTemplateRows } from './filter.ts'
 import { GITHUB_REPOSITORY_URL, PLUGIN_VERSION, templateCountLabel } from './meta.ts'
@@ -344,7 +344,7 @@ export interface TemplateLibraryProps {
  * @param props - target session, shared verbs, locale, optional title-row takeover.
  */
 export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: TemplateLibraryProps) {
-  const { refresh, refreshCategories, createCategory, removeCategory, create, update, remove, makeGlobal, insert, send, interject } = face
+  const { refresh, refreshCategories, createCategory, removeCategory, create, update, remove, makeGlobal, insert, send, interject, injectStatus } = face
   const [templates, setTemplates] = useState<TemplateView[]>([])
   const [categories, setCategories] = useState<CategoryView[]>([])
   const [showAdd, setShowAdd] = useState(false)
@@ -374,6 +374,23 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
     void load()
     void loadCategories()
   }, [load, loadCategories])
+
+  // Toolbar badge `⟳N`: the target session's latest scheduled injection,
+  // polled every 30s (and re-read whenever the target changes). null hides
+  // the badge — the route is memory-only, so polling stays O(1).
+  const [injected, setInjected] = useState<InjectionStatusView | null>(null)
+  const pollStatus = useCallback(async () => {
+    if (sessionId === null) {
+      setInjected(null)
+      return
+    }
+    setInjected(await injectStatus(sessionId))
+  }, [injectStatus, sessionId])
+  useEffect(() => {
+    void pollStatus()
+    const timer = setInterval(() => { void pollStatus() }, 30_000)
+    return () => { clearInterval(timer) }
+  }, [pollStatus])
 
   const handleInsert = useCallback((content: string) => {
     if (sessionId === null) return
@@ -514,6 +531,16 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
           <span className={css.countBadge} data-template-count title={needle !== '' ? t('panel.searchCount') : t('panel.tabCount')}>
             {countLabel}
           </span>
+          {injected !== null && (
+            <span
+              className={css.injectBadge}
+              data-prompt-injected
+              title={`${t('panel.injectedAt')} ${injected.turn} · ${new Date(injected.at).toLocaleTimeString()} · ${injected.templates.join(', ')}`}
+              aria-label={t('panel.injectedAt')}
+            >
+              ⟳{injected.turn}
+            </span>
+          )}
         </span>
         {headerExtra}
       </div>

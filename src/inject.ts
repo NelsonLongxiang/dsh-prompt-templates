@@ -21,7 +21,7 @@ import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { UserMessage } from '@deepseek-ai/dsh-session'
 import type { TemplateStore } from './store.ts'
-import type { TemplateView } from './types.ts'
+import type { InjectionStatusView, TemplateView } from './types.ts'
 
 /**
  * Durable provenance for one scheduled injection, recorded beside the
@@ -59,6 +59,37 @@ export interface InjectionEventProbe {
 /** Deployment-facing switch; the listener stays registered but pass-through when off. */
 export interface AutoInjectConfig {
   readonly enabled: boolean
+}
+
+/**
+ * Client-facing summary of a session's latest scheduled injection, polled by
+ * the panel/tab toolbar badge (`⟳N`). Defined in types.ts (client-safe) and
+ * re-exported here so the host half reads one name.
+ */
+export type { InjectionStatusView } from './types.ts'
+
+/**
+ * Per-session last-injection bookkeeping. Memory-only status surface for the
+ * UI badge; correctness of injection itself never depends on it (the durable
+ * log remains the idempotence anchor), so entries are simply overwritten.
+ */
+export class InjectionTracker {
+  readonly #last = new Map<string, InjectionStatusView>()
+
+  /** Record that `sessionId` just received the injection described by `view`. */
+  note(sessionId: string, view: InjectionStatusView): void {
+    this.#last.set(sessionId, view)
+  }
+
+  /** The latest injection recorded for `sessionId`, or null if none since boot. */
+  status(sessionId: string): InjectionStatusView | null {
+    return this.#last.get(sessionId) ?? null
+  }
+}
+
+/** What `registerAutoInject` hands back: the UI status surface. */
+export interface AutoInjectHandle {
+  readonly status: (sessionId: string) => InjectionStatusView | null
 }
 
 /** Whether `turn` is a boundary turn for the interval `every` (both 1-based positive). */
@@ -146,8 +177,10 @@ export function renderInjectionMessage(turn: number, templates: readonly InjectC
  * @param ctx - host context to attach the listener to.
  * @param config - deployment switch.
  * @param store - lazy template store accessor (shared with the routes).
+ * @returns handle exposing the per-session last-injection status for the UI.
  */
-export function registerAutoInject(ctx: Context, config: AutoInjectConfig, store: () => TemplateStore): void {
+export function registerAutoInject(ctx: Context, config: AutoInjectConfig, store: () => TemplateStore): AutoInjectHandle {
+  const tracker = new InjectionTracker()
   // Per-session performance memo ONLY — correctness is anchored on the
   // durable log scan. Entries are cheap and bounded by session count.
   const sessions = new Map<string, { scanned: number, injectedTurns: Set<number> }>()
@@ -182,6 +215,7 @@ export function registerAutoInject(ctx: Context, config: AutoInjectConfig, store
       signal.throwIfAborted()
       state.scanned = events.length
       state.injectedTurns.add(turn)
+      tracker.note(sessionId, { turn, at: Date.now(), templates: due.map(template => template.name) })
       return { ...decision, messages: [...decision.messages, renderInjectionMessage(turn, due)] }
     } catch (error) {
       if (!faultReported) {
@@ -191,4 +225,5 @@ export function registerAutoInject(ctx: Context, config: AutoInjectConfig, store
       return decision
     }
   })
+  return { status: tracker.status.bind(tracker) }
 }

@@ -9,7 +9,7 @@
  */
 
 import type { TemplateActionResult } from './api.ts'
-import type { CategoryView, TemplateView } from '../types.ts'
+import type { CategoryView, InjectionStatusView, TemplateView } from '../types.ts'
 
 /** One template row the panel renders (the backend record). */
 export type { TemplateView }
@@ -87,6 +87,12 @@ export interface PromptPanelFace {
   targetVersion: () => number
   /** Delivery-target change subscription; returns the unsubscribe function. */
   subscribeTarget: (notify: () => void) => () => void
+  /**
+   * Poll the attached session's latest scheduled injection (null when none
+   * since boot). Feeds the toolbar badge `⟳N`; deliberately a face verb so
+   * both surfaces (overlay + tab) share one implementation.
+   */
+  injectStatus: (sessionId: string) => Promise<InjectionStatusView | null>
 }
 
 /** The composer entry's injected face: toggle the panel. */
@@ -115,5 +121,5 @@ export type TemplateLibraryFace = Pick<
   PromptPanelFace,
   | 'refresh' | 'refreshCategories' | 'createCategory' | 'removeCategory'
   | 'create' | 'update' | 'remove' | 'makeGlobal'
-  | 'insert' | 'send' | 'interject'
+  | 'insert' | 'send' | 'interject' | 'injectStatus'
 >

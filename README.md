@@ -21,7 +21,7 @@ No Python toolchain required — since 0.3.0 the host half persists templates th
 ## What you get
 
 - **Global + per-session templates** — globals apply everywhere; session templates stay private to one conversation and can be promoted to global in one click
-- **Scheduled auto-injection** — per-template switch and interval: the host re-surfaces an enabled template into the model context at the first request of every Nth round, persisted in SQLite and logged as a durable session event
+- **Scheduled auto-injection** — per-template switch and interval: the host re-surfaces an enabled template into the model context at the first request of every Nth round, persisted in SQLite and logged as a durable session event; the library toolbar shows a `⟳N` badge with the session's latest injection (turn, time, template names)
 - **Insert or send** — one click inserts the template at the composer caret (or replaces the current selection); send-now dispatches immediately; edit, delete, and make-global all live in the row
 - **Right-sidebar tab** — the full library also docks as a sidebar tab (DSH ≥ 0.2.x): open it from the `+` guide and it follows the session you are viewing; the floating panel remains for quick one-shot use
 - **Search & scroll** — filter the list as you type, reliable scrolling for long collections
@@ -94,6 +94,7 @@ pnpm build             # tsc host + tsc client + tsdown browser bundle
 ## Known limitations
 
 - **Session templates need a current session** — with no session open, only global templates are reachable
+- **Injections don't render in the chat transcript** — the DSH chat view omits injected context rows by design (they carry a non-`user` message source); see them in the trajectory tab. The plugin's own `⟳N` toolbar badge is the in-panel visibility
 
 ## License
 

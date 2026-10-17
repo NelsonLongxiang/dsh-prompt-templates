@@ -67,3 +67,18 @@ export interface CategoryCreateRequest {
   readonly scope?: PromptScope
   readonly session_id?: string | null
 }
+
+/**
+ * Client-facing summary of a session's latest scheduled injection, polled by
+ * the panel/tab toolbar badge (`⟳N`). Lives here (not in inject.ts) because
+ * the client bundles type-import it and must not pull the host-only module
+ * graph (node:sqlite, dsh-agent) into the browser tsconfig project.
+ */
+export interface InjectionStatusView {
+  /** The boundary turn the latest injection landed on (1-based, durable). */
+  readonly turn: number
+  /** Wall-clock epoch milliseconds of the injection. */
+  readonly at: number
+  /** Template names carried by that injection, in injection order. */
+  readonly templates: readonly string[]
+}

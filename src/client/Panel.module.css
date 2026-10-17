@@ -60,6 +60,26 @@
   background: var(--dsw-alias-interactive-bg-hover);
 }
 
+/* Scheduled-injection badge `⟳N` next to the row count: same pill shape as
+   the count badge; label-secondary tone (informational, not an action —
+   the row's ⟳ stays the interactive family member). */
+.injectBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  box-sizing: border-box;
+  border-radius: 999px;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--dsw-alias-label-secondary);
+  background: var(--dsw-alias-interactive-bg-hover);
+  cursor: help;
+  user-select: none;
+}
+
 .closeBtn {
   border: none;
   background: none;
