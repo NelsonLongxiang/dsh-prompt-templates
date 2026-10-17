@@ -14,7 +14,7 @@ Quick prompt templates for [DeepSeek Harness](https://github.com/deepseek-ai/dee
 dsh plugin --profile web add @nelsonlongxiang/dsh-prompt-templates
 ```
 
-Restart `dsh web`, then look for the templates button in the composer tool row.
+Restart `dsh web`, then look for the templates button in the composer tool row. Since 0.12.0 the same library is also a **right-sidebar tab**: open it from the sidebar's `+` guide page (entry “Prompt templates”) — it lives beside the conversation, keeps the composer visible, and always targets the session the sidebar is viewing. On hosts without the sidebar services the tab stays dormant and the floating panel keeps working.
 
 No Python toolchain required — since 0.3.0 the host half persists templates through `node:sqlite` (Node ≥ 24) directly inside the host process, reading and writing the same `$DSH_HOME/ext/prompt-templates/db.sqlite3` the former Python child owned (zero data migration).
 
@@ -23,6 +23,7 @@ No Python toolchain required — since 0.3.0 the host half persists templates th
 - **Global + per-session templates** — globals apply everywhere; session templates stay private to one conversation and can be promoted to global in one click
 - **Scheduled auto-injection** — per-template switch and interval: the host re-surfaces an enabled template into the model context at the first request of every Nth round, persisted in SQLite and logged as a durable session event
 - **Insert or send** — one click inserts the template at the composer caret (or replaces the current selection); send-now dispatches immediately; edit, delete, and make-global all live in the row
+- **Right-sidebar tab** — the full library also docks as a sidebar tab (DSH ≥ 0.2.x): open it from the `+` guide and it follows the session you are viewing; the floating panel remains for quick one-shot use
 - **Search & scroll** — filter the list as you type, reliable scrolling for long collections
 - **Drag to reposition, double-click to reset** — the panel remembers where you put it
 - **Durable by design** — templates persist in SQLite through a pure-TS store (`node:sqlite`) owned by the host plugin and closed with its lifecycle
@@ -44,8 +45,10 @@ src/                  TypeScript plugin (host half + browser half)
   inject.ts           Host: scheduled auto-injection on the pre-step waterfall
   invariant.ts        Host: registers the package's invariant companion
   cli/                The sync CLI (export/diff/merge/import) shipped as bin
-  client/             Browser: panel UI registered into shell.overlay and
-                      conversation.input.right
+  client/             Browser: shared template library mounted as both the
+                      shell.overlay floating panel and the right-sidebar
+                      tab body (sidebar.right.pane.tab), plus the
+                      conversation.input.right toggle button
 cordis.patch.yml      Bundle patch: mounts the plugin row
 ```
 

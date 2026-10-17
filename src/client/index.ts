@@ -21,6 +21,9 @@ import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 // Type-only: pulls the UI renderer's Context merge (ctx.slots).
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
+// Type-only: pulls the right-sidebar Context merges (ctx.sidebarRightTabs)
+// and the SlotMap merge (sidebar.right.pane.tab).
+import type {} from '@deepseek-ai/dsh-client-ui-sidebar-right/client'
 import type { TemplateView } from '../types.ts'
 import {
   listTemplates,
@@ -34,19 +37,24 @@ import {
 } from './api.ts'
 import { PromptPanel } from './Panel.tsx'
 import { PanelButton } from './PanelButton.tsx'
+import { PromptTab } from './PromptTab.tsx'
+import { PROMPT_TEMPLATES_ID, promptTemplatesTabDefinition } from './tab.ts'
 import { createPromptPanelPrefsStore, createPromptPanelStore } from './store.ts'
 
 import { PromptPanelController, type IPromptPanel } from './service.ts'
 import type { PromptPanelActions } from './service.ts'
-import type { PromptPanelFace, PromptPanelToggleFace, PanelPosition } from './slots.ts'
+import type { PromptPanelFace, PromptPanelToggleFace, TemplateLibraryFace, PanelPosition } from './slots.ts'
 import { en, zh, type PromptTemplateKey } from './locales.ts'
 
 export { PromptPanel } from './Panel.tsx'
 export { PanelButton } from './PanelButton.tsx'
+export { PromptTab } from './PromptTab.tsx'
+export { PROMPT_TEMPLATES_KIND, PROMPT_TEMPLATES_ID, promptTemplatesTabDefinition } from './tab.ts'
 export { PromptPanelController } from './service.ts'
 export type { PromptPanelProps } from './Panel.tsx'
 export type { PanelButtonProps } from './PanelButton.tsx'
-export type { PromptPanelFace, PromptPanelToggleFace } from './slots.ts'
+export type { PromptTabProps } from './PromptTab.tsx'
+export type { PromptPanelFace, PromptPanelToggleFace, TemplateLibraryFace } from './slots.ts'
 export type { IPromptPanel } from './service.ts'
 
 declare module '@deepseek-ai/cordis' {
@@ -83,17 +91,13 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.reflect.provide('promptPanel', controller), 'ui-prompt-templates: panel service')
 
 
-  // The panel's business face, created exactly once: the `refresh` identity
-  // feeds the panel's load-effect dependency array, so a fresh object per
-  // inject evaluation would loop the effect. refresh pulls EVERYTHING and
+  // The library verbs, created exactly once and shared by BOTH surfaces:
+  // the floating panel face and the sidebar tab body. The `refresh`
+  // identity feeds the load-effect dependency arrays, so a fresh object per
+  // inject evaluation would loop the effects. refresh pulls EVERYTHING and
   // the component groups rows — a server-side session_id filter would hide
   // the global rows (their session_id is NULL and never matches).
-  // Persisted prefs binding, filled by the overlay seat's inject (the seat
-  // owns the store instance; the face reads through these closures).
-  let prefsActions: { setPosition: (x: number, y: number) => void; resetPosition: () => void } | undefined
-  let prefsSnapshot: (() => { panel: { x: number; y: number } | null }) | undefined
-
-  const panelFace: PromptPanelFace = {
+  const verbs: TemplateLibraryFace = {
     refresh: listTemplates,
     refreshCategories: listCategories,
     createCategory: (request) => {
@@ -123,7 +127,18 @@ export function apply(ctx: ClientContext): void {
     interject: (sessionId: string, content: string) => {
       controller.interject(sessionId as SessionId, content)
     },
+  }
+
+  // Persisted prefs binding, filled by the overlay seat's inject (the seat
+  // owns the store instance; the face reads through these closures).
+  let prefsActions: { setPosition: (x: number, y: number) => void; resetPosition: () => void } | undefined
+  let prefsSnapshot: (() => { panel: { x: number; y: number } | null }) | undefined
+
+  const panelFace: PromptPanelFace = {
+    ...verbs,
     targetSession: (): string | null => controller.targetSession() ?? null,
+    targetVersion: (): number => controller.targetVersion(),
+    subscribeTarget: (notify: () => void): (() => void) => controller.subscribeTarget(notify),
     panelPosition: (): PanelPosition | null => prefsSnapshot?.().panel ?? null,
     savePanelPosition: (position: PanelPosition) => {
       prefsActions?.setPosition(position.x, position.y)
@@ -166,4 +181,22 @@ export function apply(ctx: ClientContext): void {
       attachSession: (sessionId: string) => { controller.setTargetSession(sessionId as SessionId) },
     }),
   }, PanelButton))
+
+  // The right-sidebar tab: a page type (opened by kind from the guide '+'
+  // picker) whose body lands in the session-scoped
+  // 'sidebar.right.pane.tab' seat under the definition's own id — the
+  // body's standard props carry the sessionId of the session the sidebar
+  // is viewing, so no composer attachment is needed. Optional injection:
+  // on a base without the sidebar services the whole block (type AND
+  // body) simply never activates, and the floating panel keeps working.
+  ctx.inject(['sidebarRightTabs'], (ctx) => {
+    const t = ctx.locale.bind(NS)
+    ctx.effect(() => ctx.sidebarRightTabs.register(promptTemplatesTabDefinition(t)), 'ui-prompt-templates: sidebar tab type')
+    ctx.slots.inject('sidebar.right.pane.tab', () => ctx.slots.register({
+      name: 'sidebar.right.pane.tab',
+      key: PROMPT_TEMPLATES_ID,
+      locale: NS,
+      inject: (): TemplateLibraryFace => verbs,
+    }, PromptTab))
+  })
 }

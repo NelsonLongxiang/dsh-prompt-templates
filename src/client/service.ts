@@ -42,6 +42,10 @@ export interface IPromptPanel {
   setTargetSession(sessionId: SessionId): void
   /** The delivery target: the composer that last opened the panel. */
   targetSession(): SessionId | undefined
+  /** Monotonic counter bumping on every target change (useSyncExternalStore snapshot). */
+  targetVersion(): number
+  /** Delivery-target change subscription (drives the open panel's re-render). */
+  subscribeTarget(notify: () => void): () => void
   /** Insert one template's content into a session's composer draft at the caret. */
   insert(sessionId: SessionId, content: string): void
   /** Submit one template's content immediately, preserving the user's draft. */
@@ -65,6 +69,9 @@ export class PromptPanelController implements IPromptPanel {
   #pendingAutoOpen = false
   /** Session whose composer entry last opened the panel (delivery target). */
   #targetSession: SessionId | undefined
+  /** Bumped every time the delivery target changes; drives the open panel's re-render. */
+  #targetVersion = 0
+  #targetListeners = new Set<() => void>()
 
   /**
    * Adopt the shell.overlay entry's bound store actions. Called from that
@@ -98,14 +105,35 @@ export class PromptPanelController implements IPromptPanel {
     this.#require().toggle()
   }
 
-  /** Record the panel's delivery target (called by the composer entry at click). */
+  /**
+   * Record the panel's delivery target. Called by the session-scoped
+   * composer entry when its session becomes the visible one (mount or
+   * session change) and again at click time, so the target always follows
+   * the conversation the user is looking at — switching sessions must not
+   * leave the panel pointed at a detached composer whose scope (and
+   * send/insert path) has gone away.
+   */
   setTargetSession(sessionId: SessionId): void {
+    if (this.#targetSession === sessionId) return
     this.#targetSession = sessionId
+    this.#targetVersion += 1
+    for (const notify of this.#targetListeners) notify()
   }
 
   /** The session whose composer last opened the panel, if any. */
   targetSession(): SessionId | undefined {
     return this.#targetSession
+  }
+
+  /** Monotonic change counter of the delivery target (snapshot for useSyncExternalStore). */
+  targetVersion(): number {
+    return this.#targetVersion
+  }
+
+  /** Subscribe to delivery-target changes; returns the unsubscribe function. */
+  subscribeTarget(notify: () => void): () => void {
+    this.#targetListeners.add(notify)
+    return () => { this.#targetListeners.delete(notify) }
   }
 
   /**

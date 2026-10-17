@@ -35,6 +35,9 @@ export const zh = {
   'panel.error': '操作失败',
   'panel.inserted': '已插入',
   'panel.none': '无',
+  'tab.title': '提示词',
+  'tab.guideTitle': '提示词模板',
+  'tab.guideDescription': '模板库：插入、发送、定时注入',
 } as const
 
 /** English dictionary. */
@@ -72,6 +75,9 @@ export const en = {
   'panel.error': 'Operation failed',
   'panel.inserted': 'Inserted',
   'panel.none': 'None',
+  'tab.title': 'Prompts',
+  'tab.guideTitle': 'Prompt templates',
+  'tab.guideDescription': 'Template library: insert, send, auto-inject',
 } as const
 
 /** Key union of the prompt-templates dictionary. */

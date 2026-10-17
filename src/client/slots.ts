@@ -3,7 +3,8 @@
  * ('shell.overlay') is root-scoped, so its inject factory receives no
  * session id — the delivery target arrives from the composer entry: the
  * session-scoped 'conversation.input.right' button reports its sessionId
- * at click time and the panel reads it back through the face. The composer
+ * whenever its composer becomes the visible one (mount, session change,
+ * and click), and the panel reads it back through the face. The composer
  * entry carries the panel toggle plus that target attachment.
  */
 
@@ -77,6 +78,15 @@ export interface PromptPanelFace {
    * Null before any composer has attached (session tabs stay disabled).
    */
   targetSession: () => string | null
+  /**
+   * Monotonic counter that bumps on every target change — the snapshot for
+   * useSyncExternalStore. The open panel subscribes so a session switch
+   * re-renders it with the fresh target (otherwise its handlers keep the
+   * previous render's sessionId closure and send lands nowhere).
+   */
+  targetVersion: () => number
+  /** Delivery-target change subscription; returns the unsubscribe function. */
+  subscribeTarget: (notify: () => void) => () => void
 }
 
 /** The composer entry's injected face: toggle the panel. */
@@ -85,9 +95,25 @@ export interface PromptPanelToggleFace {
   toggle: () => void
   /**
    * Attach the panel to one composer's session. The session-scoped button
-   * calls this with its standard-kit sessionId prop at click time, right
-   * before toggling — the clicked composer wins, which is exactly the
-   * session the user is working in (split views included).
+   * calls this with its standard-kit sessionId prop whenever its composer
+   * becomes the visible one — on mount, on session change, and again at
+   * click time — so the delivery target follows the conversation the user
+   * is looking at instead of freezing on the session that happened to
+   * click first.
    */
   attachSession: (sessionId: string) => void
 }
+
+/**
+ * The library verbs shared by both surfaces — the floating panel and the
+ * right-sidebar tab body: the panel face minus the overlay-only placement
+ * knobs and the overlay's target attachment. Each surface resolves its own
+ * delivery target (the overlay reads the composer attachment, the tab reads
+ * its standard session-scoped props) and hands the library this face.
+ */
+export type TemplateLibraryFace = Pick<
+  PromptPanelFace,
+  | 'refresh' | 'refreshCategories' | 'createCategory' | 'removeCategory'
+  | 'create' | 'update' | 'remove' | 'makeGlobal'
+  | 'insert' | 'send' | 'interject'
+>

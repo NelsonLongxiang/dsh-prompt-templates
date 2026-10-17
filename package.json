@@ -1,6 +1,6 @@
 {
   "name": "@nelsonlongxiang/dsh-prompt-templates",
-  "version": "0.11.6",
+  "version": "0.12.0",
   "description": "Quick prompt templates for DeepSeek Harness: global and per-session templates, a browser panel, and a pure-TS node:sqlite persistence backend",
   "type": "module",
   "main": "lib/index.js",
@@ -79,6 +79,8 @@
     "@deepseek-ai/dsh-client-ui-layout": "0.2.1-rc.2",
     "@deepseek-ai/dsh-client-ui-primitives": "0.2.1-rc.2",
     "@deepseek-ai/dsh-client-ui-renderer": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-client-ui-session": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-client-ui-sidebar-right": "0.2.1-rc.2",
     "@deepseek-ai/dsh-client-ui-slots": "0.2.1-rc.2",
     "lightningcss": "^1.33.0",
     "react": "^18.2.0",

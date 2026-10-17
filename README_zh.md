@@ -14,7 +14,7 @@
 dsh plugin --profile web add @nelsonlongxiang/dsh-prompt-templates
 ```
 
-重启 `dsh web`，在输入框工具行找到模板按钮。
+重启 `dsh web`，在输入框工具行找到模板按钮。0.12.0 起同一模板库还入驻**右侧栏 tab**：从侧栏 `+` 引导页（“提示词模板”入口）打开——它与对话同屏共存、不遮 composer，且始终作用于侧栏正在查看的会话。宿主没有侧栏服务时 tab 静默不激活，悬浮面板照常可用。
 
 无需 Python 工具链——0.3.0 起 host 面直接通过 `node:sqlite`（Node ≥ 24）在宿主进程内持久化，读写原来 Python 子进程持有的同一个 `$DSH_HOME/ext/prompt-templates/db.sqlite3`（数据零迁移）。
 
@@ -23,6 +23,7 @@ dsh plugin --profile web add @nelsonlongxiang/dsh-prompt-templates
 - **全局 + 会话模板**——全局处处生效；会话模板只属于当前对话，一键提升为全局
 - **定时自动注入**——每条模板独立开关 + 间隔 N：开启后 host 在对话每第 N 轮的首个请求自动注入该模板，配置持久化于 SQLite，注入本身落为持久会话事件
 - **插入或直发**——一键插入到 composer 光标处（或替换当前选区）；send-now 立即发送；编辑、删除、转全局都在行内
+- **右侧栏 tab**——完整模板库可停靠为侧栏 tab（DSH ≥ 0.2.x）：从 `+` 引导页打开，跟随当前查看的会话；悬浮面板保留作快捷一次性使用
 - **搜索与滚动**——边输入边过滤，长列表滚动可靠
 - **拖拽定位、双击复位**——面板记住你放的位置
 - **设计即持久**——模板经纯 TS 存储（`node:sqlite`）落 SQLite，由 host 插件持有并随其生命周期关闭
@@ -44,8 +45,9 @@ src/                  TypeScript 插件（host 面 + 浏览器面）
   inject.ts           Host：挂在 pre-step waterfall 上的定时注入
   invariant.ts        Host：注册本包的 invariant 伴生插件
   cli/                随 bin 发布的同步 CLI（export/diff/merge/import）
-  client/             浏览器：面板 UI 注册进 shell.overlay 与
-                      conversation.input.right
+  client/             浏览器：共享模板库，同时挂载为 shell.overlay
+                      悬浮面板与右侧栏 tab body（sidebar.right.pane.tab），
+                      外加 conversation.input.right 开关按钮
 cordis.patch.yml      Bundle patch：挂插件行
 ```
 
