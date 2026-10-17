@@ -1,10 +1,34 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 
 const expectedVersion = JSON.parse(readFileSync(resolve('package.json'), 'utf8')).version
+
+// CSS integrity gate: every class declared in a src client module stylesheet
+// must appear as a `"class":"<hash>_<class>"` entry in the built bundle. A
+// stale css copy under lib/ once shadowed the live stylesheet, silently
+// shipping months-old rules (missing classes surfaced as empty className
+// strings and broken layout) — this check fails the release instead.
+{
+  const bundle = readFileSync(resolve('lib/client.js'), 'utf8')
+  const cssDir = resolve('src/client')
+  for (const file of readdirSync(cssDir).filter(name => name.endsWith('.module.css'))) {
+    const source = readFileSync(join(cssDir, file), 'utf8')
+    // Selector heads only (`.foo {` / `.foo:hover {`); declarations never match.
+    const classes = new Set([...source.matchAll(/(?:^|\n)\s*\.([A-Za-z][A-Za-z0-9_-]*)[^{,\n]*\{/g)].map(match => match[1]))
+    for (const className of classes) {
+      const entry = new RegExp(`"${className}":\\s*"[A-Za-z0-9_-]+_${className}"`)
+      assert.ok(
+        entry.test(bundle),
+        `built lib/client.js css map is missing class "${className}" from ${file} — stale stylesheet shadow?`,
+      )
+    }
+    process.stdout.write(`css map gate: ${file} (${classes.size} classes) PASS\n`)
+  }
+}
+
 const scratch = mkdtempSync(join(tmpdir(), 'pt-cli-package-'))
 try {
   const packed = spawnSync('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', scratch], { encoding: 'utf8', shell: process.platform === 'win32' })

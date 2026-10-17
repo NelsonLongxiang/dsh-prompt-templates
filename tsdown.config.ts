@@ -130,18 +130,23 @@ const config: UserConfig = {
   },
 }
 
-/** Resolve an emitted JS asset import against its source-tree counterpart. */
+/**
+ * Resolve an emitted JS asset import against its source-tree counterpart.
+ * The `src/` rebase comes FIRST: tsc never emits css, so a css file sitting
+ * beside the emitted JS can only be a stale copy from an older build layout —
+ * exactly the shadow that once shipped months-old styles while `src/` moved
+ * on (missing classes surfaced as empty `className`s and broken layout).
+ * `existsSync(emitted)` stays as the fallback for out-of-tree importers.
+ */
 function sourceAssetPath(source: string, importer: string): string {
   const emitted = resolvePath(dirname(importer), source)
-  if (existsSync(emitted)) return emitted
-  // tsc output mirrors `src/` under `lib/`; the css sources live in `src/`.
-  // Rebase a `lib/`-rooted candidate onto its `src/` counterpart.
   const marker = `${sep}lib${sep}`
   const srcIndex = emitted.indexOf(marker)
   if (srcIndex !== -1) {
     const srcPath = `${emitted.slice(0, srcIndex)}${sep}src${sep}${emitted.slice(srcIndex + marker.length)}`
     if (existsSync(srcPath)) return srcPath
   }
+  if (existsSync(emitted)) return emitted
   return source
 }
 
