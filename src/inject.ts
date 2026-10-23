@@ -21,7 +21,7 @@ import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { UserMessage } from '@deepseek-ai/dsh-session'
 import type { TemplateStore } from './store.ts'
-import type { InjectionStatusView, TemplateView } from './types.ts'
+import type { InjectionStatusView, TemplateInjectMode, TemplateView } from './types.ts'
 
 /**
  * Durable provenance for one scheduled injection, recorded beside the
@@ -48,6 +48,8 @@ export interface InjectCandidate {
   readonly name: string
   readonly content: string
   readonly every: number
+  /** Delivery mode: `visible` renders in the chat transcript (user channel). */
+  readonly mode: TemplateInjectMode
 }
 
 /** Structural slice of a durable session event the idempotence probe reads. */
@@ -102,7 +104,7 @@ export function dueTemplates(templates: readonly TemplateView[], turn: number): 
   const due: InjectCandidate[] = []
   for (const template of templates) {
     if (template.inject_enabled && template.inject_every !== null && isBoundaryTurn(turn, template.inject_every)) {
-      due.push({ id: template.id, name: template.name, content: template.content, every: template.inject_every })
+      due.push({ id: template.id, name: template.name, content: template.content, every: template.inject_every, mode: template.mode })
     }
   }
   return due
@@ -112,14 +114,19 @@ export function dueTemplates(templates: readonly TemplateView[], turn: number): 
  * Whether the event window `[scannedFrom, events.length)` already carries a
  * scheduled injection for `turn`. Backward scan over durable events only —
  * the same posture as the skill-catalog probe, so compaction visibility and
- * restart resume never resurrect a duplicate.
+ * restart resume never resurrect a duplicate. Matches BOTH delivery shapes:
+ * the silent `prompt-template-schedule` source and the visible user-channel
+ * source (`kind:'user'` + `scheduled:'prompt-template'`).
  */
 export function alreadyInjectedAtTurn(events: readonly InjectionEventProbe[], scannedFrom: number, turn: number): boolean {
   for (let index = events.length - 1; index >= scannedFrom; index -= 1) {
     const event = events[index]
     if (event === undefined || event.type !== 'user/message') continue
-    const source = event.data.source as { kind?: unknown, turn?: unknown } | undefined
-    if (source === undefined || source.kind !== 'prompt-template-schedule' || source.turn !== turn) continue
+    const source = event.data.source as { kind?: unknown, scheduled?: unknown, turn?: unknown } | undefined
+    if (source === undefined || source.turn !== turn) continue
+    const scheduled = source.kind === 'prompt-template-schedule'
+      || (source.kind === 'user' && source.scheduled === 'prompt-template')
+    if (!scheduled) continue
     return true
   }
   return false
@@ -161,6 +168,46 @@ export function renderInjectionMessage(turn: number, templates: readonly InjectC
       turn,
       templates: templates.map(template => ({ id: template.id, name: template.name, every: template.every })),
     },
+  })
+}
+
+/**
+ * Durable provenance for a VISIBLE scheduled injection (user channel): the
+ * chat view renders `kind !== 'user'` sources as omitted context rows, so a
+ * visible injection stamps the user kind and disambiguates itself with the
+ * `scheduled` marker — keeping the dedup scan working (the marker, not the
+ * kind, carries the schedule identity).
+ */
+export interface VisibleScheduleSource {
+  readonly kind: 'user'
+  readonly scheduled: 'prompt-template'
+  /** The boundary turn this message belongs to. */
+  readonly turn: number
+  /** Exactly the templates this message injected, in injection order. */
+  readonly templates: readonly { readonly id: string, readonly name: string, readonly every: number }[]
+}
+
+/**
+ * Render ONE visible scheduled injection as an ordinary user message. The
+ * header names the origin (so a reader never mistakes it for human typing)
+ * and the durable source keeps the dedup-scan marker.
+ */
+export function renderVisibleInjectionMessage(turn: number, templates: readonly InjectCandidate[]): UserMessage {
+  return createUserMessage({
+    content: [{
+      type: 'text',
+      text: [
+        `⚙️ 定时注入 · 第 ${turn} 轮 · ${templates.map(template => template.name).join('、')}`,
+        '',
+        ...templates.flatMap(template => [template.content, '']),
+      ].join('\n').trimEnd(),
+    }],
+    source: {
+      kind: 'user',
+      scheduled: 'prompt-template',
+      turn,
+      templates: templates.map(template => ({ id: template.id, name: template.name, every: template.every })),
+    } satisfies VisibleScheduleSource as unknown as TemplateScheduleSource,
   })
 }
 
@@ -216,7 +263,16 @@ export function registerAutoInject(ctx: Context, config: AutoInjectConfig, store
       state.scanned = events.length
       state.injectedTurns.add(turn)
       tracker.note(sessionId, { turn, at: Date.now(), templates: due.map(template => template.name) })
-      return { ...decision, messages: [...decision.messages, renderInjectionMessage(turn, due)] }
+      // Split by delivery mode: silent templates ride the invisible reminder
+      // frame; visible ones stamp the user channel so the chat transcript
+      // renders them. Both share one boundary (dedup covers the turn as a
+      // whole — either source shape satisfies alreadyInjectedAtTurn).
+      const injected: UserMessage[] = []
+      const silent = due.filter(template => template.mode !== 'visible')
+      const visible = due.filter(template => template.mode === 'visible')
+      if (silent.length > 0) injected.push(renderInjectionMessage(turn, silent))
+      if (visible.length > 0) injected.push(renderVisibleInjectionMessage(turn, visible))
+      return { ...decision, messages: [...decision.messages, ...injected] }
     } catch (error) {
       if (!faultReported) {
         faultReported = true

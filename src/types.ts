@@ -8,6 +8,15 @@
 /** Scope partition of one template: global or private to one session. */
 export type PromptScope = 'global' | 'session'
 
+/**
+ * Delivery mode of a scheduled injection: `inject` (default) rides the
+ * pre-step waterfall as a model-only `<system-reminder>` (invisible in the
+ * chat transcript by DSH design); `visible` stamps the message with the
+ * user channel source so the chat view renders it as a normal user message
+ * (with a header marker naming it as a scheduled injection).
+ */
+export type TemplateInjectMode = 'inject' | 'visible'
+
 /** Canonical template record as stored by the backend. */
 export interface TemplateView {
   readonly id: string
@@ -24,6 +33,8 @@ export interface TemplateView {
   readonly inject_enabled: boolean
   /** Injection interval in rounds; `null` when never configured. */
   readonly inject_every: number | null
+  /** Scheduled-injection delivery mode; defaults to `inject`. */
+  readonly mode: TemplateInjectMode
   /** ISO timestamp without timezone, as emitted by the backend. */
   readonly created_at: string
   readonly updated_at: string
@@ -48,6 +59,7 @@ export interface TemplateCreateRequest {
   readonly category?: string | null
   readonly inject_enabled?: boolean
   readonly inject_every?: number | null
+  readonly mode?: TemplateInjectMode
 }
 
 /** Update payload; every field optional. */
@@ -59,6 +71,7 @@ export interface TemplateUpdateRequest {
   readonly category?: string | null
   readonly inject_enabled?: boolean
   readonly inject_every?: number | null
+  readonly mode?: TemplateInjectMode
 }
 
 /** Category create payload. */

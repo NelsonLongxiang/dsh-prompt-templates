@@ -172,8 +172,8 @@ test('v1 databases migrate through v2 to v3', () => {
 test('unknown future schema versions refuse to open', () => {
   const { path, cleanup } = tempDbPath()
   const db = new DatabaseSync(path)
-  db.exec('PRAGMA user_version=4')
+  db.exec('PRAGMA user_version=5')
   db.close()
-  assert.throws(() => new TemplateStore(path), /schema version 4/)
+  assert.throws(() => new TemplateStore(path), /schema version 5/)
   cleanup()
 })

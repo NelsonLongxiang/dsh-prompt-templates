@@ -9,7 +9,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { IconEditOutlineRegular, IconGlobeOutlineRegular, IconPlusOutlineRegular, IconQueueOutlineRegular, IconSendOutlineRegular, IconTrashOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { CategoryView, InjectionStatusView, TemplateView } from '../types.ts'
+import type { CategoryView, InjectionStatusView, TemplateInjectMode, TemplateView } from '../types.ts'
 import type { TemplateLibraryFace } from './slots.ts'
 import { filterTemplateRows, searchableTemplateRows } from './filter.ts'
 import { GITHUB_REPOSITORY_URL, PLUGIN_VERSION, templateCountLabel } from './meta.ts'
@@ -39,7 +39,7 @@ interface RowProps {
 
 function TemplateRow({ template, onInsert, onSend, onInterject, onEdit, onDelete, onMakeGlobal, onToggleInject, sortable, onDragStart, onDropOn, t }: RowProps) {
   const injectTitle = template.inject_enabled && template.inject_every !== null
-    ? `${t('panel.inject')} · ${template.inject_every}`
+    ? `${t('panel.inject')} · ${template.inject_every}${template.mode === 'visible' ? ' · ' + t('panel.modeVisible') : ''}`
     : t('panel.inject')
   return (
     <div
@@ -122,13 +122,13 @@ function TemplateRow({ template, onInsert, onSend, onInterject, onEdit, onDelete
 
 /** The template inline form: creation (with scope + category pickers) and in-place edit. */
 function TemplateForm({ initial, allowScope, sessionId, categories, t, submitLabel, onSubmit, onDone, onCancel }: {
-  initial?: { name: string; content: string; injectEnabled?: boolean; injectEvery?: number | null }
+  initial?: { name: string; content: string; injectEnabled?: boolean; injectEvery?: number | null; mode?: TemplateInjectMode }
   allowScope: boolean
   sessionId: string | null
   categories: readonly CategoryView[]
   t: (key: PromptTemplateKey) => string
   submitLabel: string
-  onSubmit: (name: string, content: string, scope: 'global' | 'session', category: string | null, injectEnabled: boolean, injectEvery: number | null) => Promise<boolean>
+  onSubmit: (name: string, content: string, scope: 'global' | 'session', category: string | null, injectEnabled: boolean, injectEvery: number | null, mode: TemplateInjectMode) => Promise<boolean>
   onDone: () => void
   /** Abort without saving: exit the edit state / collapse the create form. */
   onCancel?: () => void
@@ -141,6 +141,7 @@ function TemplateForm({ initial, allowScope, sessionId, categories, t, submitLab
   // silently rounds; it is parsed (and rejected) on submit only.
   const [injectOn, setInjectOn] = useState(initial?.injectEnabled ?? false)
   const [injectEvery, setInjectEvery] = useState(initial?.injectEvery != null ? String(initial.injectEvery) : '5')
+  const [mode, setMode] = useState<TemplateInjectMode>(initial?.mode ?? 'inject')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -163,14 +164,14 @@ function TemplateForm({ initial, allowScope, sessionId, categories, t, submitLab
     }
     setBusy(true)
     setError(null)
-    const ok = await onSubmit(trimmedName, trimmedContent, scope, category, injectOn, every)
+    const ok = await onSubmit(trimmedName, trimmedContent, scope, category, injectOn, every, mode)
     setBusy(false)
     if (!ok) {
       setError(t('panel.error'))
       return
     }
     onDone()
-  }, [name, content, scope, category, injectOn, injectEvery, allowScope, sessionId, onSubmit, t, onDone])
+  }, [name, content, scope, category, injectOn, injectEvery, mode, allowScope, sessionId, onSubmit, t, onDone])
 
   // Categories selectable for the CURRENT scope pick (matching partition).
   const scopeCategories = categories.filter(
@@ -216,6 +217,18 @@ function TemplateForm({ initial, allowScope, sessionId, categories, t, submitLab
               aria-label={t('panel.injectEvery')}
             />
             {t('panel.injectEvery')}
+          </label>
+        )}
+        {injectOn && (
+          <label className={css.injectLabel} title={t('panel.modeHint')}>
+            <select
+              value={mode}
+              onChange={(e) => { setMode(e.target.value as TemplateInjectMode) }}
+              aria-label={t('panel.modeLabel')}
+            >
+              <option value="inject">{t('panel.modeInject')}</option>
+              <option value="visible">{t('panel.modeVisible')}</option>
+            </select>
           </label>
         )}
       </div>
@@ -476,20 +489,20 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
       ? (
         <TemplateForm
           key={row.id}
-          initial={{ name: row.name, content: row.content, injectEnabled: row.inject_enabled, injectEvery: row.inject_every }}
+          initial={{ name: row.name, content: row.content, injectEnabled: row.inject_enabled, injectEvery: row.inject_every, mode: row.mode }}
           allowScope={false}
           sessionId={sessionId}
           categories={visibleCategories}
           t={t}
           submitLabel={t('panel.addSave')}
-          onSubmit={async (name, content, _scope, category, injectEnabled, injectEvery) => {
+          onSubmit={async (name, content, _scope, category, injectEnabled, injectEvery, mode) => {
             // Disabling keeps the stored interval: only enabling sends a new one.
             const result = await update(row.id, {
               name,
               content,
               category,
               inject_enabled: injectEnabled,
-              ...(injectEnabled ? { inject_every: injectEvery } : {}),
+              ...(injectEnabled ? { inject_every: injectEvery, mode } : {}),
             })
             return result.ok
           }}
@@ -636,7 +649,7 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
             t={t}
             allowScope
             submitLabel={t('panel.addSave')}
-            onSubmit={async (name, content, scope, category, injectEnabled, injectEvery) => {
+            onSubmit={async (name, content, scope, category, injectEnabled, injectEvery, mode) => {
               const result = await create({
                 name,
                 content,
@@ -645,6 +658,7 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
                 category,
                 inject_enabled: injectEnabled,
                 inject_every: injectEvery,
+                mode,
               })
               return result.ok
             }}

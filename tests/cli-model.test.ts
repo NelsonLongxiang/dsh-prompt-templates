@@ -4,7 +4,7 @@ import type { TemplateView } from '../src/types.ts'
 import { createSnapshot, diffSnapshots, mergeSnapshots, parseSnapshot } from '../src/cli/model.ts'
 
 function row(id: string, name: string, updated_at: string, content = `content-${id}`): TemplateView {
-  return { id, name, content, scope: 'global', session_id: null, description: null, position: 0, category: null, inject_enabled: false, inject_every: null, created_at: '2026-01-01 00:00:00', updated_at }
+  return { id, name, content, scope: 'global', session_id: null, description: null, position: 0, category: null, inject_enabled: false, inject_every: null, mode: 'inject', created_at: '2026-01-01 00:00:00', updated_at }
 }
 
 test('canonical snapshot round trips and rejects unknown fields', () => {
@@ -17,8 +17,8 @@ test('canonical snapshot round trips and rejects unknown fields', () => {
 
 test('schema-2 snapshots import with inject facts defaulted off', () => {
   const expected = createSnapshot([], [row('1', 'A', '2026-01-01 00:00:00')])
-  // A v2 record carries no inject keys at all (exact key set of the old schema).
-  const { inject_enabled: _enabled, inject_every: _every, ...v2Template } = row('1', 'A', '2026-01-01 00:00:00')
+  // A v2 record carries no inject/mode keys at all (exact key set of the old schema).
+  const { inject_enabled: _enabled, inject_every: _every, mode: _mode, ...v2Template } = row('1', 'A', '2026-01-01 00:00:00')
   const v2 = {
     schema_version: 2,
     categories: [],
@@ -26,14 +26,25 @@ test('schema-2 snapshots import with inject facts defaulted off', () => {
     data_sha256: expected.data_sha256,
   }
   const parsed = parseSnapshot(v2)
-  assert.equal(parsed.schema_version, 3)
+  assert.equal(parsed.schema_version, 4)
   assert.equal(parsed.templates[0]?.inject_enabled, false)
   assert.equal(parsed.templates[0]?.inject_every, null)
-  // v2 records reject v3-only keys loudly instead of silently absorbing them.
+  assert.equal(parsed.templates[0]?.mode, 'inject')
+  // v2 records reject v3/v4-only keys loudly instead of silently absorbing them.
   assert.throws(() => parseSnapshot({ ...v2, templates: [row('1', 'A', '2026-01-01 00:00:00')] }), /unknown fields/)
-  // Out-of-range intervals are rejected at the interchange bound.
-  const over = createSnapshot([], [{ ...row('1', 'A', '2026-01-01 00:00:00'), inject_every: 1001 }])
-  assert.throws(() => parseSnapshot({ ...over, schema_version: 3 }), /at most 1000/)
+  // Out-of-range intervals are rejected at the interchange bound (v3 shape: no mode key).
+  const { mode: _overMode, ...overTemplate } = { ...row('1', 'A', '2026-01-01 00:00:00'), inject_every: 1001 }
+  const over = { schema_version: 3, categories: [], templates: [overTemplate], data_sha256: 'x' }
+  assert.throws(() => parseSnapshot(over), /at most 1000/)
+  // A v3 snapshot (no mode key) imports with mode defaulted to inject.
+  const { mode: _m, ...v3Template } = row('2', 'B', '2026-01-01 00:00:00')
+  const v3Expected = createSnapshot([], [row('2', 'B', '2026-01-01 00:00:00')])
+  const v3 = { schema_version: 3, categories: [], templates: [v3Template], data_sha256: v3Expected.data_sha256 }
+  const parsedV3 = parseSnapshot(v3)
+  assert.equal(parsedV3.templates[0]?.mode, 'inject')
+  // v4 rejects a bad mode value loudly.
+  const bad = createSnapshot([], [{ ...row('3', 'C', '2026-01-01 00:00:00'), mode: 'loud' as never }])
+  assert.throws(() => parseSnapshot(JSON.parse(JSON.stringify(bad))), /mode must be inject or visible/)
 })
 
 test('diff and merge treat inject facts as ordinary compared fields', () => {

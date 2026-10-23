@@ -21,10 +21,10 @@ import { randomUUID } from 'node:crypto'
 import { mkdirSync, chmodSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import type { CategoryCreateRequest, CategoryView, PromptScope, TemplateCreateRequest, TemplateUpdateRequest, TemplateView } from './types.ts'
+import type { CategoryCreateRequest, CategoryView, PromptScope, TemplateCreateRequest, TemplateInjectMode, TemplateUpdateRequest, TemplateView } from './types.ts'
 
-/** Schema version gate; v3 adds `templates.inject_enabled`/`inject_every`. */
-const SCHEMA_VERSION = 3
+/** Schema version gate; v4 adds `templates.mode` (inject|visible). */
+const SCHEMA_VERSION = 4
 
 /** Upper bound of the inject interval when the deployment config omits one. */
 export const DEFAULT_INJECT_MAX_EVERY = 1000
@@ -55,12 +55,14 @@ export interface TemplateRow {
   inject_enabled: 0 | 1
   /** Injection interval in rounds; `null` when never configured. */
   inject_every: number | null
+  /** Scheduled-injection delivery mode ('inject' default, 'visible' = user channel). */
+  mode: TemplateInjectMode
   created_at: string
   updated_at: string
 }
 
-/** v3 schema: templates gain the auto-inject columns; category tabs in their own table. */
-const SCHEMA_V3_SQL = `CREATE TABLE templates (
+/** v4 schema: v3 columns plus the injection delivery mode. */
+const SCHEMA_V4_SQL = `CREATE TABLE templates (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   content TEXT NOT NULL,
@@ -71,6 +73,7 @@ const SCHEMA_V3_SQL = `CREATE TABLE templates (
   category TEXT,
   inject_enabled INTEGER NOT NULL DEFAULT 0,
   inject_every INTEGER,
+  mode TEXT NOT NULL DEFAULT 'inject',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -103,9 +106,9 @@ export class TemplateStore {
     this.db.exec('PRAGMA busy_timeout=5000')
     const onDisk = Number((this.db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
     if (onDisk === 0) {
-      this.db.exec(SCHEMA_V3_SQL)
+      this.db.exec(SCHEMA_V4_SQL)
       this.db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`)
-    } else if (onDisk === 1 || onDisk === 2) {
+    } else if (onDisk >= 1 && onDisk < SCHEMA_VERSION) {
       // Migration DDL runs in ONE transaction: a crash mid-way rolls back to
       // the intact previous schema instead of stranding a half-altered table
       // (same BEGIN/COMMIT posture as the category delete below).
@@ -115,8 +118,13 @@ export class TemplateStore {
           this.db.exec('ALTER TABLE templates ADD COLUMN category TEXT')
           this.db.exec('CREATE TABLE categories (name TEXT NOT NULL, scope TEXT NOT NULL, session_id TEXT, PRIMARY KEY (scope, session_id, name))')
         }
-        this.db.exec('ALTER TABLE templates ADD COLUMN inject_enabled INTEGER NOT NULL DEFAULT 0')
-        this.db.exec('ALTER TABLE templates ADD COLUMN inject_every INTEGER')
+        if (onDisk <= 2) {
+          this.db.exec('ALTER TABLE templates ADD COLUMN inject_enabled INTEGER NOT NULL DEFAULT 0')
+          this.db.exec('ALTER TABLE templates ADD COLUMN inject_every INTEGER')
+        }
+        if (onDisk <= 3) {
+          this.db.exec("ALTER TABLE templates ADD COLUMN mode TEXT NOT NULL DEFAULT 'inject'")
+        }
         this.db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`)
         this.db.exec('COMMIT')
       } catch (error) {
@@ -194,6 +202,7 @@ export class TemplateStore {
     }
     const category = this.#validatedCategory(data.category, scope, sessionId)
     const inject = this.#validatedInject(data.inject_enabled, data.inject_every)
+    const mode = validatedMode(data.mode)
     const clash = this.db.prepare(
       'SELECT id FROM templates WHERE scope = ? AND session_id IS ? AND name = ?',
     ).get(scope, sessionId, data.name)
@@ -212,12 +221,13 @@ export class TemplateStore {
       category,
       inject_enabled: inject.enabled ? 1 : 0,
       inject_every: inject.every,
+      mode,
       created_at: now,
       updated_at: now,
     }
     this.db.prepare(
-      'INSERT INTO templates (id, name, content, scope, session_id, description, position, category, inject_enabled, inject_every, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    ).run(row.id, row.name, row.content, row.scope, row.session_id, row.description, row.position, row.category, row.inject_enabled, row.inject_every, row.created_at, row.updated_at)
+      'INSERT INTO templates (id, name, content, scope, session_id, description, position, category, inject_enabled, inject_every, mode, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    ).run(row.id, row.name, row.content, row.scope, row.session_id, row.description, row.position, row.category, row.inject_enabled, row.inject_every, row.mode, row.created_at, row.updated_at)
     return rowToView(row)
   }
 
@@ -260,13 +270,14 @@ export class TemplateStore {
       row.inject_enabled === 1,
       row.inject_every,
     )
+    if (fields['mode'] !== undefined) fields['mode'] = validatedMode(fields['mode'] as TemplateInjectMode | undefined)
     const merged = { ...row, ...fields } as TemplateRow
     merged.inject_enabled = inject.enabled ? 1 : 0
     merged.inject_every = inject.every
     merged.updated_at = new Date().toISOString().replace('T', ' ').slice(0, 19)
     this.db.prepare(
-      'UPDATE templates SET name = ?, content = ?, description = ?, position = ?, category = ?, inject_enabled = ?, inject_every = ?, updated_at = ? WHERE id = ?',
-    ).run(merged.name, merged.content, merged.description, merged.position, merged.category, merged.inject_enabled, merged.inject_every, merged.updated_at, id)
+      'UPDATE templates SET name = ?, content = ?, description = ?, position = ?, category = ?, inject_enabled = ?, inject_every = ?, mode = ?, updated_at = ? WHERE id = ?',
+    ).run(merged.name, merged.content, merged.description, merged.position, merged.category, merged.inject_enabled, merged.inject_every, merged.mode, merged.updated_at, id)
     return rowToView(merged)
   }
 
@@ -386,4 +397,13 @@ export class TemplateStore {
 /** Map one database row to the wire view (field names are already snake_case). */
 function rowToView(row: TemplateRow): TemplateView {
   return { ...row, inject_enabled: row.inject_enabled === 1 }
+}
+
+/** Validate the injection delivery mode; omitted or null keeps the default. */
+function validatedMode(mode: TemplateInjectMode | undefined): TemplateInjectMode {
+  if (mode === undefined || mode === null) return 'inject'
+  if (mode !== 'inject' && mode !== 'visible') {
+    throw new TemplateRuleError(`mode must be 'inject' or 'visible' (got ${String(mode)})`)
+  }
+  return mode
 }

@@ -40,13 +40,13 @@ export function exportDatabase(dbPath: string, filters: { scope?: 'global' | 'se
   try {
     db.exec('PRAGMA query_only=ON')
     const version = Number((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
-    if (version !== 3) throw new Error(`${path} has schema version ${version}, expected 3`)
+    if (version !== 4) throw new Error(`${path} has schema version ${version}, expected 4`)
     const clauses: string[] = []
     const args: string[] = []
     if (filters.scope !== undefined) { clauses.push('scope = ?'); args.push(filters.scope) }
     if (filters.sessionId !== undefined) { clauses.push('session_id = ?'); args.push(filters.sessionId) }
     const where = clauses.length > 0 ? ` WHERE ${clauses.join(' AND ')}` : ''
-    const templateRows = db.prepare(`SELECT id,name,content,scope,session_id,description,position,category,inject_enabled,inject_every,created_at,updated_at FROM templates${where}`).all(...args) as unknown as Array<Omit<TemplateView, 'inject_enabled'> & { inject_enabled: number }>
+    const templateRows = db.prepare(`SELECT id,name,content,scope,session_id,description,position,category,inject_enabled,inject_every,mode,created_at,updated_at FROM templates${where}`).all(...args) as unknown as Array<Omit<TemplateView, 'inject_enabled'> & { inject_enabled: number }>
     // SQLite stores the switch as 0/1; the wire view is boolean end to end.
     const templates = templateRows.map(row => ({ ...row, inject_enabled: row.inject_enabled === 1 }))
     const categories = db.prepare(`SELECT name,scope,session_id FROM categories${where}`).all(...args) as unknown as CategoryView[]
@@ -149,7 +149,7 @@ export async function importDatabase(dbPath: string, incoming: DataSnapshot, opt
   try {
     db.exec(`PRAGMA busy_timeout=${options.busyTimeoutMs ?? 5000}`)
     const version = Number((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
-    if (version !== 3) throw new Error(`${path} has schema version ${version}, expected 3`)
+    if (version !== 4) throw new Error(`${path} has schema version ${version}, expected 4`)
     backupPath = resolve(options.backupOut ?? `${path}.${timestampName()}.bak`)
     mkdirSync(dirname(backupPath), { recursive: true })
     await backup(db, backupPath)
@@ -168,13 +168,13 @@ export async function importDatabase(dbPath: string, incoming: DataSnapshot, opt
         }
       }
       const upsertTemplate = db.prepare(`INSERT INTO templates
-        (id,name,content,scope,session_id,description,position,category,inject_enabled,inject_every,created_at,updated_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+        (id,name,content,scope,session_id,description,position,category,inject_enabled,inject_every,mode,created_at,updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET name=excluded.name,content=excluded.content,scope=excluded.scope,
         session_id=excluded.session_id,description=excluded.description,position=excluded.position,
         category=excluded.category,inject_enabled=excluded.inject_enabled,inject_every=excluded.inject_every,
-        created_at=excluded.created_at,updated_at=excluded.updated_at`)
-      for (const item of incoming.templates) upsertTemplate.run(item.id, item.name, item.content, item.scope, item.session_id, item.description, item.position, item.category, item.inject_enabled ? 1 : 0, item.inject_every ?? null, item.created_at, item.updated_at)
+        mode=excluded.mode,created_at=excluded.created_at,updated_at=excluded.updated_at`)
+      for (const item of incoming.templates) upsertTemplate.run(item.id, item.name, item.content, item.scope, item.session_id, item.description, item.position, item.category, item.inject_enabled ? 1 : 0, item.inject_every ?? null, item.mode, item.created_at, item.updated_at)
       db.exec('COMMIT')
     } catch (error) {
       db.exec('ROLLBACK')

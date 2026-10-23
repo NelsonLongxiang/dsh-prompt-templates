@@ -14,10 +14,10 @@ function row(over: {
   content: string
   position: number
   category?: string | null
-}): Omit<import('../src/types.ts').TemplateView, 'inject_enabled' | 'inject_every'> & { inject_enabled: boolean, inject_every: number | null } {
+}): Omit<import('../src/types.ts').TemplateView, 'inject_enabled' | 'inject_every' | 'mode'> & { inject_enabled: boolean, inject_every: number | null, mode: import('../src/types.ts').TemplateInjectMode } {
   return {
     scope: 'global', session_id: null, description: null,
-    inject_enabled: false, inject_every: null,
+    inject_enabled: false, inject_every: null, mode: 'inject',
     created_at: '2026-01-01 00:00:00', updated_at: '2026-01-01 00:00:00',
     ...over,
   }

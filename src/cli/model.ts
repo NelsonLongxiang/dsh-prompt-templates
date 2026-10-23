@@ -2,18 +2,20 @@ import { createHash } from 'node:crypto'
 import type { CategoryView, TemplateView } from '../types.ts'
 import { DEFAULT_INJECT_MAX_EVERY } from '../store.ts'
 
-export const SNAPSHOT_SCHEMA_VERSION = 3
+export const SNAPSHOT_SCHEMA_VERSION = 4
 
-/** Schema 2 (pre-auto-inject) snapshots still import; inject facts default off. */
-const SUPPORTED_SCHEMA_VERSIONS: readonly unknown[] = [2, 3]
+/** Schema 2 (pre-auto-inject) and 3 (pre-mode) snapshots still import; missing facts default. */
+const SUPPORTED_SCHEMA_VERSIONS: readonly unknown[] = [2, 3, 4]
 
-const TEMPLATE_KEYS = ['id', 'name', 'content', 'scope', 'session_id', 'description', 'position', 'category', 'inject_enabled', 'inject_every', 'created_at', 'updated_at'] as const
+const TEMPLATE_KEYS = ['id', 'name', 'content', 'scope', 'session_id', 'description', 'position', 'category', 'inject_enabled', 'inject_every', 'mode', 'created_at', 'updated_at'] as const
+/** Key set of schema-3 template records (no delivery mode). */
+const TEMPLATE_KEYS_V3: readonly string[] = TEMPLATE_KEYS.filter(key => key !== 'mode')
 /** Key set of schema-2 template records (no auto-inject facts). */
-const TEMPLATE_KEYS_V2: readonly string[] = TEMPLATE_KEYS.filter(key => key !== 'inject_enabled' && key !== 'inject_every')
+const TEMPLATE_KEYS_V2: readonly string[] = TEMPLATE_KEYS_V3.filter(key => key !== 'inject_enabled' && key !== 'inject_every')
 const CATEGORY_KEYS = ['name', 'scope', 'session_id'] as const
 
 export interface DataSnapshot {
-  readonly schema_version: 3
+  readonly schema_version: 4
   readonly categories: readonly CategoryView[]
   readonly templates: readonly TemplateView[]
   readonly data_sha256: string
@@ -62,8 +64,8 @@ export interface MergeConflict {
 export function parseSnapshot(value: unknown): DataSnapshot {
   const root = object(value, 'snapshot')
   exactKeys(root, ['schema_version', 'categories', 'templates', 'data_sha256', 'exported_at', 'source'], 'snapshot')
-  if (!SUPPORTED_SCHEMA_VERSIONS.includes(root.schema_version)) throw new Error(`unsupported schema_version ${String(root.schema_version)} (expected 2 or 3)`)
-  const version = root.schema_version as 2 | 3
+  if (!SUPPORTED_SCHEMA_VERSIONS.includes(root.schema_version)) throw new Error(`unsupported schema_version ${String(root.schema_version)} (expected 2, 3 or 4)`)
+  const version = root.schema_version as 2 | 3 | 4
   if (!Array.isArray(root.categories) || !Array.isArray(root.templates)) throw new Error('categories and templates must be arrays')
   const categories = root.categories.map((entry, index) => parseCategory(entry, `categories[${index}]`))
   const templates = root.templates.map((entry, index) => parseTemplate(entry, `templates[${index}]`, version))
@@ -182,15 +184,16 @@ function parseCategory(value: unknown, label: string): CategoryView {
   return { name, scope, session_id: sessionId }
 }
 
-function parseTemplate(value: unknown, label: string, version: 2 | 3): TemplateView {
+function parseTemplate(value: unknown, label: string, version: 2 | 3 | 4): TemplateView {
   const item = object(value, label)
-  exactKeys(item, version === 2 ? TEMPLATE_KEYS_V2 : TEMPLATE_KEYS, label)
+  exactKeys(item, version === 2 ? TEMPLATE_KEYS_V2 : version === 3 ? TEMPLATE_KEYS_V3 : TEMPLATE_KEYS, label)
   const scope = parseScope(item.scope, `${label}.scope`)
   const sessionId = nullableString(item.session_id, `${label}.session_id`)
   scopeSession(scope, sessionId, label)
   if (!Number.isInteger(item.position) || Number(item.position) < 0) throw new Error(`${label}.position must be a non-negative integer`)
-  const inject_enabled = version === 3 ? booleanField(item.inject_enabled, `${label}.inject_enabled`) : false
-  const inject_every = version === 3 ? nullablePositiveInteger(item.inject_every, `${label}.inject_every`) : null
+  const inject_enabled = version >= 3 ? booleanField(item.inject_enabled, `${label}.inject_enabled`) : false
+  const inject_every = version >= 3 ? nullablePositiveInteger(item.inject_every, `${label}.inject_every`) : null
+  const mode = version === 4 ? parseMode(item.mode, `${label}.mode`) : 'inject'
   return {
     id: nonEmpty(item.id, `${label}.id`),
     name: nonEmpty(item.name, `${label}.name`),
@@ -202,9 +205,15 @@ function parseTemplate(value: unknown, label: string, version: 2 | 3): TemplateV
     category: nullableString(item.category, `${label}.category`),
     inject_enabled,
     inject_every,
+    mode,
     created_at: nonEmpty(item.created_at, `${label}.created_at`),
     updated_at: nonEmpty(item.updated_at, `${label}.updated_at`),
   }
+}
+
+function parseMode(value: unknown, label: string): 'inject' | 'visible' {
+  if (value !== 'inject' && value !== 'visible') throw new Error(`${label}.mode must be inject or visible`)
+  return value
 }
 
 function object(value: unknown, label: string): Record<string, unknown> {

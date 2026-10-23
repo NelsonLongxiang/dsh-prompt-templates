@@ -5,7 +5,7 @@
  * consumes, so callers never see transport details.
  */
 
-import type { CategoryView, InjectionStatusView, TemplateView } from '../types.ts'
+import type { CategoryView, InjectionStatusView, TemplateInjectMode, TemplateView } from '../types.ts'
 
 /** Business error carried by a failed call. */
 export interface TemplateError {
@@ -69,6 +69,7 @@ export async function createTemplate(request: {
   category?: string | null
   inject_enabled?: boolean
   inject_every?: number | null
+  mode?: TemplateInjectMode
 }): Promise<TemplateActionResult> {
   return mutate('POST', '/templates', request)
 }
@@ -82,6 +83,7 @@ export async function updateTemplate(id: string, request: {
   category?: string | null
   inject_enabled?: boolean
   inject_every?: number | null
+  mode?: TemplateInjectMode
 }): Promise<TemplateActionResult> {
   return mutate('PATCH', `/templates/${encodeURIComponent(id)}`, request)
 }

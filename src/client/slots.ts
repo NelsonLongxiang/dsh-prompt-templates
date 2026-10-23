@@ -9,7 +9,7 @@
  */
 
 import type { TemplateActionResult } from './api.ts'
-import type { CategoryView, InjectionStatusView, TemplateView } from '../types.ts'
+import type { CategoryView, InjectionStatusView, TemplateInjectMode, TemplateView } from '../types.ts'
 
 /** One template row the panel renders (the backend record). */
 export type { TemplateView }
@@ -45,6 +45,7 @@ export interface PromptPanelFace {
     category?: string | null
     inject_enabled?: boolean
     inject_every?: number | null
+    mode?: TemplateInjectMode
   }) => Promise<TemplateActionResult>
   /** Patch one template by id (name/content/description/position/category/inject facts). */
   update: (id: string, request: {
@@ -55,6 +56,7 @@ export interface PromptPanelFace {
     category?: string | null
     inject_enabled?: boolean
     inject_every?: number | null
+    mode?: TemplateInjectMode
   }) => Promise<TemplateActionResult>
   /** Delete one template by id. */
   remove: (id: string) => Promise<TemplateActionResult>
