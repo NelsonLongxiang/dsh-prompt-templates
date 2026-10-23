@@ -122,7 +122,7 @@ function TemplateRow({ template, onInsert, onSend, onInterject, onEdit, onDelete
 
 /** The template inline form: creation (with scope + category pickers) and in-place edit. */
 function TemplateForm({ initial, allowScope, sessionId, categories, t, submitLabel, onSubmit, onDone, onCancel }: {
-  initial?: { name: string; content: string; injectEnabled?: boolean; injectEvery?: number | null; mode?: TemplateInjectMode }
+  initial?: { name: string; content: string; scope?: 'global' | 'session'; category?: string | null; injectEnabled?: boolean; injectEvery?: number | null; mode?: TemplateInjectMode }
   allowScope: boolean
   sessionId: string | null
   categories: readonly CategoryView[]
@@ -135,8 +135,11 @@ function TemplateForm({ initial, allowScope, sessionId, categories, t, submitLab
 }) {
   const [name, setName] = useState(initial?.name ?? '')
   const [content, setContent] = useState(initial?.content ?? '')
-  const [scope, setScope] = useState<'global' | 'session'>('global')
-  const [category, setCategory] = useState<string | null>(null)
+  // Edit seeds BOTH pickers with the row's stored facts, so opening a
+  // category tab's edit form pre-selects that category (and the matching
+  // scope) instead of resetting to 全局/无分类.
+  const [scope, setScope] = useState<'global' | 'session'>(initial?.scope ?? 'global')
+  const [category, setCategory] = useState<string | null>(initial?.category ?? null)
   // Auto-inject facts: the interval edits as text so a half-typed value never
   // silently rounds; it is parsed (and rejected) on submit only.
   const [injectOn, setInjectOn] = useState(initial?.injectEnabled ?? false)
@@ -489,7 +492,7 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
       ? (
         <TemplateForm
           key={row.id}
-          initial={{ name: row.name, content: row.content, injectEnabled: row.inject_enabled, injectEvery: row.inject_every, mode: row.mode }}
+          initial={{ name: row.name, content: row.content, scope: row.scope, category: row.category, injectEnabled: row.inject_enabled, injectEvery: row.inject_every, mode: row.mode }}
           allowScope={false}
           sessionId={sessionId}
           categories={visibleCategories}
