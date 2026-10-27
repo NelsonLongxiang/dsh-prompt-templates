@@ -93,7 +93,8 @@ pnpm build             # tsc host + tsc client + tsdown 浏览器 bundle
 ## 已知限制
 
 - **会话模板需要当前会话**——无会话打开时只能用全局模板
-- **注入不在对话流中渲染**——DSH 对话视图按设计省略注入的 context 行（消息 source 非 `user`）；可在轨迹 tab 查看。插件工具栏的 `⟳N` 徽标即面板内的可见性
+- **注入不在对话流中渲染**——DSH 对话视图按设计省略注入的 context 行（消息 source 非 `user`）；可在轨迹 tab 查看。交付模式为"对话流可见"的模板是例外：以普通用户消息渲染
+- **请从 npm registry 安装，不要装 Git URL**——插件编译对照 DSH harness 源码，公网 `@deepseek-ai/*` npm 快照落后于 harness 本体，`pnpm add github:<user>/<repo>` 会在 prepare 构建步失败。请用 `dsh plugin --profile <name> add @nelsonlongxiang/dsh-prompt-templates`
 
 ## 许可证
 

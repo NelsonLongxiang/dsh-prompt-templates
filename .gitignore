@@ -8,3 +8,4 @@ python/src/*.egg-info/
 
 *.tgz
 .npmrc
+.obelisk/

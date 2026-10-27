@@ -94,7 +94,8 @@ pnpm build             # tsc host + tsc client + tsdown browser bundle
 ## Known limitations
 
 - **Session templates need a current session** — with no session open, only global templates are reachable
-- **Injections don't render in the chat transcript** — the DSH chat view omits injected context rows by design (they carry a non-`user` message source); see them in the trajectory tab. The plugin's own `⟳N` toolbar badge is the in-panel visibility
+- **Injections don't render in the chat transcript** — the DSH chat view omits injected context rows by design (they carry a non-`user` message source); see them in the trajectory tab. Templates with delivery mode **visible** are the exception: they render as ordinary user messages
+- **Install from the npm registry, not from a Git URL** — the plugin compiles against the DSH harness checkout; `pnpm add github:<user>/<repo>` fails at the prepare build step because the published `@deepseek-ai/*` npm snapshots lag the harness source. Use `dsh plugin --profile <name> add @nelsonlongxiang/dsh-prompt-templates` instead
 
 ## License
 
