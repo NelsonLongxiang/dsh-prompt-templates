@@ -127,53 +127,81 @@ CREATE TABLE categories (
   } finally { db.close() }
 }
 
-test('v2 databases migrate to v3 in place, defaults off', () => {
+/** On-disk schema this build opens. Keep in lockstep with SCHEMA_VERSION in src/store.ts. */
+const CURRENT_SCHEMA_VERSION = 4
+
+function userVersion(path: string): number {
+  const db = new DatabaseSync(path)
+  try {
+    return Number((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
+  } finally { db.close() }
+}
+
+test('v2 databases migrate to the current schema in place, inject defaults off', () => {
   const { path, cleanup } = tempDbPath()
-  prepareLegacyDb(path, 2, 'v2')
-  const store = new TemplateStore(path)
   try {
-    const rows = store.list()
-    assert.equal(rows.length, 1)
-    assert.equal(rows[0]?.name, 'legacy')
-    assert.equal(rows[0]?.inject_enabled, false)
-    assert.equal(rows[0]?.inject_every, null)
-    // The migrated columns are writable through the normal surface.
-    const updated = store.update('legacy1', { inject_enabled: true, inject_every: 6 })
-    assert.equal(updated?.inject_every, 6)
+    prepareLegacyDb(path, 2, 'v2')
+    const store = new TemplateStore(path)
+    try {
+      const rows = store.list()
+      assert.equal(rows.length, 1)
+      assert.equal(rows[0]?.name, 'legacy')
+      assert.equal(rows[0]?.inject_enabled, false)
+      assert.equal(rows[0]?.inject_every, null)
+      // v2 had no delivery mode; the v4 column defaults to the silent channel.
+      assert.equal(rows[0]?.mode, 'inject')
+      // The migrated columns are writable through the normal surface.
+      const updated = store.update('legacy1', { inject_enabled: true, inject_every: 6 })
+      assert.equal(updated?.inject_every, 6)
+      assert.equal(updated?.mode, 'inject')
+    } finally {
+      store.close()
+    }
+    // Reopening the migrated file is a no-op: user_version is current, so a
+    // second boot does not re-run ALTER TABLE.
+    const reopened = new TemplateStore(path)
+    try {
+      assert.equal(reopened.list()[0]?.inject_every, 6)
+      assert.equal(reopened.list()[0]?.mode, 'inject')
+    } finally {
+      reopened.close()
+    }
+    assert.equal(userVersion(path), CURRENT_SCHEMA_VERSION)
   } finally {
-    store.close()
-  }
-  // Reopening the migrated file hits the version gate again and still works:
-  // user_version=3 persisted, so the migration is idempotent across restarts.
-  const reopened = new TemplateStore(path)
-  try {
-    assert.equal(reopened.list()[0]?.inject_every, 6)
-  } finally {
-    reopened.close()
     cleanup()
   }
 })
 
-test('v1 databases migrate through v2 to v3', () => {
+test('v1 databases migrate to the current schema', () => {
   const { path, cleanup } = tempDbPath()
-  prepareLegacyDb(path, 1, 'v1')
-  const store = new TemplateStore(path)
   try {
-    const rows = store.list()
-    assert.equal(rows.length, 1)
-    assert.equal(rows[0]?.category, null)
-    assert.equal(rows[0]?.inject_enabled, false)
+    prepareLegacyDb(path, 1, 'v1')
+    const store = new TemplateStore(path)
+    try {
+      const rows = store.list()
+      assert.equal(rows.length, 1)
+      assert.equal(rows[0]?.category, null)
+      assert.equal(rows[0]?.inject_enabled, false)
+      assert.equal(rows[0]?.inject_every, null)
+      assert.equal(rows[0]?.mode, 'inject')
+    } finally {
+      store.close()
+    }
+    assert.equal(userVersion(path), CURRENT_SCHEMA_VERSION)
   } finally {
-    store.close()
     cleanup()
   }
 })
 
 test('unknown future schema versions refuse to open', () => {
   const { path, cleanup } = tempDbPath()
-  const db = new DatabaseSync(path)
-  db.exec('PRAGMA user_version=5')
-  db.close()
-  assert.throws(() => new TemplateStore(path), /schema version 5/)
-  cleanup()
+  try {
+    const future = CURRENT_SCHEMA_VERSION + 1
+    const db = new DatabaseSync(path)
+    db.exec(`PRAGMA user_version=${future}`)
+    db.close()
+    assert.throws(() => new TemplateStore(path), new RegExp(`schema version ${future}`))
+  } finally {
+    cleanup()
+  }
 })

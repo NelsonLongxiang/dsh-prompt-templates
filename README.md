@@ -87,9 +87,20 @@ dsh-prompt-templates import --db /path/to/db.sqlite3 --in merged.json --apply \
 
 ```sh
 pnpm install
-pnpm verify            # typecheck
-pnpm build             # tsc host + tsc client + tsdown browser bundle
+pnpm verify            # everyday gate (local and CI)
+pnpm verify:release    # alias of pnpm verify
 ```
+
+`pnpm verify` is the gate to run before pushing. It does not boot a DeepSeek Harness process. In order:
+
+1. **typecheck** — `tsc --noEmit` for the host project and the client project
+2. **test:cli** — `node:test` over `tests/*.test.ts`: CLI sync, store rules, schema migration, inject helpers, client filters, and an in-process host check. That check mounts `apply()` on Cordis with a stand-in web server, drives the `/plugins/dsh-prompt-templates` routes (including inject-status), and runs the `agent/pre-step` listener against a fake session log
+3. **build** — host `tsc`, client `tsc`, and the tsdown browser bundle
+4. **test:package** — every CSS module class is present in `lib/client.js`, then `npm pack` and the packed `dsh-prompt-templates --help` shim
+
+GitHub Actions (`.github/workflows/verify.yml`) runs the same command on pushes and pull requests to `master`, and on `v*` tags, with Node 24. The `@deepseek-ai/*` devDependencies are public npm packages, so CI needs no registry token and no harness checkout.
+
+Still manual, because they need a live harness profile: booting `dsh web`, the browser panel against the real web server, and resume or compaction against a real session log.
 
 ## Known limitations
 
