@@ -1,7 +1,7 @@
 /**
  * Pure-TS template store over `node:sqlite`, replacing the former Python
  * backend child. Owns the same SQLite database file and schema
- * (`templates` + `categories` tables, `user_version` 3), so an existing
+ * (`templates` + `categories` tables, `user_version` 4), so an existing
  * `$DSH_HOME/ext/prompt-templates/db.sqlite3` keeps working and migrates
  * in place.
  *
