@@ -6,6 +6,27 @@ import { spawnSync } from 'node:child_process'
 
 const expectedVersion = JSON.parse(readFileSync(resolve('package.json'), 'utf8')).version
 
+// `npm pack --json` still runs `prepare` on npm 10, and that script's stdout
+// (the pnpm build banner) is concatenated in front of the JSON array. Parse
+// the manifest object instead of assuming stdout is JSON alone.
+function parsePackManifest(stdout) {
+  const candidates = []
+  const trimmed = stdout.trimStart()
+  if (trimmed.startsWith('[')) candidates.push(trimmed)
+  let from = stdout.indexOf('\n[')
+  while (from !== -1) {
+    candidates.push(stdout.slice(from + 1))
+    from = stdout.indexOf('\n[', from + 1)
+  }
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate)
+      if (Array.isArray(parsed) && typeof parsed[0]?.filename === 'string') return parsed
+    } catch { /* a lifecycle log can also contain a bracket */ }
+  }
+  assert.fail(`npm pack did not emit a JSON manifest\n${stdout}`)
+}
+
 // CSS integrity gate: every class declared in a src client module stylesheet
 // must appear as a `"class":"<hash>_<class>"` entry in the built bundle. A
 // stale css copy under lib/ once shadowed the live stylesheet, silently
@@ -33,7 +54,7 @@ const scratch = mkdtempSync(join(tmpdir(), 'pt-cli-package-'))
 try {
   const packed = spawnSync('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', scratch], { encoding: 'utf8', shell: process.platform === 'win32' })
   assert.equal(packed.status, 0, packed.stderr)
-  const manifest = JSON.parse(packed.stdout)
+  const manifest = parsePackManifest(packed.stdout)
   const tarball = resolve(scratch, manifest[0].filename)
   const prefix = join(scratch, 'install')
   const installed = spawnSync('npm', ['install', tarball, '--ignore-scripts', '--no-package-lock', '--omit=optional', '--prefix', prefix], { encoding: 'utf8', shell: process.platform === 'win32' })

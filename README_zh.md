@@ -86,9 +86,20 @@ dsh-prompt-templates import --db /path/to/db.sqlite3 --in merged.json --apply \
 
 ```sh
 pnpm install
-pnpm verify            # typecheck
-pnpm build             # tsc host + tsc client + tsdown 浏览器 bundle
+pnpm verify            # 日常门禁（本地与 CI）
+pnpm verify:release    # pnpm verify 的别名
 ```
+
+推送前跑 `pnpm verify`。它不启动 DeepSeek Harness 进程，顺序为：
+
+1. **typecheck** — host 与 client 两个工程的 `tsc --noEmit`
+2. **test:cli** — `node:test` 跑 `tests/*.test.ts`：CLI 同步、store 规则、schema 迁移、注入纯函数、client 过滤，以及进程内 host 检查。该检查把 `apply()` 挂到 Cordis 上，用替身 web server 驱动 `/plugins/dsh-prompt-templates` 路由（含 inject-status），并对一份假会话日志跑 `agent/pre-step` 监听器
+3. **build** — host `tsc`、client `tsc`、tsdown 浏览器 bundle
+4. **test:package** — `lib/client.js` 含全部 CSS module class，再 `npm pack` 并跑打包后的 `dsh-prompt-templates --help`
+
+GitHub Actions（`.github/workflows/verify.yml`）在指向 `master` 的 push / pull request 以及 `v*` tag 上用 Node 24 跑同一命令。`@deepseek-ai/*` devDependencies 来自公网 npm，CI 不需要 registry token，也不需要 harness 检出。
+
+仍需人工、因为它们依赖真实 harness profile：启动 `dsh web`、浏览器面板对接真实 web server，以及用真实会话日志验证 resume / compaction。
 
 ## 已知限制
 
