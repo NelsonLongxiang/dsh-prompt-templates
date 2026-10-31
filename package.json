@@ -89,6 +89,16 @@
     "typescript": "^5.9.3"
   },
   "license": "MIT",
+  "pnpm": {
+    "packageExtensions": {
+      "@deepseek-ai/dsh-client-store": {
+        "dependencies": {
+          "zustand": "4.5.7",
+          "immer": "10.1.1"
+        }
+      }
+    }
+  },
   "overrides": {
     "@deepseek-ai/dsh-settings": "0.2.1-rc.2",
     "@deepseek-ai/dsh-agent": "0.2.1-rc.2",
