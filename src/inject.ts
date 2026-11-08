@@ -21,7 +21,7 @@ import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { UserMessage } from '@deepseek-ai/dsh-session'
 import type { TemplateStore } from './store.ts'
-import type { InjectionStatusView, TemplateInjectMode, TemplateView } from './types.ts'
+import type { InjectionHistoryEntry, InjectionStatusView, TemplateInjectMode, TemplateView } from './types.ts'
 
 /**
  * Durable provenance for one scheduled injection, recorded beside the
@@ -70,28 +70,42 @@ export interface AutoInjectConfig {
  */
 export type { InjectionStatusView } from './types.ts'
 
+/** How many recent injections per session the history surface keeps. */
+export const INJECTION_HISTORY_LIMIT = 20
+
 /**
- * Per-session last-injection bookkeeping. Memory-only status surface for the
- * UI badge; correctness of injection itself never depends on it (the durable
- * log remains the idempotence anchor), so entries are simply overwritten.
+ * Per-session injection bookkeeping. Memory-only surface for the UI badge
+ * and its history dropdown; correctness of injection itself never depends
+ * on it (the durable log remains the idempotence anchor).
  */
 export class InjectionTracker {
-  readonly #last = new Map<string, InjectionStatusView>()
+  readonly #history = new Map<string, InjectionHistoryEntry[]>()
 
-  /** Record that `sessionId` just received the injection described by `view`. */
-  note(sessionId: string, view: InjectionStatusView): void {
-    this.#last.set(sessionId, view)
+  /** Record that `sessionId` just received the injection described by `entry`. */
+  note(sessionId: string, entry: InjectionHistoryEntry): void {
+    const entries = this.#history.get(sessionId) ?? []
+    entries.unshift(entry)
+    if (entries.length > INJECTION_HISTORY_LIMIT) entries.length = INJECTION_HISTORY_LIMIT
+    this.#history.set(sessionId, entries)
   }
 
   /** The latest injection recorded for `sessionId`, or null if none since boot. */
   status(sessionId: string): InjectionStatusView | null {
-    return this.#last.get(sessionId) ?? null
+    const latest = this.#history.get(sessionId)?.[0]
+    if (latest === undefined) return null
+    return { turn: latest.turn, at: latest.at, templates: latest.templates }
+  }
+
+  /** The session recent injections, newest first (bounded by INJECTION_HISTORY_LIMIT). */
+  history(sessionId: string): readonly InjectionHistoryEntry[] {
+    return [...this.#history.get(sessionId) ?? []]
   }
 }
 
-/** What `registerAutoInject` hands back: the UI status surface. */
+/** What `registerAutoInject` hands back: the UI status and history surfaces. */
 export interface AutoInjectHandle {
   readonly status: (sessionId: string) => InjectionStatusView | null
+  readonly history: (sessionId: string) => readonly InjectionHistoryEntry[]
 }
 
 /** Whether `turn` is a boundary turn for the interval `every` (both 1-based positive). */
@@ -262,7 +276,12 @@ export function registerAutoInject(ctx: Context, config: AutoInjectConfig, store
       signal.throwIfAborted()
       state.scanned = events.length
       state.injectedTurns.add(turn)
-      tracker.note(sessionId, { turn, at: Date.now(), templates: due.map(template => template.name) })
+      tracker.note(sessionId, {
+        turn,
+        at: Date.now(),
+        templates: due.map(template => template.name),
+        content: due.map(template => template.content).join('\n\n'),
+      })
       // Split by delivery mode: silent templates ride the invisible reminder
       // frame; visible ones stamp the user channel so the chat transcript
       // renders them. Both share one boundary (dedup covers the turn as a
@@ -281,5 +300,5 @@ export function registerAutoInject(ctx: Context, config: AutoInjectConfig, store
       return decision
     }
   })
-  return { status: tracker.status.bind(tracker) }
+  return { status: tracker.status.bind(tracker), history: tracker.history.bind(tracker) }
 }

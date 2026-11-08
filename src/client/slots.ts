@@ -9,7 +9,7 @@
  */
 
 import type { TemplateActionResult } from './api.ts'
-import type { CategoryView, InjectionStatusView, TemplateInjectMode, TemplateView } from '../types.ts'
+import type { CategoryView, InjectionHistoryEntry, InjectionStatusView, TemplateInjectMode, TemplateView } from '../types.ts'
 
 /** One template row the panel renders (the backend record). */
 export type { TemplateView }
@@ -95,6 +95,12 @@ export interface PromptPanelFace {
    * both surfaces (overlay + tab) share one implementation.
    */
   injectStatus: (sessionId: string) => Promise<InjectionStatusView | null>
+  /**
+   * The attached session recent scheduled injections, newest first (bounded
+   * server-side). Feeds the badge history dropdown; fetched on demand so
+   * the 30s badge poll stays O(1).
+   */
+  injectionHistory: (sessionId: string) => Promise<readonly InjectionHistoryEntry[]>
 }
 
 /** The composer entry's injected face: toggle the panel. */
@@ -123,5 +129,5 @@ export type TemplateLibraryFace = Pick<
   PromptPanelFace,
   | 'refresh' | 'refreshCategories' | 'createCategory' | 'removeCategory'
   | 'create' | 'update' | 'remove' | 'makeGlobal'
-  | 'insert' | 'send' | 'interject' | 'injectStatus'
+  | 'insert' | 'send' | 'interject' | 'injectStatus' | 'injectionHistory'
 >

@@ -9,7 +9,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { IconEditOutlineRegular, IconGlobeOutlineRegular, IconPlusOutlineRegular, IconQueueOutlineRegular, IconSendOutlineRegular, IconTrashOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { CategoryView, InjectionStatusView, TemplateInjectMode, TemplateView } from '../types.ts'
+import type { CategoryView, InjectionHistoryEntry, InjectionStatusView, TemplateInjectMode, TemplateView } from '../types.ts'
 import type { TemplateLibraryFace } from './slots.ts'
 import { filterTemplateRows, searchableTemplateRows } from './filter.ts'
 import { GITHUB_REPOSITORY_URL, PLUGIN_VERSION, templateCountLabel } from './meta.ts'
@@ -360,7 +360,7 @@ export interface TemplateLibraryProps {
  * @param props - target session, shared verbs, locale, optional title-row takeover.
  */
 export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: TemplateLibraryProps) {
-  const { refresh, refreshCategories, createCategory, removeCategory, create, update, remove, makeGlobal, insert, send, interject, injectStatus } = face
+  const { refresh, refreshCategories, createCategory, removeCategory, create, update, remove, makeGlobal, insert, send, interject, injectStatus, injectionHistory } = face
   const [templates, setTemplates] = useState<TemplateView[]>([])
   const [categories, setCategories] = useState<CategoryView[]>([])
   const [showAdd, setShowAdd] = useState(false)
@@ -407,6 +407,23 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
     const timer = setInterval(() => { void pollStatus() }, 30_000)
     return () => { clearInterval(timer) }
   }, [pollStatus])
+
+  // Badge dropdown: the recent-injection history for the target session,
+  // fetched on demand (on open, on target change, and whenever a new
+  // injection lands while open) so the 30s badge poll stays O(1).
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [history, setHistory] = useState<readonly InjectionHistoryEntry[]>([])
+  const loadHistory = useCallback(async () => {
+    if (sessionId === null) {
+      setHistory([])
+      return
+    }
+    setHistory(await injectionHistory(sessionId))
+  }, [injectionHistory, sessionId])
+  useEffect(() => {
+    if (historyOpen) void loadHistory()
+  }, [historyOpen, loadHistory, injected])
+  useEffect(() => { setHistoryOpen(false) }, [sessionId])
 
   const handleInsert = useCallback((content: string) => {
     if (sessionId === null) return
@@ -548,18 +565,35 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
             {countLabel}
           </span>
           {injected !== null && (
-            <span
-              className={css.injectBadge}
+            <button
+              type="button"
+              className={`${css.injectBadge} ${css.injectBadgeButton}`}
               data-prompt-injected
               title={`${t('panel.injectedAt')} ${injected.turn} · ${new Date(injected.at).toLocaleTimeString()} · ${injected.templates.join(', ')}`}
-              aria-label={t('panel.injectedAt')}
+              aria-label={t('panel.historyTitle')}
+              aria-expanded={historyOpen}
+              onClick={() => { setHistoryOpen(open => !open) }}
             >
               ⟳{injected.turn}
-            </span>
+            </button>
           )}
         </span>
         {headerExtra}
       </div>
+      {historyOpen && (
+        <div className={css.injectHistory} data-prompt-inject-history role="dialog" aria-label={t('panel.historyTitle')}>
+          <div className={css.injectHistoryTitle}>{t('panel.historyTitle')}</div>
+          {history.length === 0 && <div className={css.injectHistoryEmpty}>{t('panel.historyEmpty')}</div>}
+          {history.map(entry => (
+            <div key={`${entry.turn}-${entry.at}`} className={css.injectHistoryItem}>
+              <div className={css.injectHistoryHead}>
+                ⟳{entry.turn} · {new Date(entry.at).toLocaleTimeString()} · {entry.templates.join(', ')}
+              </div>
+              <div className={css.injectHistoryContent}>{entry.content}</div>
+            </div>
+          ))}
+        </div>
+      )}
       <div className={css.searchBar}>
         <input
           type="search"

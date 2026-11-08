@@ -5,7 +5,7 @@
  * consumes, so callers never see transport details.
  */
 
-import type { CategoryView, InjectionStatusView, TemplateInjectMode, TemplateView } from '../types.ts'
+import type { CategoryView, InjectionHistoryEntry, InjectionStatusView, TemplateInjectMode, TemplateView } from '../types.ts'
 
 /** Business error carried by a failed call. */
 export interface TemplateError {
@@ -34,6 +34,14 @@ export async function injectStatus(sessionId: string): Promise<InjectionStatusVi
   if (!response.ok) return null
   const body = await response.json() as { status?: InjectionStatusView | null }
   return body.status ?? null
+}
+
+/** Load a session recent scheduled injections, newest first (empty when none). */
+export async function injectionHistory(sessionId: string): Promise<readonly InjectionHistoryEntry[]> {
+  const response = await fetch(`${BASE}/inject-status?session_id=${encodeURIComponent(sessionId)}`, { cache: 'no-store' })
+  if (!response.ok) return []
+  const body = await response.json() as { history?: InjectionHistoryEntry[] }
+  return [...body.history ?? []]
 }
 
 /** Load every user category tab (global + all sessions'; the panel filters). */

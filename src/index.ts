@@ -14,7 +14,7 @@
  *   PATCH  /plugins/dsh-prompt-templates/templates/:id    → { template } | 404
  *   POST   /plugins/dsh-prompt-templates/templates/:id/make-global → { template } | 404
  *   DELETE /plugins/dsh-prompt-templates/templates/:id    → { deleted }
- *   GET    /plugins/dsh-prompt-templates/inject-status?session_id=… → { status }
+ *   GET    /plugins/dsh-prompt-templates/inject-status?session_id=… → { status, history }
  *
  * @module dsh-prompt-templates
  */
@@ -30,7 +30,7 @@ import type { } from '@deepseek-ai/dsh-settings'
 import { registerAutoInject } from './inject.ts'
 import type { InjectionStatusView } from './inject.ts'
 import { DEFAULT_INJECT_MAX_EVERY, TemplateRuleError, TemplateStore } from './store.ts'
-import type { TemplateView } from './types.ts'
+import type { InjectionHistoryEntry, TemplateView } from './types.ts'
 
 export type * from './types.ts'
 
@@ -108,7 +108,7 @@ export function apply(ctx: Context, config: Config): void {
     ctx.effect(() => webServer.register({
       kind: 'prefix',
       path: '/plugins/dsh-prompt-templates',
-      handler: (req, res) => { void handle(req, res, client, inject.status) },
+      handler: (req, res) => { void handle(req, res, client, inject.status, inject.history) },
     }), 'prompt-templates: api routes')
   }
   registerRoutes()
@@ -125,6 +125,7 @@ async function handle(
   res: ServerResponse,
   client: () => TemplateStore,
   injectStatus: (sessionId: string) => InjectionStatusView | null,
+  injectHistory: (sessionId: string) => readonly InjectionHistoryEntry[],
 ): Promise<void> {
   const url = new URL(req.url ?? '/', 'http://x')
   const segments = url.pathname.split('/').filter(part => part !== '')
@@ -163,7 +164,7 @@ async function handle(
       if (method !== 'GET') return json(res, 405, errorBody('method-not-allowed', `${method} ${url.pathname}`))
       const sessionId = url.searchParams.get('session_id')
       if (sessionId === null || sessionId === '') return json(res, 400, errorBody('bad-request', 'missing session_id'))
-      return json(res, 200, { status: injectStatus(sessionId) })
+      return json(res, 200, { status: injectStatus(sessionId), history: injectHistory(sessionId) })
     }
     if (resource !== 'templates') return json(res, 404, errorBody('not-found', url.pathname))
     if (rest.length === 0 && method === 'GET') {

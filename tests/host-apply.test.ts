@@ -291,7 +291,7 @@ test('routes surface rule, method, and inject-status errors and honor injectMaxE
     const posted = await request(handler, 'POST', `${INJECT_STATUS}?session_id=sess-a`)
     assert.equal(posted.status, 405)
     const quiet = await request(handler, 'GET', `${INJECT_STATUS}?session_id=sess-a`)
-    assert.deepEqual(quiet.body, { status: null })
+    assert.deepEqual(quiet.body, { status: null, history: [] })
 
     const malformed = await request(handler, 'POST', TEMPLATES, '{')
     assert.equal(malformed.status, 400, JSON.stringify(malformed.body))
@@ -324,7 +324,7 @@ test('pre-step injects due templates, records inject-status, and stays idempoten
     const early = await preStep(handle.ctx, { sessionId: 'sess-a', turn: 4 })
     assert.equal(early.messages?.length, 1)
     const earlyStatus = await request(handler, 'GET', `${INJECT_STATUS}?session_id=sess-a`)
-    assert.deepEqual(earlyStatus.body, { status: null })
+    assert.deepEqual(earlyStatus.body, { status: null, history: [] })
 
     const injected = await preStep(handle.ctx, { sessionId: 'sess-a', turn: 5 })
     assert.equal(injected.kind, 'enter')
@@ -355,6 +355,56 @@ test('pre-step injects due templates, records inject-status, and stays idempoten
     assert.deepEqual(otherStatus.body.status.templates, ['global-one'])
     const originalStatus = await request(handler, 'GET', `${INJECT_STATUS}?session_id=sess-a`)
     assert.deepEqual(originalStatus.body.status.templates, ['global-one', 'session-one'])
+  })
+})
+
+test('inject-status history lists recent injections newest-first, bounded, and session-scoped', async () => {
+  await withHost({}, { when: 'before' }, async (handle) => {
+    const handler = handle.handler()
+    assert.equal((await request(handler, 'POST', TEMPLATES, {
+      name: 'tick', content: 'global tick body', inject_enabled: true, inject_every: 1,
+    })).status, 200)
+    assert.equal((await request(handler, 'POST', TEMPLATES, {
+      name: 'priv', content: 'session tick body', scope: 'session', session_id: 'sess-a',
+      inject_enabled: true, inject_every: 1,
+    })).status, 200)
+
+    for (let turn = 1; turn <= 3; turn += 1) {
+      await preStep(handle.ctx, { sessionId: 'sess-a', turn })
+    }
+    const first = await request(handler, 'GET', `${INJECT_STATUS}?session_id=sess-a`)
+    assert.equal(first.status, 200)
+    assert.equal(first.body.status.turn, 3)
+    const entries = first.body.history as Array<{ turn: number, at: number, templates: string[], content: string }>
+    assert.equal(entries.length, 3)
+    assert.equal(entries[0]?.turn, 3)
+    assert.equal(entries[2]?.turn, 1)
+    assert.deepEqual(entries[0]?.templates, ['tick', 'priv'])
+    assert.ok(entries[0]?.content.includes('global tick body'))
+    assert.ok(entries[0]?.content.includes('session tick body'))
+
+    // Session isolation: another session's history lists only the global template.
+    await preStep(handle.ctx, { sessionId: 'sess-b', turn: 1 })
+    const other = await request(handler, 'GET', `${INJECT_STATUS}?session_id=sess-b`)
+    assert.equal((other.body.history as unknown[]).length, 1)
+    assert.deepEqual((other.body.history as { templates: string[] }[])[0]?.templates, ['tick'])
+    const mine = await request(handler, 'GET', `${INJECT_STATUS}?session_id=sess-a`)
+    assert.equal((mine.body.history as unknown[]).length, 3)
+
+    // Bounded: driving past the cap keeps the newest 20 entries.
+    for (let turn = 4; turn <= 25; turn += 1) {
+      await preStep(handle.ctx, { sessionId: 'sess-a', turn })
+    }
+    const capped = await request(handler, 'GET', `${INJECT_STATUS}?session_id=sess-a`)
+    const cappedEntries = capped.body.history as { turn: number }[]
+    assert.equal(cappedEntries.length, 20)
+    assert.equal(cappedEntries[0]?.turn, 25)
+    assert.equal(cappedEntries[19]?.turn, 6)
+    assert.equal(capped.body.status.turn, 25)
+
+    // A session with no injections yet answers an empty history, not an error.
+    const quiet = await request(handler, 'GET', `${INJECT_STATUS}?session_id=sess-c`)
+    assert.deepEqual(quiet.body, { status: null, history: [] })
   })
 })
 
@@ -441,7 +491,7 @@ test('pre-step passes through when injection is disabled, rejected, empty, or al
     assert.equal(skipped.messages?.length, 1)
     assert.equal(skipped.messages?.[0]?.id, 'downstream')
     const status = await request(handler, 'GET', `${INJECT_STATUS}?session_id=sess-a`)
-    assert.deepEqual(status.body, { status: null })
+    assert.deepEqual(status.body, { status: null, history: [] })
   })
 
   await withHost({}, { when: 'before' }, async (handle) => {
@@ -466,7 +516,7 @@ test('pre-step passes through when injection is disabled, rejected, empty, or al
     })
     assert.equal(logged.messages?.length, 1)
     const status = await request(handler, 'GET', `${INJECT_STATUS}?session_id=sess-a`)
-    assert.deepEqual(status.body, { status: null })
+    assert.deepEqual(status.body, { status: null, history: [] })
   })
 })
 

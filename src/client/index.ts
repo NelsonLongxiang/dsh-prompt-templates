@@ -29,6 +29,7 @@ import {
   listTemplates,
   listCategories,
   injectStatus,
+  injectionHistory,
   createCategory,
   deleteCategory,
   createTemplate,
@@ -129,6 +130,7 @@ export function apply(ctx: ClientContext): void {
       controller.interject(sessionId as SessionId, content)
     },
     injectStatus,
+    injectionHistory,
   }
 
   // Persisted prefs binding, filled by the overlay seat's inject (the seat

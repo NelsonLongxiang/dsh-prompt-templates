@@ -95,3 +95,19 @@ export interface InjectionStatusView {
   /** Template names carried by that injection, in injection order. */
   readonly templates: readonly string[]
 }
+
+/**
+ * One recent scheduled injection in a session's history (newest first),
+ * rendered by the panel badge's history dropdown. Adds the injected bodies
+ * to the status summary so the dropdown can show what actually went out.
+ */
+export interface InjectionHistoryEntry {
+  /** The boundary turn this injection landed on (1-based, durable). */
+  readonly turn: number
+  /** Wall-clock epoch milliseconds of the injection. */
+  readonly at: number
+  /** Template names carried by this injection, in injection order. */
+  readonly templates: readonly string[]
+  /** The injected template bodies, joined in injection order. */
+  readonly content: string
+}
