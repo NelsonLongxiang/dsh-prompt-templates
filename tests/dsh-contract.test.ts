@@ -15,6 +15,7 @@
  */
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { register } from 'node:module'
 import { dirname, join } from 'node:path'
 import test from 'node:test'
@@ -160,7 +161,10 @@ test('cordis patch names this package and its dbPath survives the schema cordis 
   assert.equal(fromHome, 'C:/Users/dsh/ext/prompt-templates/db.sqlite3')
   const fromDefault = evalPatchPath(patch.dbPathExpr, {})
   assert.match(fromDefault, /\/ext\/prompt-templates\/db\.sqlite3$/)
-  assert.doesNotMatch(fromDefault, /^C:/)
+  // The default must track $DSH_HOME or ~/.dsh dynamically on every platform —
+  // an author-baked absolute home would break hosts whose home differs.
+  const expectedDefault = `${homedir().replace(/\\/g, '/')}/.dsh/ext/prompt-templates/db.sqlite3`
+  assert.equal(fromDefault, expectedDefault)
 
   const decoded = resolveConfig(host, { dbPath: fromHome }) as {
     dbPath?: string
