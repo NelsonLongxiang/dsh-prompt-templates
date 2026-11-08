@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# 用途: fetch 后分类双远端所有非 master 分支——①已并入/补丁等价(记 SHA 可删可恢复) vs ③带独有提交(留属主裁决); 只读, 不删任何分支。
-# 用法: bash scripts/branch-audit.sh [remote ...]   # 缺省 origin github
+# 用途: fetch 后分类远端所有非 master 分支——①已并入/补丁等价(记 SHA 可删可恢复) vs ③带独有提交(留属主裁决); 只读, 不删任何分支。
+#       2026-11-08 属主裁定取消维护 gitee: 缺省只审 github, origin 已冻结。
+# 用法: bash scripts/branch-audit.sh [remote ...]   # 缺省 github
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 remotes=("$@")
-[ ${#remotes[@]} -gt 0 ] || remotes=(origin github)
+[ ${#remotes[@]} -gt 0 ] || remotes=(github)
 for r in "${remotes[@]}"; do git fetch -q "$r"; done
 master=$(git rev-parse master)
 for r in "${remotes[@]}"; do

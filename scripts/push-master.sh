@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# 用途: master 双镜像发布入口——干净树守卫 → 刷新双远端 → 待推区间隐私四层排查(内容+提交信息) → 推 origin → 推 github → 终态计数。
+# 用途: master 发布入口(github 单端; 2026-11-08 属主裁定取消维护 gitee 镜像)——干净树守卫 → 刷新 github → 待推区间隐私四层排查(内容+提交信息) → 推 github → 终态计数。
 #       隐私模式豁免公开身份: 包 scope @nelsonlongxiang 与测试样例 C:\Users\dsh; 命中即中止不推(退出码 3)。
 # 用法: bash scripts/push-master.sh
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 [ -z "$(git status --porcelain)" ] || { echo "工作树不干净 — 先收尾再推"; exit 2; }
-for r in origin github; do git fetch -q "$r"; done
+git fetch -q github
 pending=$(git rev-list github/master..master)
 if [ -z "$pending" ]; then
   echo "无待推提交 (github/master..master 为空)"
@@ -23,7 +23,6 @@ if [ -n "$hits" ] || [ -n "$msg_hits" ]; then
   exit 3
 fi
 echo "隐私排查: clean"
-git push origin master
 git push github master
 echo "--- 终态:"
-bash scripts/remote-heads.sh origin github
+bash scripts/remote-heads.sh github
