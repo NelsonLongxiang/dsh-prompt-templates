@@ -23,11 +23,19 @@ No Python toolchain required — since 0.3.0 the host half persists templates th
 - **Global + per-session templates** — globals apply everywhere; session templates stay private to one conversation and can be promoted to global in one click
 - **Scheduled auto-injection** — per-template switch and interval: the host re-surfaces an enabled template into the model context at the first request of every Nth round, persisted in SQLite and logged as a durable session event; click the toolbar `⟳N` badge to open the session's last 20 injections (turn, time, template names, injected bodies)
 - **Template variables** — content supports `{{date}}` `{{time}}` `{{datetime}}` `{{weekday}}` `{{session}}` `{{turn}}`, expanded at delivery across insert, send-now, interject, and scheduled injection; unresolved values stay literal and storage keeps the raw text
+- **Cross-instance sharing** — copy one template or a whole category as a clipboard payload; paste-import on the target instance with an explicit same-name overwrite confirm
 - **Insert or send** — one click inserts the template at the composer caret (or replaces the current selection); send-now dispatches immediately; edit, delete, and make-global all live in the row
 - **Right-sidebar tab** — the full library also docks as a sidebar tab (DSH ≥ 0.2.x): open it from the `+` guide and it follows the session you are viewing; the floating panel remains for quick one-shot use
 - **Search & scroll** — filter the list as you type, reliable scrolling for long collections
 - **Drag to reposition, double-click to reset** — the panel remembers where you put it
 - **Durable by design** — templates persist in SQLite through a pure-TS store (`node:sqlite`) owned by the host plugin and closed with its lifecycle
+
+## Sharing (cross-instance copy)
+
+- The row ⧉ button shares **one template**; the category tab ⧉ shares **a whole category** (member templates + the category definition)
+- The payload is self-describing JSON (`format`/`version` markers) carried over the clipboard — no files, no network
+- Paste into the toolbar **Import** box on the target instance: missing categories are created, and **same-name same-scope templates raise an explicit overwrite confirm** — overwrite updates the existing row (content/description/category/inject facts), declining skips; the result reports created/overwritten/skipped counts
+- What is shared is the **raw text**: `{{date}}`/`{{turn}}` re-expand at delivery on the receiving instance
 
 ## Auto-inject
 
