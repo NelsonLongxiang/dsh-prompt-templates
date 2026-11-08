@@ -294,8 +294,12 @@ test('routes surface rule, method, and inject-status errors and honor injectMaxE
     assert.deepEqual(quiet.body, { status: null })
 
     const malformed = await request(handler, 'POST', TEMPLATES, '{')
-    assert.equal(malformed.status, 500)
-    assert.equal(malformed.body.error.code, 'store-error')
+    assert.equal(malformed.status, 400, JSON.stringify(malformed.body))
+    assert.equal(malformed.body.error.code, 'bad-request')
+    assert.match(malformed.body.error.message, /malformed JSON body/)
+    const malformedPatch = await request(handler, 'PATCH', `${TEMPLATES}/anything`, 'nope')
+    assert.equal(malformedPatch.status, 400, JSON.stringify(malformedPatch.body))
+    assert.equal(malformedPatch.body.error.code, 'bad-request')
 
     const absent = await request(handler, 'DELETE', `${TEMPLATES}/missing`)
     assert.deepEqual(absent.body, { deleted: false })

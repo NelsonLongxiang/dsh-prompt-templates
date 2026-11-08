@@ -202,10 +202,16 @@ async function handle(
     if (error instanceof TemplateRuleError) {
       return json(res, 400, errorBody('rule-violation', error.message))
     }
+    if (error instanceof MalformedBodyError) {
+      return json(res, 400, errorBody('bad-request', error.message))
+    }
     const message = error instanceof Error ? error.message : String(error)
     return json(res, 500, errorBody('store-error', message))
   }
 }
+
+/** A request body that failed JSON parsing: the client's fault, so 400. */
+class MalformedBodyError extends Error {}
 
 /** Read and parse one JSON request body. */
 function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
@@ -218,7 +224,8 @@ function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
         const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'))
         resolve(typeof parsed === 'object' && parsed !== null ? parsed as Record<string, unknown> : {})
       } catch (error) {
-        reject(error)
+        const message = error instanceof Error ? error.message : String(error)
+        reject(new MalformedBodyError(`malformed JSON body: ${message}`))
       }
     })
     req.on('error', reject)
