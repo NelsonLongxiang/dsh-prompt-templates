@@ -199,6 +199,7 @@ function TemplateForm({ initial, allowScope, sessionId, categories, t, submitLab
         rows={3}
         aria-label={t('panel.addContent')}
       />
+      <div className={css.variablesHint}>{t('panel.variablesHint')}</div>
       <div className={css.injectRow}>
         <label className={css.injectLabel}>
           <input

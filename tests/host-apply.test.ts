@@ -408,6 +408,25 @@ test('inject-status history lists recent injections newest-first, bounded, and s
   })
 })
 
+test('scheduled injection expands template variables with the delivery context', async () => {
+  await withHost({}, { when: 'before' }, async (handle) => {
+    const handler = handle.handler()
+    assert.equal((await request(handler, 'POST', TEMPLATES, {
+      name: 'var', content: '第{{turn}}轮 · 会话{{session}} · {{date}} · 未知{{nope}}', scope: 'session', session_id: 'sess-a',
+      inject_enabled: true, inject_every: 2,
+    })).status, 200)
+    const injected = await preStep(handle.ctx, { sessionId: 'sess-a', turn: 4 })
+    assert.equal(injected.messages?.length, 2)
+    const text = textOf(injected.messages?.[1])
+    assert.ok(text.includes('第4轮'), text)
+    assert.ok(text.includes('sess-a'), text)
+    assert.match(text, /\d{4}-\d{2}-\d{2}/)
+    assert.ok(text.includes('{{nope}}'), text)
+    const status = await request(handler, 'GET', `${INJECT_STATUS}?session_id=sess-a`)
+    assert.ok((status.body.history as { content: string }[])[0]?.content.includes('第4轮'))
+  })
+})
+
 test('pre-step splits visible and silent delivery into two messages', async () => {
   await withHost({}, { when: 'before' }, async (handle) => {
     const handler = handle.handler()

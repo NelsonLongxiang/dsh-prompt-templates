@@ -11,6 +11,7 @@ import type { BoundActions } from '@deepseek-ai/dsh-client-ui-slots'
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { ISessions } from '@deepseek-ai/dsh-api-session-controller/client'
+import { expandTemplateVariables } from '../variables.ts'
 import type { createPromptPanelStore } from './store.ts'
 
 /**
@@ -165,17 +166,18 @@ export class PromptPanelController implements IPromptPanel {
   insert(sessionId: SessionId, content: string): void {
     const input = this.#inputOf(sessionId)
     if (input === undefined) return
+    const text = expandTemplateVariables(content, { sessionId })
     const actions = input.actions
     if (actions !== undefined) {
       try {
         const span = actions.captureInsertion()
-        if (span !== undefined && actions.insertText(content, span)) return
+        if (span !== undefined && actions.insertText(text, span)) return
       } catch {
         // The channel is best-effort; the append path below always works.
       }
     }
     const draft = input.state.getSnapshot().draft
-    input.setDraft(draft === '' ? content : `${draft}\n${content}`)
+    input.setDraft(draft === '' ? text : `${draft}\n${text}`)
   }
 
   /**
@@ -189,7 +191,7 @@ export class PromptPanelController implements IPromptPanel {
   interject(sessionId: SessionId, content: string): void {
     const input = this.#inputOf(sessionId)
     if (input === undefined) return
-    input.setDraft(content)
+    input.setDraft(expandTemplateVariables(content, { sessionId }))
     input.submit('steer')
   }
 
@@ -202,7 +204,7 @@ export class PromptPanelController implements IPromptPanel {
   send(sessionId: SessionId, content: string): void {
     const input = this.#inputOf(sessionId)
     if (input === undefined) return
-    input.setDraft(content)
+    input.setDraft(expandTemplateVariables(content, { sessionId }))
     input.submit()
   }
 

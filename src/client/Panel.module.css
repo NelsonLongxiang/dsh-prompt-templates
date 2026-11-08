@@ -158,6 +158,14 @@
   background: var(--dsw-alias-interactive-bg-hover);
 }
 
+/* Delivery-time variable hint under the template content textarea. */
+.variablesHint {
+  padding: 0 2px 4px;
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--dsw-alias-label-secondary);
+}
+
 .searchBar {
   padding: 8px 8px 0;
 }

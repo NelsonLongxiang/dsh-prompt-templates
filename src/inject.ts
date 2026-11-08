@@ -21,6 +21,7 @@ import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { UserMessage } from '@deepseek-ai/dsh-session'
 import type { TemplateStore } from './store.ts'
+import { expandTemplateVariables } from './variables.ts'
 import type { InjectionHistoryEntry, InjectionStatusView, TemplateInjectMode, TemplateView } from './types.ts'
 
 /**
@@ -269,6 +270,13 @@ export function registerAutoInject(ctx: Context, config: AutoInjectConfig, store
       if (events.length < state.scanned) state.scanned = 0
       const due = dueTemplates(store().listInjectable(sessionId), turn)
       if (due.length === 0) return decision
+      // Expand variable placeholders with this delivery context;
+      // unresolved ones stay literal. The history surface records the
+      // expanded bodies — what actually went out.
+      const expanded = due.map(candidate => ({
+        ...candidate,
+        content: expandTemplateVariables(candidate.content, { sessionId, turn }),
+      }))
       if (alreadyInjectedAtTurn(events, state.scanned, turn)) {
         state.injectedTurns.add(turn)
         return decision
@@ -280,15 +288,15 @@ export function registerAutoInject(ctx: Context, config: AutoInjectConfig, store
         turn,
         at: Date.now(),
         templates: due.map(template => template.name),
-        content: due.map(template => template.content).join('\n\n'),
+        content: expanded.map(template => template.content).join('\n\n'),
       })
       // Split by delivery mode: silent templates ride the invisible reminder
       // frame; visible ones stamp the user channel so the chat transcript
       // renders them. Both share one boundary (dedup covers the turn as a
       // whole — either source shape satisfies alreadyInjectedAtTurn).
       const injected: UserMessage[] = []
-      const silent = due.filter(template => template.mode !== 'visible')
-      const visible = due.filter(template => template.mode === 'visible')
+      const silent = expanded.filter(template => template.mode !== 'visible')
+      const visible = expanded.filter(template => template.mode === 'visible')
       if (silent.length > 0) injected.push(renderInjectionMessage(turn, silent))
       if (visible.length > 0) injected.push(renderVisibleInjectionMessage(turn, visible))
       return { ...decision, messages: [...decision.messages, ...injected] }
