@@ -21,7 +21,8 @@ No Python toolchain required — since 0.3.0 the host half persists templates th
 ## What you get
 
 - **Global + per-session templates** — globals apply everywhere; session templates stay private to one conversation and can be promoted to global in one click
-- **Scheduled auto-injection** — per-template switch and interval: the host re-surfaces an enabled template into the model context at the first request of every Nth round, persisted in SQLite and logged as a durable session event; the library toolbar shows a `⟳N` badge with the session's latest injection (turn, time, template names)
+- **Scheduled auto-injection** — per-template switch and interval: the host re-surfaces an enabled template into the model context at the first request of every Nth round, persisted in SQLite and logged as a durable session event; click the toolbar `⟳N` badge to open the session's last 20 injections (turn, time, template names, injected bodies)
+- **Template variables** — content supports `{{date}}` `{{time}}` `{{datetime}}` `{{weekday}}` `{{session}}` `{{turn}}`, expanded at delivery across insert, send-now, interject, and scheduled injection; unresolved values stay literal and storage keeps the raw text
 - **Insert or send** — one click inserts the template at the composer caret (or replaces the current selection); send-now dispatches immediately; edit, delete, and make-global all live in the row
 - **Right-sidebar tab** — the full library also docks as a sidebar tab (DSH ≥ 0.2.x): open it from the `+` guide and it follows the session you are viewing; the floating panel remains for quick one-shot use
 - **Search & scroll** — filter the list as you type, reliable scrolling for long collections
@@ -34,7 +35,16 @@ Each template (global or session-scoped) carries its own **switch + interval N**
 
 - The injected content arrives as one durable `<system-reminder>` user message recorded in the session log (source kind `prompt-template-schedule`), so replays and audits reconstruct exactly what the model saw
 - A boundary round is never injected twice, even across restarts or step retries
-- Config persists in the plugin's SQLite database (schema v3); the deployment can silence everything with `injectEnabled: false` in the patch config
+- Config persists in the plugin's SQLite database (schema v4); the deployment can silence everything with `injectEnabled: false` in the patch config
+- Each template picks a delivery mode: **silent** (default, model context only) or **visible in chat** (rendered as a normal user message with a ⚙️ scheduled-injection header)
+
+## Template variables
+
+Placeholders `{{date}}` `{{time}}` `{{datetime}}` `{{weekday}}` `{{session}}` `{{turn}}` expand **at delivery time** — insert, send-now, interject, and scheduled injection all expand:
+
+- Clock variables read the local clock; `{{session}}` is the target session id; `{{turn}}` resolves only on the scheduled-injection path (it stays literal on insert/send)
+- Unknown names pass through untouched — nothing is silently deleted; the template form shows a variable hint line
+- Storage always keeps the raw text; expansion happens at the moment of delivery, so the history dropdown shows exactly what went out
 
 ## How it works
 
@@ -64,7 +74,7 @@ The store is pure TS inside the host half; no child process is spawned.
 The package ships a deterministic, local-only CLI for comparing and merging prompt-template databases across DSH homes. It never writes a remote database directly.
 
 ```sh
-# Export a schema-v3 snapshot (canonical order + data_sha256)
+# Export a schema-v4 snapshot (canonical order + data_sha256)
 dsh-prompt-templates export --db /path/to/db.sqlite3 --out snapshot.json --output=json
 
 # Compare two snapshots (exit 1 with --fail-on-diff)
@@ -98,7 +108,7 @@ pnpm verify:release    # alias of pnpm verify
 3. **build** — host `tsc`, client `tsc`, and the tsdown browser bundle
 4. **test:package** — every CSS module class is present in `lib/client.js`, then `npm pack` and the packed `dsh-prompt-templates --help` shim
 
-GitHub Actions (`.github/workflows/verify.yml`) runs the same command on pushes and pull requests to `master`, and on `v*` tags, with Node 24. The `@deepseek-ai/*` devDependencies are public npm packages, so CI needs no registry token and no harness checkout.
+GitHub Actions (`.github/workflows/verify.yml`) runs the same command on pushes and pull requests to `master`. `test:cli` also carries the DSH 0.2.x contract tests (peer version line, patch sandbox, real store execution, slot declarations, icon exports) — upstream drift fails the gate. Repo `scripts/` hold the ops stable entries (branch-budget audit, absorption classification, privacy-checked push). and on `v*` tags, with Node 24. The `@deepseek-ai/*` devDependencies are public npm packages, so CI needs no registry token and no harness checkout.
 
 Still manual, because they need a live harness profile: booting `dsh web`, the browser panel against the real web server, and resume or compaction against a real session log.
 

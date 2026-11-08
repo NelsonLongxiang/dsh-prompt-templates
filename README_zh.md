@@ -21,7 +21,8 @@ dsh plugin --profile web add @nelsonlongxiang/dsh-prompt-templates
 ## 你能得到什么
 
 - **全局 + 会话模板**——全局处处生效；会话模板只属于当前对话，一键提升为全局
-- **定时自动注入**——每条模板独立开关 + 间隔 N：开启后 host 在对话每第 N 轮的首个请求自动注入该模板，配置持久化于 SQLite，注入本身落为持久会话事件；模板库工具栏以 `⟳N` 徽标显示该会话最近一次注入（轮次、时间、模板名）
+- **定时自动注入**——每条模板独立开关 + 间隔 N：开启后 host 在对话每第 N 轮的首个请求自动注入该模板，配置持久化于 SQLite，注入本身落为持久会话事件；模板库工具栏的 `⟳N` 徽标可点开查看本会话最近 20 次注入（轮次、时间、模板名、注入正文）
+- **模板变量**——内容支持 `{{date}}` `{{time}}` `{{datetime}}` `{{weekday}}` `{{session}}` `{{turn}}`，在插入、直发、插话、定时注入时展开；值不可得时保留原文字面，存储始终保存原始文本
 - **插入或直发**——一键插入到 composer 光标处（或替换当前选区）；send-now 立即发送；编辑、删除、转全局都在行内
 - **右侧栏 tab**——完整模板库可停靠为侧栏 tab（DSH ≥ 0.2.x）：从 `+` 引导页打开，跟随当前查看的会话；悬浮面板保留作快捷一次性使用
 - **搜索与滚动**——边输入边过滤，长列表滚动可靠
@@ -34,7 +35,16 @@ dsh plugin --profile web add @nelsonlongxiang/dsh-prompt-templates
 
 - 注入内容是一条持久的 `<system-reminder>` 用户消息，记入会话日志（source kind `prompt-template-schedule`），重放与审计可精确还原模型所见
 - 同一边界轮绝不重复注入——跨重启、跨步骤重试都不例外
-- 配置持久化在插件 SQLite 库（schema v3）；部署侧可在 patch 配置里 `injectEnabled: false` 一键全关
+- 配置持久化在插件 SQLite 库（schema v4）；部署侧可在 patch 配置里 `injectEnabled: false` 一键全关
+- 每条模板可选交付模式：**静默**（默认，只进模型上下文）或**对话流可见**（以普通用户消息渲染，带 ⚙️ 定时注入标记）
+
+## 模板变量
+
+模板内容中的 `{{date}}` `{{time}}` `{{datetime}}` `{{weekday}}` `{{session}}` `{{turn}}` 在**投递时**展开——插入、直接发送、插话打断、定时注入四条路全部生效：
+
+- 时钟类（date/time/datetime/weekday）取本地时钟；`{{session}}` 为目标会话 id；`{{turn}}` 仅定时注入路径可得（插入/直发时保留原文字面）
+- 未知变量名原样保留，不静默删除；模板表单内有变量提示行
+- 存储始终保存原始文本，展开只发生在投递瞬间——历史下拉里看到的就是实际送出的内容
 
 ## 工作原理
 
@@ -63,7 +73,7 @@ cordis.patch.yml      Bundle patch：挂插件行
 包内提供确定性的本地 CLI，用于跨 DSH home 对比、合并提示词模板数据库；禁止直接远程写库。
 
 ```sh
-# 导出 schema-v3 快照（确定性排序 + data_sha256）
+# 导出 schema-v4 快照（确定性排序 + data_sha256）
 dsh-prompt-templates export --db /path/to/db.sqlite3 --out snapshot.json --output=json
 
 # 对比快照（加 --fail-on-diff 时发现差异返回 exit 1）
@@ -97,7 +107,7 @@ pnpm verify:release    # pnpm verify 的别名
 3. **build** — host `tsc`、client `tsc`、tsdown 浏览器 bundle
 4. **test:package** — `lib/client.js` 含全部 CSS module class，再 `npm pack` 并跑打包后的 `dsh-prompt-templates --help`
 
-GitHub Actions（`.github/workflows/verify.yml`）在指向 `master` 的 push / pull request 以及 `v*` tag 上用 Node 24 跑同一命令。`@deepseek-ai/*` devDependencies 来自公网 npm，CI 不需要 registry token，也不需要 harness 检出。
+GitHub Actions（`.github/workflows/verify.yml`）在指向 `master` 的 push / pull request 以及 `v*` tag 上用 Node 24 跑同一命令。`test:cli` 还含 DSH 0.2.x 契约测试（peer 版本线 / patch 沙箱 / store 真执行 / slot 声明 / 图标导出），上游漂移当场爆红。仓库 `scripts/` 提供运维稳定入口（分支预算审计 / 吸收分类 / 隐私排查推送）。`@deepseek-ai/*` devDependencies 来自公网 npm，CI 不需要 registry token，也不需要 harness 检出。
 
 仍需人工、因为它们依赖真实 harness profile：启动 `dsh web`、浏览器面板对接真实 web server，以及用真实会话日志验证 resume / compaction。
 
