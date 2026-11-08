@@ -8,10 +8,11 @@
  * attachment; the sidebar tab reads it straight from its standard props).
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { IconEditOutlineRegular, IconGlobeOutlineRegular, IconPlusOutlineRegular, IconQueueOutlineRegular, IconSendOutlineRegular, IconTrashOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconCopyOutlineRegular, IconDownloadOutlineRegular, IconEditOutlineRegular, IconGlobeOutlineRegular, IconPlusOutlineRegular, IconQueueOutlineRegular, IconSendOutlineRegular, IconTrashOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { CategoryView, InjectionHistoryEntry, InjectionStatusView, TemplateInjectMode, TemplateView } from '../types.ts'
 import type { TemplateLibraryFace } from './slots.ts'
 import { filterTemplateRows, searchableTemplateRows } from './filter.ts'
+import { buildSharePayload, parseSharePayload, planShareImport } from './share.ts'
 import { GITHUB_REPOSITORY_URL, PLUGIN_VERSION, templateCountLabel } from './meta.ts'
 import type { PromptTemplateKey } from './locales.ts'
 import css from './Panel.module.css'
@@ -28,6 +29,8 @@ interface RowProps {
   onInterject: (content: string) => void
   onEdit: (id: string) => void
   onDelete: (id: string) => void
+  /** Copy the row as a one-template clipboard share payload. */
+  onShare: (template: TemplateView) => void
   onMakeGlobal?: (id: string) => void
   /** Flip the row's auto-inject switch (rows without an interval route to the edit form). */
   onToggleInject: (template: TemplateView) => void
@@ -37,7 +40,7 @@ interface RowProps {
   t: (key: PromptTemplateKey) => string
 }
 
-function TemplateRow({ template, onInsert, onSend, onInterject, onEdit, onDelete, onMakeGlobal, onToggleInject, sortable, onDragStart, onDropOn, t }: RowProps) {
+function TemplateRow({ template, onInsert, onSend, onInterject, onEdit, onDelete, onShare, onMakeGlobal, onToggleInject, sortable, onDragStart, onDropOn, t }: RowProps) {
   const injectTitle = template.inject_enabled && template.inject_every !== null
     ? `${t('panel.inject')} · ${template.inject_every}${template.mode === 'visible' ? ' · ' + t('panel.modeVisible') : ''}`
     : t('panel.inject')
@@ -87,6 +90,15 @@ function TemplateRow({ template, onInsert, onSend, onInterject, onEdit, onDelete
         title={t('panel.sendNow')}
       >
         <IconSendOutlineRegular size={12} />
+      </button>
+      <button
+        type="button"
+        className={css.shareBtn}
+        onClick={() => { onShare(template) }}
+        aria-label={t('panel.share')}
+        title={t('panel.share')}
+      >
+        <IconCopyOutlineRegular size={12} />
       </button>
       {onMakeGlobal !== undefined && (
         <button
@@ -426,6 +438,106 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
   }, [historyOpen, loadHistory, injected])
   useEffect(() => { setHistoryOpen(false) }, [sessionId])
 
+  // Clipboard sharing: one template per row, one category per tab. The
+  // payload carries raw rows (variables stay literal — they re-expand on
+  // the receiving instance). Import plans against the loaded rows first,
+  // so the same-name overwrite risk is one explicit confirm (owner ruling).
+  const [notice, setNotice] = useState<string | null>(null)
+  const [showImport, setShowImport] = useState(false)
+  const [importText, setImportText] = useState('')
+  const [importBusy, setImportBusy] = useState(false)
+  useEffect(() => {
+    if (notice === null) return
+    const timer = setTimeout(() => { setNotice(null) }, 3000)
+    return () => { clearTimeout(timer) }
+  }, [notice])
+
+  const copyPayload = useCallback(async (payload: string): Promise<void> => {
+    try {
+      await navigator.clipboard.writeText(payload)
+      setNotice(t('panel.shareCopied'))
+    } catch {
+      setNotice(t('panel.shareFailed'))
+    }
+  }, [t])
+
+  const handleShareTemplate = useCallback((template: TemplateView) => {
+    return copyPayload(JSON.stringify(buildSharePayload([template])))
+  }, [copyPayload])
+
+  const handleShareCategory = useCallback((cat: CategoryView) => {
+    const members = templates.filter(row => row.category === cat.name
+      && row.scope === cat.scope
+      && (cat.scope === 'global' || row.session_id === cat.session_id))
+    if (members.length === 0) {
+      setNotice(t('panel.shareEmpty'))
+      return
+    }
+    return copyPayload(JSON.stringify(buildSharePayload(members, [cat])))
+  }, [templates, copyPayload, t])
+
+  const handleImport = useCallback(async () => {
+    const parsed = parseSharePayload(importText.trim())
+    if (!parsed.ok) {
+      setRowError(t('panel.importBad') + ' (' + parsed.error + ')')
+      return
+    }
+    const plan = planShareImport(parsed.payload, templates, categories)
+    let overwrite = 0
+    if (plan.overwrite.length > 0) {
+      // Same name + same scope is the overwrite risk: one explicit ask,
+      // declining skips those rows (nothing is silently replaced).
+      if (window.confirm(t('panel.overwriteRisk') + ' ' + plan.overwrite.length)) overwrite = plan.overwrite.length
+    }
+    setImportBusy(true)
+    for (const cat of plan.missingCategories) {
+      await createCategory({ name: cat.name, scope: cat.scope, session_id: cat.session_id })
+    }
+    let created = 0
+    let skipped = 0
+    for (const incoming of plan.create) {
+      if (incoming.scope === 'session' && sessionId === null) { skipped += 1; continue }
+      const result = await create({
+        name: incoming.name,
+        content: incoming.content,
+        scope: incoming.scope,
+        session_id: incoming.scope === 'session' ? sessionId : null,
+        description: incoming.description,
+        category: incoming.category,
+        inject_enabled: incoming.inject_enabled,
+        inject_every: incoming.inject_every,
+        mode: incoming.mode,
+      })
+      if (result.ok) created += 1
+    }
+    if (overwrite > 0) {
+      for (const pair of plan.overwrite) {
+        const result = await update(pair.target.id, {
+          content: pair.incoming.content,
+          description: pair.incoming.description,
+          category: pair.incoming.category,
+          inject_enabled: pair.incoming.inject_enabled,
+          inject_every: pair.incoming.inject_every,
+          mode: pair.incoming.mode,
+        })
+        if (!result.ok) overwrite -= 1
+      }
+    }
+    if (overwrite === 0 && plan.overwrite.length > 0 && created === 0 && skipped === plan.create.length) {
+      // nothing happened at all — keep the form open for inspection
+      setImportBusy(false)
+      return
+    }
+    const declined = plan.overwrite.length > 0 && overwrite === 0 ? plan.overwrite.length : 0
+    const skippedTotal = skipped + declined
+    setImportBusy(false)
+    setShowImport(false)
+    setImportText('')
+    setNotice(t('panel.importDone') + ' ' + created + ' / ' + overwrite + ' / ' + skippedTotal)
+    void load()
+    void loadCategories()
+  }, [importText, templates, categories, sessionId, create, update, createCategory, load, loadCategories, t])
+
   const handleInsert = useCallback((content: string) => {
     if (sessionId === null) return
     insert(sessionId, content)
@@ -540,6 +652,7 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
           onInterject={(c) => { handleInterject(c) }}
           onEdit={(id) => { setEditingId(id) }}
           onDelete={(id) => { void handleRemove(id) }}
+          onShare={(tpl) => { void handleShareTemplate(tpl) }}
           onMakeGlobal={row.scope === 'session' ? (id) => { void handleMakeGlobal(id) } : undefined}
           onToggleInject={(tpl) => { void handleToggleInject(tpl) }}
           sortable={needle === ''}
@@ -578,9 +691,40 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
               ⟳{injected.turn}
             </button>
           )}
+          <button
+            type="button"
+            className={css.importBtn}
+            onClick={() => { setShowImport(v => !v) }}
+            aria-label={t('panel.import')}
+            aria-expanded={showImport}
+            title={t('panel.import')}
+          >
+            <IconDownloadOutlineRegular size={12} />
+          </button>
         </span>
         {headerExtra}
       </div>
+      {notice !== null && <div className={css.notice} role="status">{notice}</div>}
+      {showImport && (
+        <div className={css.importForm} data-prompt-import>
+          <textarea
+            className={css.contentInput}
+            rows={4}
+            value={importText}
+            onChange={(e) => { setImportText(e.target.value) }}
+            placeholder={t('panel.importPlaceholder')}
+            aria-label={t('panel.import')}
+          />
+          <div className={css.importActions}>
+            <button type="button" className={css.saveBtn} onClick={() => { void handleImport() }} disabled={importBusy}>
+              {t('panel.importRun')}
+            </button>
+            <button type="button" className={css.cancelBtn} onClick={() => { setShowImport(false); setImportText('') }} disabled={importBusy}>
+              {t('panel.importCancel')}
+            </button>
+          </div>
+        </div>
+      )}
       {historyOpen && (
         <div className={css.injectHistory} data-prompt-inject-history role="dialog" aria-label={t('panel.historyTitle')}>
           <div className={css.injectHistoryTitle}>{t('panel.historyTitle')}</div>
@@ -627,6 +771,15 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
             <span key={key} className={effectiveTab === key ? `${css.tab} ${css.tabActive}` : css.tab}>
               <button type="button" onClick={() => { setActiveTab(key) }}>
                 {cat.name}
+              </button>
+              <button
+                type="button"
+                className={css.tabShare}
+                aria-label={t('panel.shareCategory')}
+                title={t('panel.shareCategory')}
+                onClick={() => { void handleShareCategory(cat) }}
+              >
+                <IconCopyOutlineRegular size={11} />
               </button>
               <button
                 type="button"

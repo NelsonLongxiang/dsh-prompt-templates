@@ -42,6 +42,7 @@ export interface PromptPanelFace {
     content: string
     scope: 'global' | 'session'
     session_id: string | null
+    description?: string | null
     category?: string | null
     inject_enabled?: boolean
     inject_every?: number | null
