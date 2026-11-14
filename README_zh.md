@@ -43,8 +43,19 @@ dsh plugin --profile web add @nelsonlongxiang/dsh-prompt-templates
 
 - 注入内容是一条持久的 `<system-reminder>` 用户消息，记入会话日志（source kind `prompt-template-schedule`），重放与审计可精确还原模型所见
 - 同一边界轮绝不重复注入——跨重启、跨步骤重试都不例外
-- 配置持久化在插件 SQLite 库（schema v4）；部署侧可在 patch 配置里 `injectEnabled: false` 一键全关
+- 配置持久化在插件 SQLite 库（schema v5）；部署侧可在 patch 配置里 `injectEnabled: false` 一键全关
 - 每条模板可选交付模式：**静默**（默认，只进模型上下文）或**对话流可见**（以普通用户消息渲染，带 ⚙️ 定时注入标记）
+
+## 事件提醒（默认关闭）
+
+除了按固定轮次，插件还可以**根据刚发生的行动**提醒 Agent：观察工具的最终结果，识别两类问题——**重复准备**（反复手工带上同一段前缀，比如环境变量加解释器绝对路径，任务部分不同）和**重复失败**（同一目标以相同方式反复失败，或成功后又失败）——然后在下一次模型决策前追加一条短提醒，包括定时注入会跳过的工具结果那一步。
+
+- 只有部署侧设 `eventInject.enabled: true`，**并且**启用了规则（`PATCH /plugins/dsh-prompt-templates/event-policies/<规则>`）才生效；两条规则出厂都是关闭的
+- 只存哈希和简短的脱敏摘要，不存原始参数、输出、环境变量值或 token；失败类别只取结构化字段，不从输出文字里猜
+- 有预算：默认每轮最多一条、有字数上限、每条规则有冷却、每个问题有次数上限；没有新证据就不提醒
+- 投递是"至少一次 + 按会话日志去重"，重启或步骤被拒都不会丢失或重复
+- 插件只把问题标到 `notified`（附 `changed` / `repeated` 信号）；结案（`verified`、`rejected` 等）走 `PATCH …/event-episodes/<id>`，必须带证据引用
+- 提醒是 user-role 消息：不是用户指令，不授予权限。Agent 该怎么处理以 Agent Atelier 的 `references/improvement-loop.md` 为准；设计见 [docs/spec-event-inject.md](docs/spec-event-inject.md)
 
 ## 模板变量
 

@@ -62,7 +62,7 @@ test('mode column: defaults to inject, persists visible, rejects unknown', () =>
   }
 })
 
-test('v3 database migrates to v4 in place, mode defaults inject', () => {
+test('v3 database migrates to the current schema in place, mode defaults inject', () => {
   const dir = mkdtempSync(join(tmpdir(), 'pt-mig-'))
   const db = join(dir, 'v3.sqlite3').replaceAll('\\', '/')
   let store: TemplateStore | undefined
@@ -85,7 +85,7 @@ test('v3 database migrates to v4 in place, mode defaults inject', () => {
     const probe = new DatabaseSync(db)
     const version = (probe.prepare('PRAGMA user_version').get() as { user_version: number }).user_version
     probe.close()
-    assert.equal(version, 4)
+    assert.equal(version, 5)
   } finally {
     // Windows: a WAL-mode sqlite keeps -shm/-wal siblings; close before remove.
     try { store?.close() } catch { /* already closed */ }

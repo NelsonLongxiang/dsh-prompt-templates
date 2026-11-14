@@ -43,8 +43,19 @@ Each template (global or session-scoped) carries its own **switch + interval N**
 
 - The injected content arrives as one durable `<system-reminder>` user message recorded in the session log (source kind `prompt-template-schedule`), so replays and audits reconstruct exactly what the model saw
 - A boundary round is never injected twice, even across restarts or step retries
-- Config persists in the plugin's SQLite database (schema v4); the deployment can silence everything with `injectEnabled: false` in the patch config
+- Config persists in the plugin's SQLite database (schema v5); the deployment can silence everything with `injectEnabled: false` in the patch config
 - Each template picks a delivery mode: **silent** (default, model context only) or **visible in chat** (rendered as a normal user message with a ⚙️ scheduled-injection header)
+
+## Event reminders (off by default)
+
+Besides fixed rounds, the plugin can remind the agent **because of what just happened**. It watches final tool results, detects two problems — **repeated preparation** (the same hand-built prefix such as environment variables plus an absolute interpreter path, with different tasks) and **repeated failure** (the same target failing the same way, or failing again after it had succeeded) — and appends one short reminder before the next model decision, including the tool-result steps that scheduled injection skips.
+
+- Off unless the deployment sets `eventInject.enabled: true` **and** a rule is enabled (`PATCH /plugins/dsh-prompt-templates/event-policies/<rule>`); both rules ship disabled
+- Only hashes and a short redacted summary are stored — never raw arguments, output, environment values or tokens; failure classes come from structured fields, never from output text
+- Budgeted: one reminder per turn by default, a character cap, a per-rule cooldown and per-problem limit; no evidence, no reminder
+- Delivery is at-least-once with dedup against the session log, so restarts and rejected steps neither lose nor duplicate a reminder
+- The plugin only marks a problem `notified` (with a `changed` / `repeated` hint). Closing it (`verified`, `rejected`, …) goes through `PATCH …/event-episodes/<id>` and requires evidence references
+- A reminder is a user-role message: not a user instruction, no extra permission. How an agent should handle it is defined in Agent Atelier's `references/improvement-loop.md`; the design is in [docs/spec-event-inject.md](docs/spec-event-inject.md)
 
 ## Template variables
 

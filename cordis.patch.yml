@@ -26,3 +26,12 @@
         # omitted, so these lines are optional):
         #   injectEnabled: true   — master switch; false keeps the listener pass-through
         #   injectMaxEvery: 1000  — upper bound accepted for a template's interval
+        # Event-triggered reminders (OFF by default; rules also ship disabled
+        # and are enabled per rule via PATCH …/event-policies/<rule>):
+        #   eventInject:
+        #     enabled: false        — master switch, independent of injectEnabled
+        #     maxPerTurn: 1         — reminders per session per turn (retries included)
+        #     maxChars: 600         — character budget of one merged reminder
+        #     maxAttempts: 3        — delivery attempts before a reminder is marked failed
+        #     observationWindow: 200 — redacted observations kept per session
+        #     ignoreTools: []       — tool names never observed

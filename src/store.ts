@@ -1,7 +1,7 @@
 /**
  * Pure-TS template store over `node:sqlite`, replacing the former Python
  * backend child. Owns the same SQLite database file and schema
- * (`templates` + `categories` tables, `user_version` 4), so an existing
+ * (`templates` + `categories` tables plus the v5 event tables, `user_version` 5), so an existing
  * `$DSH_HOME/ext/prompt-templates/db.sqlite3` keeps working and migrates
  * in place.
  *
@@ -21,10 +21,14 @@ import { randomUUID } from 'node:crypto'
 import { mkdirSync, chmodSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
+import { EVENT_SCHEMA_SQL, EventStore, seedDefaultPolicies } from './event-store.ts'
 import type { CategoryCreateRequest, CategoryView, PromptScope, TemplateCreateRequest, TemplateInjectMode, TemplateUpdateRequest, TemplateView } from './types.ts'
 
-/** Schema version gate; v4 adds `templates.mode` (inject|visible). */
-const SCHEMA_VERSION = 4
+/**
+ * Schema version gate; v4 adds `templates.mode` (inject|visible), v5 adds
+ * the event-reminder tables (policies, observations, episodes, outbox).
+ */
+export const SCHEMA_VERSION = 5
 
 /** Upper bound of the inject interval when the deployment config omits one. */
 export const DEFAULT_INJECT_MAX_EVERY = 1000
@@ -94,6 +98,8 @@ export interface TemplateStoreOptions {
 export class TemplateStore {
   readonly #injectMaxEvery: number
   private readonly db: DatabaseSync
+  /** Event-reminder persistence over the same database handle. */
+  readonly events: EventStore
 
   constructor(dbPath: string, options: TemplateStoreOptions = {}) {
     this.#injectMaxEvery = options.injectMaxEvery ?? DEFAULT_INJECT_MAX_EVERY
@@ -106,8 +112,17 @@ export class TemplateStore {
     this.db.exec('PRAGMA busy_timeout=5000')
     const onDisk = Number((this.db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
     if (onDisk === 0) {
-      this.db.exec(SCHEMA_V4_SQL)
-      this.db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`)
+      this.db.exec('BEGIN')
+      try {
+        this.db.exec(SCHEMA_V4_SQL)
+        this.db.exec(EVENT_SCHEMA_SQL)
+        seedDefaultPolicies(this.db)
+        this.db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`)
+        this.db.exec('COMMIT')
+      } catch (error) {
+        this.db.exec('ROLLBACK')
+        throw error
+      }
     } else if (onDisk >= 1 && onDisk < SCHEMA_VERSION) {
       // Migration DDL runs in ONE transaction: a crash mid-way rolls back to
       // the intact previous schema instead of stranding a half-altered table
@@ -125,6 +140,10 @@ export class TemplateStore {
         if (onDisk <= 3) {
           this.db.exec("ALTER TABLE templates ADD COLUMN mode TEXT NOT NULL DEFAULT 'inject'")
         }
+        if (onDisk <= 4) {
+          this.db.exec(EVENT_SCHEMA_SQL)
+          seedDefaultPolicies(this.db)
+        }
         this.db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`)
         this.db.exec('COMMIT')
       } catch (error) {
@@ -138,6 +157,7 @@ export class TemplateStore {
     if (dbPath !== ':memory:') {
       try { chmodSync(dbPath, 0o600) } catch { /* best-effort */ }
     }
+    this.events = new EventStore(this.db)
   }
 
   /** Close the underlying database handle. */
