@@ -45,13 +45,13 @@ DSH（DeepSeek Harness）的提示词模板库插件：悬浮面板 + 右侧栏 
 | 5 | gitee 旧分支处置 | 随 gitee 冻结消解（2026-11-08 裁定） |
 | 6 | 下一版发布节奏 | 待属主裁决 |
 | 7 | drawio 类模板依赖外部技能 | 需要时另配工具 |
-| 8 | 事件触发提醒（docs/spec-event-inject.md） | 设计候选，待评审；评审前不写代码 |
+| 8 | 事件触发提醒（docs/spec-event-inject.md） | 设计已评审（2026-11-14，开放问题按默认取向），待开工；首个提交先补空消息 step 追加的契约测试 |
 
 ## 6. 知识沉淀在哪
 
 - ygl-trees 台账（本机 ygl-trees 工作区，项目 dsh-pt-rc2-review + 科技树 dsh-plugin-eng）：里程碑的 source/evidence/claim 与解锁依据。
 - docs/spec-template-auto-inject.md：定时注入机制 spec（file:line 引用）。
-- docs/spec-event-inject.md：事件触发提醒设计候选（未实现，评审后才开工）。
+- docs/spec-event-inject.md：事件触发提醒设计（已评审，未实现）。
 - 技能目录：dsh-plugin-dev-test（开发回路）、双 registry 发布、开源隐私纪律相关技能。
 
 ## 7. 红线（违反过一次的教训）
