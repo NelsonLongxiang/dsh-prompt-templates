@@ -15,6 +15,10 @@
  *   POST   /plugins/dsh-prompt-templates/templates/:id/make-global → { template } | 404
  *   DELETE /plugins/dsh-prompt-templates/templates/:id    → { deleted }
  *   GET    /plugins/dsh-prompt-templates/inject-status?session_id=… → { status, history }
+ *   GET    /plugins/dsh-prompt-templates/event-policies             → { items }
+ *   PATCH  /plugins/dsh-prompt-templates/event-policies/:rule_id    → { policy } | 404
+ *   GET    /plugins/dsh-prompt-templates/event-episodes?session_id=… → { items, outbox }
+ *   PATCH  /plugins/dsh-prompt-templates/event-episodes/:id         → { episode } | 404 (evidence_refs required)
  *
  * @module dsh-prompt-templates
  */
@@ -27,6 +31,9 @@ import s from '@deepseek-ai/schemastery'
 // type mount stays — an empty type import keeps it without pulling the
 // deleted helper).
 import type { } from '@deepseek-ai/dsh-settings'
+import { DEFAULT_EVENT_INJECT_CONFIG, registerEventInject } from './event-inject.ts'
+import { EventRuleError } from './event-store.ts'
+import type { EventPolicyUpdate } from './event-store.ts'
 import { registerAutoInject } from './inject.ts'
 import type { InjectionStatusView } from './inject.ts'
 import { DEFAULT_INJECT_MAX_EVERY, TemplateRuleError, TemplateStore } from './store.ts'
@@ -44,12 +51,29 @@ export interface Config {
   readonly injectEnabled?: boolean
   /** Upper bound accepted for a template's inject interval (`inject_every`). */
   readonly injectMaxEvery?: number
+  /** Event-triggered reminders; off by default and independent of `injectEnabled`. */
+  readonly eventInject?: {
+    readonly enabled?: boolean
+    readonly maxPerTurn?: number
+    readonly maxChars?: number
+    readonly maxAttempts?: number
+    readonly observationWindow?: number
+    readonly ignoreTools?: string[]
+  }
 }
 
 export const Config: s<Config> = s.object({
   dbPath: s.string(),
   injectEnabled: s.boolean().default(true),
   injectMaxEvery: s.number().default(DEFAULT_INJECT_MAX_EVERY),
+  eventInject: s.object({
+    enabled: s.boolean().default(DEFAULT_EVENT_INJECT_CONFIG.enabled),
+    maxPerTurn: s.natural().min(1).default(DEFAULT_EVENT_INJECT_CONFIG.maxPerTurn),
+    maxChars: s.natural().min(80).default(DEFAULT_EVENT_INJECT_CONFIG.maxChars),
+    maxAttempts: s.natural().min(1).default(DEFAULT_EVENT_INJECT_CONFIG.maxAttempts),
+    observationWindow: s.natural().min(10).default(DEFAULT_EVENT_INJECT_CONFIG.observationWindow),
+    ignoreTools: s.array(s.string()).default([]),
+  }).default({}),
 })
 
 /** Structural slice of the web-server service (route registration only). */
@@ -97,6 +121,9 @@ export function apply(ctx: Context, config: Config): void {
   // shares the route's store; it needs no web server, so headless profiles
   // inject too. The handle feeds the inject-status route (panel badge).
   const inject = registerAutoInject(ctx, { enabled: config.injectEnabled ?? true }, client)
+  // Event-triggered reminders: a separate observer + pre-step consumer,
+  // inert unless the deployment AND a rule policy turn them on.
+  registerEventInject(ctx, { ...DEFAULT_EVENT_INJECT_CONFIG, ...config.eventInject }, () => client().events)
 
   let routesRegistered = false
   const registerRoutes = (): void => {
@@ -166,6 +193,35 @@ async function handle(
       if (sessionId === null || sessionId === '') return json(res, 400, errorBody('bad-request', 'missing session_id'))
       return json(res, 200, { status: injectStatus(sessionId), history: injectHistory(sessionId) })
     }
+    // Event-reminder audit surface: policies and per-session episodes. A
+    // resolution must carry evidence references; self-reports are refused.
+    if (resource === 'event-policies') {
+      if (rest.length === 0 && method === 'GET') return json(res, 200, { items: client().events.policies() })
+      const ruleId = rest[0]
+      if (ruleId !== undefined && rest.length === 1 && method === 'PATCH') {
+        const body = await readJson(req)
+        const policy = client().events.updatePolicy(decodeURIComponent(ruleId), body as EventPolicyUpdate)
+        if (policy === undefined) return json(res, 404, errorBody('not-found', `event rule ${ruleId} not found`))
+        return json(res, 200, { policy })
+      }
+      return json(res, 405, errorBody('method-not-allowed', `${method} ${url.pathname}`))
+    }
+    if (resource === 'event-episodes') {
+      if (rest.length === 0 && method === 'GET') {
+        const sessionId = url.searchParams.get('session_id')
+        if (sessionId === null || sessionId === '') return json(res, 400, errorBody('bad-request', 'missing session_id'))
+        const events = client().events
+        return json(res, 200, { items: events.episodes(sessionId), outbox: events.outbox(sessionId) })
+      }
+      const episodeId = rest[0]
+      if (episodeId !== undefined && rest.length === 1 && method === 'PATCH') {
+        const body = await readJson(req)
+        const episode = client().events.resolveEpisode(decodeURIComponent(episodeId), body['state'], body['evidence_refs'], body['note'])
+        if (episode === undefined) return json(res, 404, errorBody('not-found', `episode ${episodeId} not found`))
+        return json(res, 200, { episode })
+      }
+      return json(res, 405, errorBody('method-not-allowed', `${method} ${url.pathname}`))
+    }
     if (resource !== 'templates') return json(res, 404, errorBody('not-found', url.pathname))
     if (rest.length === 0 && method === 'GET') {
       const items = client().list()
@@ -200,7 +256,7 @@ async function handle(
     }
     return json(res, 405, errorBody('method-not-allowed', `${method} ${url.pathname}`))
   } catch (error) {
-    if (error instanceof TemplateRuleError) {
+    if (error instanceof TemplateRuleError || error instanceof EventRuleError) {
       return json(res, 400, errorBody('rule-violation', error.message))
     }
     if (error instanceof MalformedBodyError) {

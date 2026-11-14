@@ -12,7 +12,7 @@ DSH（DeepSeek Harness）的提示词模板库插件：悬浮面板 + 右侧栏 
 
 ## 2. 架构速览
 
-- host 面（src/index.ts）：cordis 插件，node:sqlite 存储（schema v4：templates.mode 列，v1/v2/v3 单事务迁移），HTTP 路由 /plugins/dsh-prompt-templates/*（templates/categories CRUD + inject-status?session_id= → { status, history }），headless profile 无 web server 也能注入。
+- host 面（src/index.ts）：cordis 插件，node:sqlite 存储（schema v5：v4 的 templates.mode 列 + 事件提醒四张表，v1–v4 单事务迁移），HTTP 路由 /plugins/dsh-prompt-templates/*（templates/categories CRUD + inject-status?session_id= → { status, history }），headless profile 无 web server 也能注入。
 - 注入机制（src/inject.ts）：agent/pre-step 瀑布，边界轮（turn % every === 0）注入；幂等锚定在持久日志回扫（alreadyInjectedAtTurn 双源形状匹配），重启/重试不重注；InjectionTracker（内存）供 ⟳N 徽标轮询与历史下拉（每会话上限 20 条）。
 - visible 模式：renderVisibleInjectionMessage 走用户通道，聊天流以普通用户消息渲染，头标记 ⚙️ 定时注入。
 - client 面（src/client/*）：slots 注入（shell.overlay / conversation.input.right / sidebar.right.pane.tab）；CSS Modules 经 tsdown 内联；⟳N 徽标 30s 轮询，点开最近注入历史。
@@ -45,13 +45,13 @@ DSH（DeepSeek Harness）的提示词模板库插件：悬浮面板 + 右侧栏 
 | 5 | gitee 旧分支处置 | 随 gitee 冻结消解（2026-11-08 裁定） |
 | 6 | 下一版发布节奏 | 待属主裁决 |
 | 7 | drawio 类模板依赖外部技能 | 需要时另配工具 |
-| 8 | 事件触发提醒（docs/spec-event-inject.md） | 设计已评审（2026-11-14，开放问题按默认取向），待开工；首个提交先补空消息 step 追加的契约测试 |
+| 8 | 事件触发提醒（docs/spec-event-inject.md） | 已实现、未发布（默认关闭）；真实宿主与模型行为 NOT_RUN，待 Phase C 在独立 DSH_HOME 测试宿主验证 |
 
 ## 6. 知识沉淀在哪
 
 - ygl-trees 台账（本机 ygl-trees 工作区，项目 dsh-pt-rc2-review + 科技树 dsh-plugin-eng）：里程碑的 source/evidence/claim 与解锁依据。
 - docs/spec-template-auto-inject.md：定时注入机制 spec（file:line 引用）。
-- docs/spec-event-inject.md：事件触发提醒设计（已评审，未实现）。
+- docs/spec-event-inject.md：事件触发提醒设计与实现差异（第 9 节）。
 - 技能目录：dsh-plugin-dev-test（开发回路）、双 registry 发布、开源隐私纪律相关技能。
 
 ## 7. 红线（违反过一次的教训）

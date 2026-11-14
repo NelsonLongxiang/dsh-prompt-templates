@@ -435,3 +435,38 @@ test('client plugin loads against declared 0.2 slots, locale, and the sidebar ta
     await fiber.dispose()
   }
 })
+
+test('event reminders: the pinned tools package still emits tools/result with the fields the observer reads', () => {
+  const types = readFileSync(join(root, 'node_modules/@deepseek-ai/dsh-tools/lib/types/index.d.ts'), 'utf8')
+  assert.match(types, /'tools\/result'\(this: Scoped<\w+>, exec: Readonly<ToolExecution>, result: Readonly<ToolExecutionResult>\): undefined;/)
+  assert.match(types, /Listener failures are contained\./, 'the observer relies on contained listener faults')
+  /** One exported interface body with its doc comments stripped. */
+  const block = (name: string): string => {
+    const from = types.indexOf(`export interface ${name} {`)
+    assert.ok(from !== -1, `dsh-tools no longer exports ${name}`)
+    const body = types.slice(from, types.indexOf('\n}', from))
+    return body.replace(/\/\*\*[\s\S]*?\*\//g, '')
+  }
+  const fields = (name: string, expected: readonly string[]): void => {
+    const body = block(name)
+    for (const field of expected) assert.ok(body.includes(field), `${name} lost ${field}`)
+  }
+  fields('ToolExecutionInput', ['readonly callId: ToolCallId;', 'readonly name: string;', 'readonly arguments: unknown;', 'readonly agent?: Agent;', 'readonly parent?: ToolExecutionToken;'])
+  fields('ToolErrorInfo', ['name: string;', 'code: string;'])
+  fields('ToolFailure', ['message: string;', 'info?: ToolErrorInfo;'])
+  fields('ToolExecutionSuccess', ['readonly isError: false;', 'readonly meta?: JsonValue;'])
+  fields('ToolExecutionFailure', ['readonly isError: true;', 'readonly error: ToolFailure;', 'readonly meta?: JsonValue;'])
+})
+
+test('event reminders: DSH itself appends to a later step whose claimed batch is empty', () => {
+  // The event consumer appends a reminder to tool-result steps, where the
+  // claimed inbox batch is usually empty. The pinned agent package ships a
+  // first-party pre-step listener (model-switch notice) that does exactly
+  // this: it only skips when there is nothing to add AND the step is the
+  // first one or carries claimed messages. If that precedent disappears,
+  // re-verify the host before relying on empty-step appends.
+  const agentLib = readFileSync(join(root, 'node_modules/@deepseek-ai/dsh-agent/lib/index.js'), 'utf8')
+  assert.match(agentLib, /agentCtx\.on\("agent\/pre-step", async \(\{ agent, messages, signal, step \}, next\) => \{/)
+  assert.ok(agentLib.includes('if (decision.messages.length === 0 && (step === 1 || messages.length > 0)) return decision;'))
+  assert.match(agentLib, /messages: \[\.\.\.decision\.messages, modelSwitchNotice\(previous, selected\)\]/)
+})
