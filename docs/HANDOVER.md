@@ -1,6 +1,6 @@
 # dsh-prompt-templates 交接文档（HANDOVER）
 
-> 面向：接手本插件维护的下一个会话/开发者。状态截至 2026-11-08；权威状态以 git log、npm registry 与 ygl-trees 台账为准，本文只是导航。
+> 面向：接手本插件维护的下一个会话/开发者。状态截至 2026-11-14；权威状态以 git log、npm registry 与 ygl-trees 台账为准，本文只是导航。
 
 ## 1. 项目一句话与当前状态
 
@@ -17,6 +17,7 @@ DSH（DeepSeek Harness）的提示词模板库插件：悬浮面板 + 右侧栏 
 - visible 模式：renderVisibleInjectionMessage 走用户通道，聊天流以普通用户消息渲染，头标记 ⚙️ 定时注入。
 - client 面（src/client/*）：slots 注入（shell.overlay / conversation.input.right / sidebar.right.pane.tab）；CSS Modules 经 tsdown 内联；⟳N 徽标 30s 轮询，点开最近注入历史。
 - 同步 CLI（src/cli/*）：快照 schema 4（兼容导入 v2/v3），export/import/diff/merge，内容哈希 + dry-run/confirm 门。
+- 跨实例分享（src/client/share.ts，0.13.3）：剪贴板载荷 format/version 1/kind=templates，版本不符即拒绝；0.13.4 起导入与同名覆盖都不开启目标的定时注入开关（间隔与模式保留）。
 
 ## 3. 开发回路
 
@@ -33,22 +34,24 @@ DSH（DeepSeek Harness）的提示词模板库插件：悬浮面板 + 右侧栏 
 4. 推 master + tag 到 github（单端）；GitHub Release（gh release create）
 5. 隐私红线：公开面推送前过四层排查（跟踪文件/内容 grep 内网信息与机器路径/提交消息/Co-Authored-By 尾行）——历史为此做过一次全量改写。提交尾行不加 AI Co-Authored-By。
 
-## 5. 待办（2026-11-08 刷新）
+## 5. 待办（2026-11-14 刷新）
 
 | # | 事项 | 状态 |
 |---|---|---|
 | 1 | inject history UI（⟳N 徽标历史下拉） | 已落地 |
-| 2 | template variables 模板变量替换 | 队首，未开工 |
+| 2 | template variables 模板变量替换 | 已落地（0.13.2：`{{date}}` `{{time}}` `{{datetime}}` `{{weekday}}` `{{session}}` `{{turn}}`，投递时展开） |
 | 3 | 畸形 JSON → 400 bad-request | 已落地 |
 | 4 | DSH 0.2.x 契约测试护栏（原 PR#3） | 已落地 |
 | 5 | gitee 旧分支处置 | 随 gitee 冻结消解（2026-11-08 裁定） |
 | 6 | 下一版发布节奏 | 待属主裁决 |
 | 7 | drawio 类模板依赖外部技能 | 需要时另配工具 |
+| 8 | 事件触发提醒（docs/spec-event-inject.md） | 设计候选，待评审；评审前不写代码 |
 
 ## 6. 知识沉淀在哪
 
 - ygl-trees 台账（本机 ygl-trees 工作区，项目 dsh-pt-rc2-review + 科技树 dsh-plugin-eng）：里程碑的 source/evidence/claim 与解锁依据。
-- docs/spec-template-auto-inject.md：注入机制 spec（file:line 引用）。
+- docs/spec-template-auto-inject.md：定时注入机制 spec（file:line 引用）。
+- docs/spec-event-inject.md：事件触发提醒设计候选（未实现，评审后才开工）。
 - 技能目录：dsh-plugin-dev-test（开发回路）、双 registry 发布、开源隐私纪律相关技能。
 
 ## 7. 红线（违反过一次的教训）
