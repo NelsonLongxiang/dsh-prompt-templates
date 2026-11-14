@@ -504,7 +504,10 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
         session_id: incoming.scope === 'session' ? sessionId : null,
         description: incoming.description,
         category: incoming.category,
-        inject_enabled: incoming.inject_enabled,
+        // Import never silently enables scheduled injection — the interval
+        // and mode survive so a manual toggle starts it as configured, but
+        // the switch itself stays off until the user turns it on.
+        inject_enabled: false,
         inject_every: incoming.inject_every,
         mode: incoming.mode,
       })
@@ -516,7 +519,8 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
           content: pair.incoming.content,
           description: pair.incoming.description,
           category: pair.incoming.category,
-          inject_enabled: pair.incoming.inject_enabled,
+          // Overwrite updates content and placement, never the inject switch:
+          // the target's own on/off state survives the sync.
           inject_every: pair.incoming.inject_every,
           mode: pair.incoming.mode,
         })

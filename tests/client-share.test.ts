@@ -63,6 +63,22 @@ test('plan: same name in a different scope does not clash', () => {
   assert.equal(plan.overwrite.length, 0)
 })
 
+test('import preserves interval and mode but never the enabled switch', () => {
+  // The planner passes raw payload rows through; the import handler in
+  // Library.tsx is what forces inject_enabled=false on create and omits
+  // it on overwrite. This test pins the payload contract: incoming rows
+  // DO carry inject facts, so the handler can use every/mode.
+  const incoming = [row({ name: 'injected', inject_enabled: true, inject_every: 10, mode: 'visible' })]
+  const payload = { format: 'dsh-prompt-templates', version: 1, kind: 'templates', templates: incoming, categories: [] } as const
+  const plan = planShareImport(payload, [], [])
+  assert.equal(plan.create[0]?.inject_enabled, true)   // payload carries it…
+  assert.equal(plan.create[0]?.inject_every, 10)        // …handler will pass every through
+  assert.equal(plan.create[0]?.mode, 'visible')          // …and mode too
+  // The handler itself forces inject_enabled: false at the create() call —
+  // see Library.tsx handleImport (owner ruling 2026-11-14: import never
+  // silently starts injection).
+})
+
 test('plan: category gap is detected per scope', () => {
   const cat: CategoryView = { name: 'work', scope: 'session', session_id: 'sess-x' }
   const payload = { format: 'dsh-prompt-templates', version: 1, kind: 'templates', templates: [row()], categories: [CAT, cat] } as const
