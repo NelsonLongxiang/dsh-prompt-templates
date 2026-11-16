@@ -33,7 +33,9 @@ dsh plugin --profile web add @nelsonlongxiang/dsh-prompt-templates
 ## 分享（跨实例复制）
 
 - 行内 ⧉ 按钮分享**单模板**；类目 tab 旁 ⧉ 分享**整类目**（成员模板 + 类目定义）
-- 载荷是自描述 JSON（`format`/`version` 标记），经剪贴板传递，无需文件与网络
+- **分享模板 JSON / 分享分类 JSON** 传递带 `format`/`version` 标记的分享载荷，不是单独的提示词正文；无文件、无网络。
+- 自动复制先用浏览器 Clipboard API，再尝试兼容复制命令；两者都失败时展示只读的**手动复制分享 JSON** 面板，保留完全相同的载荷。全选后按 Ctrl+C / ⌘C，再粘贴到目标实例的导入框。面板区分 API 缺失、页面未聚焦、写入拒绝和安全限制，不据此判断系统剪贴板损坏。
+- 限制取决于浏览器与页面环境：普通局域网 HTTP 可能缺该 API；`http://127.0.0.1` 等回环来源虽用 HTTP 也可能属于可信来源。无需修改全局安全设置，也不会读取剪贴板。
 - 目标实例工具栏「导入」粘贴解析：缺失类目自动补建；**同名同域模板弹覆盖确认**——覆盖＝更新现有模板（内容/描述/分类/注入配置），拒绝＝跳过；完成提示「新建/覆盖/跳过」三计数
 - 分享的是**原始文本**：`{{date}}`/`{{turn}}` 等变量在目标实例投递时按其上下文重新展开
 
@@ -53,7 +55,7 @@ dsh plugin --profile web add @nelsonlongxiang/dsh-prompt-templates
 - 两级开关串联，默认全关：部署级总开关 `eventInject.enabled`，加上每条规则自己的开关——面板 ⚙ 下拉可管理规则开关、门槛/冷却与只读问题台账；总开关本体留在部署配置里
 - 介入时机：工具结果落地之后、**同轮下一次模型决策之前**追加提醒。它拦不住首次违规，也撤销不了已发生的副作用或已并行发出的兄弟调用
 - 存的是什么：指纹（哈希）加一条长度受限、启发式脱敏的参数摘要。不整存原始参数/输出，但摘要仍可能带上未被掩码的参数片段；摘要永不作为指令或授权
-- 失败类别只取结构化字段（`isError` / 错误码），不从输出文字猜。注意现行契约：`isError: false` 的工具结果即使元数据里带非零退出码也计为 `ok`（跟踪见 issue #11）
+- 失败分类优先取 `isError` 及错误码，再取整数 `meta.exitCode`（含零）；只有元数据没有有效退出码时，`bash` 适配才读取最后一个文本片段的精确尾行 `[exit code: N]`。输出里的成功／失败等任意措辞不改变分类；命令也能自行打印同形标记，因此回退存在误报可能。`ok` 仅代表工具层完成，不等于任务已验证成功。字段优先级、记录宿主限制与未测项见[失败契约](docs/event-failure-contract.md)。
 - 有预算：默认每个**用户轮**最多一条（长自治轮因此最多一条）、有字数上限、每条规则有冷却（默认 3 轮）、每个问题有次数上限；没有新证据就不提醒
 - 投递是"至少一次 + 按会话日志去重"，重启或步骤被拒都不会丢失或重复
 - 插件只把问题标到 `notified`。`changed` / `repeated` 只是弱行为信号不是结论：同工具跑一条无关命令也可能翻转它。结案（`verified`、`rejected` 等）走 `PATCH …/event-episodes/<id>`，必须带证据引用——只有完整轨迹复核才算验证完成
@@ -72,7 +74,7 @@ dsh plugin --profile web add @nelsonlongxiang/dsh-prompt-templates
 ```text
 src/                  TypeScript 插件（host 面 + 浏览器面）
   index.ts            Host：持有 TS 存储，暴露 HTTP 路由
-  store.ts            纯 TS 模板存储（node:sqlite，schema v3）
+  store.ts            纯 TS 存储（node:sqlite，数据库 schema v5）
   inject.ts           Host：挂在 pre-step waterfall 上的定时注入
   invariant.ts        Host：注册本包的 invariant 伴生插件
   cli/                随 bin 发布的同步 CLI（export/diff/merge/import）
@@ -111,7 +113,7 @@ dsh-prompt-templates import --db /path/to/db.sqlite3 --in merged.json --apply \
   --expect-db-sha256 <db-sha256> --confirm-summary-hash <dry-run-summary-sha256> --output=json
 ```
 
-`import` 仅按模板 ID 插入/更新，绝不自动删除；未知字段、错误 schema、hash 漂移、同名异 ID，以及超过 `--max-changes`（默认 100）的变更均阻断。schema-v2 快照（无注入字段）仍可导入——注入项默认关闭；导出恒为 v3。
+`import` 仅按模板 ID 插入/更新，绝不自动删除；未知字段、错误 schema、hash 漂移、同名异 ID，以及超过 `--max-changes`（默认 100）的变更均阻断。schema-v2 快照（无注入字段）仍可导入——注入项默认关闭；导出恒为 schema v4（仅模板与类目，不含事件策略及运行状态）。
 
 ## 目录定义
 
@@ -121,7 +123,7 @@ dsh-prompt-templates import --db /path/to/db.sqlite3 --in merged.json --apply \
 |---|---|
 | `src/` | 宿主插件、CLI 与浏览器客户端源码 |
 | `scripts/` | 可重跑运维入口：`patrol.sh`、`branch-audit.sh`、`remote-heads.sh`、`push-master.sh`、`release.sh` |
-| `docs/` | 面向人的文档：spec、发布说明、交接指南 |
+| `docs/` | 面向人的文档：spec、发布说明、交接指南；npm 包仅携带白名单明确列出的使用／验收说明 |
 | `tests/` | `pnpm verify` 背后的 `node:test` 套件 |
 | `images/` | README 引用的静态图 |
 | `tmp/<任务>/` | 已忽略的临时区；自动测试经 `tests/temp-dir.mjs` 使用 `tmp/test-runs/`；限任务生命周期，永不入库 |
@@ -145,13 +147,15 @@ pnpm verify:release    # pnpm verify 的别名
 
 GitHub Actions（`.github/workflows/verify.yml`）在指向 `master` 的 push / pull request 以及 `v*` tag 上用 Node 24 跑同一命令。`test:cli` 还含 DSH 0.2.x 契约测试（peer 版本线 / patch 沙箱 / store 真执行 / slot 声明 / 图标导出），上游漂移当场爆红。仓库 `scripts/` 提供运维稳定入口（分支预算审计 / 吸收分类 / 隐私排查推送）。`@deepseek-ai/*` devDependencies 来自公网 npm，CI 不需要 registry token，也不需要 harness 检出。
 
+构建后运行 `node tests/clipboard-browser.mjs zh`（或 `en`）可生成自包含分享测试页，内含合成复制场景和只读环境检查；隐私边界与 macOS 复验步骤见[复制验收说明](docs/clipboard-verification.md)。生成/解析页面不等于浏览器验收。
+
 仍需人工、因为它们依赖真实 harness profile：启动 `dsh web`、浏览器面板对接真实 web server，以及用真实会话日志验证 resume / compaction。
 
 ## 已知限制
 
 - **会话模板需要当前会话**——无会话打开时只能用全局模板
 - **注入不在对话流中渲染**——DSH 对话视图按设计省略注入的 context 行（消息 source 非 `user`）；可在轨迹 tab 查看。交付模式为"对话流可见"的模板是例外：以普通用户消息渲染
-- **请从 npm registry 安装，不要装 Git URL**——插件编译对照 DSH harness 源码，公网 `@deepseek-ai/*` npm 快照落后于 harness 本体，`pnpm add github:<user>/<repo>` 会在 prepare 构建步失败。请用 `dsh plugin --profile <name> add @nelsonlongxiang/dsh-prompt-templates`
+- **正式使用优先安装 npm 发布构建**——Git／源码安装会执行 `prepare` 构建，需要开发工具链和依赖。本仓所述验证门禁使用公网 `@deepseek-ai/*` 包，不需要 harness 源码检出；该门禁没有验证直接 Git-URL 安装。使用预构建包请运行 `dsh plugin --profile <name> add @nelsonlongxiang/dsh-prompt-templates`。
 
 ## 许可证
 

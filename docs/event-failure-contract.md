@@ -1,57 +1,46 @@
 # Event-reminder tool-result failure contract
 
-Status: recorded from a real host, pinned to one DSH build.
-Baseline: `@deepseek-ai/dsh` **0.2.2-rc.3** global install (`D:\node-v24.12.0-win-x64\node_modules\@deepseek-ai\dsh`),
-host `web --port 3081` on Windows (bash tool executes through PowerShell), plugin `dsh-prompt-templates` @ master with the
-event observer enabled. Captured 2026-11-16 from the durable session log (`session.v4.jsonl.zstd`, event `tool/result`).
+Status: recorded from a real Windows test host at published DSH version **0.2.2-rc.3**.
+The source commit SHA of that installed build was not captured. This is a version/platform-scoped record, not proof of source-SHA pinning or compatibility with every 0.2.x build.
+The isolated host ran `web --port 3081`, with event observation explicitly enabled. Samples were recorded on 2026-11-16 from its durable session log (`session.v4.jsonl.zstd`, event `tool/result`).
 
-## What the host actually emits
+## Recorded host samples
 
-Six calls were run: `exit 0`, `exit 1`, `exit 3`, `exit 7`, a PowerShell parse error (`[`), and a normal command.
+The recorded cases were exit 0, exit 1, exit 3, exit 7, a lone `[` command, and a normal command. Only the observed fields below are claimed; the marker alone does not identify the shell failure cause.
 
-| Command outcome | `message.isError` | `message.content` (text parts) | `message.meta` | `message.error` |
+Fields below are under `event.data`: `message` carries the tool message, and `meta` is a sibling, **not** `message.meta`. The live `tools/result` listener and the durable event are different surfaces.
+
+| Recorded case | `message.isError` | `message.content` text | `meta` | `message.error` |
 |---|---|---|---|---|
-| success (exit 0) | `false` | `(no output)` | `{ cwd }` | absent |
-| non-zero exit (1/3/7) | **`false`** | `(no output)\n[exit code: 1]` | `{ cwd }` | absent |
-| parse error (`[`) | **`false`** | `(no output)\n[exit code: 1]` | `{ cwd }` | absent |
+| success / exit 0 | `false` | `(no output)` | `{ cwd }` | absent |
+| exit 1/3/7 | `false` | `(no output)\n[exit code: 1]` | `{ cwd }` | absent |
+| lone `[` command | `false` | `(no output)\n[exit code: 1]` | `{ cwd }` | absent |
 
-Two facts matter:
+No structured exit code was present in these samples, and `isError` remained false even for the non-zero commands. The exit-1/3/7 samples all carried marker `1`. This does **not** establish that every command, shell, platform or host build collapses all non-zero codes to 1.
 
-1. **`meta` carries no exit code** — the only key observed is `cwd`. `meta.exitCode` never appears on this build, so the
-   plugin's `exitCodeOf` returns `null` for every observation (verified against the observation table: six rows, all `NULL`).
-2. **`isError` stays `false` for non-zero child exits** — the failure signal is the tool's own trailing marker line
-   `[exit code: N]` in the last text part of `content`. This host normalises every non-zero exit to `1`.
+Before the adapter, these command failures were classified `ok`; their observation `exit_code` values were null. The `isError: true` / `error.info.code` branch is covered by synthetic fixtures, not by a real tool exception in this recording.
 
-Consequence before the adaptation below: every command failure on this host was classified `ok`, so the repeated-failure
-detector could never fire on a real failing command. Tool-level exceptions (schema/argument errors thrown by the host
-itself) do still arrive as `isError: true` with `error.info.code`.
+## Current classification priority
 
-## Adaptation (what the plugin now recognises)
+1. `isError: true` selects `error:<error.info.code>`, or `error:unknown` when the code is absent.
+2. An integer `meta.exitCode` decides the exit path: non-zero selects `error:exit:<code>`; **zero selects `ok` and suppresses a conflicting text marker**. This structured shape is supported by fixtures but was not observed on the recorded host.
+3. Only when metadata has no valid integer exit code, the `bash` adapter checks the last non-whitespace line of the last text part for `[exit code: N]`: non-zero selects `error:exit:<N>`, zero selects `ok`. Other tools ignore this text marker.
+4. Otherwise the result is `ok`, including when exit data is missing or invalid.
 
-Field priority for the outcome class, highest first:
+`ok` means **tool-layer completion**, not verified task success. A command can exit zero without accomplishing its task; this plugin does not infer business success. A valid metadata zero is different from a missing or string-valued exit code.
 
-1. `isError: true` → `error:<error.info.code>`, or `error:unknown` when the code is absent — unchanged.
-2. `meta.exitCode` present and non-zero → `error:exit:<code>` — this is the shape the host *may* emit on other builds;
-   it wins over the marker because it is structured.
-3. `bash`-tool content whose **last line of the last text part** matches exactly `[exit code: N]` with `N != 0` →
-   `error:exit:<N>`.
-4. otherwise → `ok`.
+## Boundaries
 
-`ok` means **tool-layer ok**, not task success. A command that exits 0 while failing its actual goal still records `ok`;
-this plugin cannot know better and does not pretend to.
+- The marker is an unauthenticated text fallback, not a structured field. A command can print a lookalike marker and cause a false positive. The adapter cannot prove whether the shell or command emitted the line.
+- Arbitrary output wording such as success/failure does not affect the result. Do not broaden the adapter into mixed-output keyword matching.
+- Classification does not persist output bodies. The observer stores derived outcome/exit-code fields, fingerprints, and a length-bounded, heuristically redacted **argument** summary. Unmasked argument fragments can remain; redaction is not a no-secrets guarantee.
+- A reminder is advisory, not a new instruction, permission, hard guard, independent verification or production enablement.
+- A different build may move or omit the marker. Re-record against the actual version, platform and available source SHA before claiming support.
 
-## Boundaries and known limits
+## Verification levels
 
-- The marker is text the tool appends, not a field; it is matched only in its exact trailing form, only for the `bash`
-  tool, and only when no structured field already decided. A command that deliberately prints `[exit code: 1]` as its
-  last output line can therefore provoke a reminder. Reminders are advisory: a false positive costs one short message,
-  never a permission or a state change.
-- Wording such as "success" or "failure" in the command output does not change the classification.
-- Any other host build may move or drop the marker; re-record the contract against its SHA before trusting it.
-- Recorded evidence: `docs/`-adjacent note in issue #11; no raw command output or environment values are kept.
-
-## Verification level
-
-- Contract recording: real host, PASS (six calls above).
-- Unit/fixture coverage: `tests/event-features.test.ts` and the detector tests.
-- Live end-to-end (reminder actually delivered for a real failing command): recorded separately on the 3081 test host.
+- Historical test-host contract recording: the samples above were observed. The original host source SHA is unknown.
+- Pure fixture coverage: `tests/event-features.test.ts`, including metadata-zero precedence, conflicting marker, CRLF marker, tool scoping and output exclusion from argument summaries.
+- Historical end-to-end reminder delivery was recorded separately on test host 3081 (issue #11 history), not by these unit tests.
+- Real tool exception, timeout, cancellation, Linux/macOS and different host versions: **NOT_RUN / not covered** by this recording.
+- Unit fixtures and historical host observations do not constitute an independent OPS acceptance or an all-platform PASS.

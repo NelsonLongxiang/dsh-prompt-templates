@@ -4,10 +4,11 @@
  * storage, so the extraction can be replayed offline and tested exhaustively.
  *
  * What is kept: the tool name, two fingerprints (the shared "preparation"
- * part of the arguments and the task-specific "target" part), a structured
- * outcome class, and a short redacted summary for audit and reminder text.
- * What is never kept: raw arguments, output content, environment values,
- * tokens or passwords.
+ * part of the arguments and the task-specific "target" part), an outcome
+ * class, and a bounded, heuristically redacted summary for audit/reminders.
+ * Full raw arguments and output bodies are not persisted. The summary can
+ * retain unmasked argument fragments; redaction is not a no-secrets guarantee.
+ * The pinned bash adapter may read a trailing exit marker, never persist it.
  *
  * @module dsh-prompt-templates/event-features
  */
@@ -24,9 +25,9 @@ export interface ObservationFeatures {
   readonly stableFingerprint: string
   /** Hash of the task-specific remainder of the arguments. */
   readonly targetFingerprint: string
-  /** `ok`, `error:<code>` or `error:unknown`; from structured fields only. */
+  /** `ok`, `error:<code>` / `error:exit:<N>` or `error:unknown`; see the failure contract. */
   readonly outcome: string
-  /** Structured exit code when the tool reports one in `meta`, else null. */
+  /** Integer meta exit code, or the pinned bash trailing-marker fallback; otherwise null. */
   readonly exitCode: number | null
   /** Short redacted summary for audit views and reminder text. */
   readonly summary: string
@@ -180,7 +181,7 @@ export function exitMarkerOf(content: unknown): number | null {
   return Number.isInteger(code) ? code : null
 }
 
-/** Structured exit code when the result carries one — meta wins, marker is the bash fallback. */
+/** Exit code priority: integer metadata (including zero), then the bash-only trailing marker. */
 export function structuredExitCode(toolName: string, result: ToolOutcomeProbe): number | null {
   const fromMeta = exitCodeOf(result.meta)
   if (fromMeta !== null) return fromMeta
@@ -189,9 +190,9 @@ export function structuredExitCode(toolName: string, result: ToolOutcomeProbe): 
 }
 
 /**
- * Outcome class. Priority: `isError` (structured) → structured non-zero exit
- * code (meta, then the bash trailing marker) → `ok`. `ok` means tool-layer ok,
- * not task success. Wording inside output text never decides.
+ * Outcome class. Priority: `isError` → integer meta exit code → bash trailing
+ * marker → `ok`. Metadata zero suppresses a conflicting marker. `ok` means
+ * tool-layer completion, not task success; arbitrary output wording is ignored.
  */
 export function outcomeClass(toolName: string, result: ToolOutcomeProbe): string {
   if (result.isError) {

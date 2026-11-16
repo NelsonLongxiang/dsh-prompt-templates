@@ -33,7 +33,9 @@ No Python toolchain required — since 0.3.0 the host half persists templates th
 ## Sharing (cross-instance copy)
 
 - The row ⧉ button shares **one template**; the category tab ⧉ shares **a whole category** (member templates + the category definition)
-- The payload is self-describing JSON (`format`/`version` markers) carried over the clipboard — no files, no network
+- The **Share template JSON / Share category JSON** buttons share a self-describing payload (`format`/`version` markers), not just the prompt body. No files or network are used.
+- Automatic copying tries the browser Clipboard API first, then a compatibility copy command. If both fail, a read-only **Copy share JSON manually** panel preserves exactly the same payload: select all, press Ctrl+C / ⌘C, and paste into the target instance Import box. The panel distinguishes unavailable API, unfocused page, denied write and security restriction; it does not diagnose a damaged system clipboard.
+- Clipboard restrictions depend on the browser/context. Plain LAN HTTP may lack the API; loopback origins such as `http://127.0.0.1` can be trustworthy despite HTTP. No global security changes or clipboard-reading permission are needed.
 - Paste into the toolbar **Import** box on the target instance: missing categories are created, and **same-name same-scope templates raise an explicit overwrite confirm** — overwrite updates the existing row (content/description/category/inject facts), declining skips; the result reports created/overwritten/skipped counts
 - What is shared is the **raw text**: `{{date}}`/`{{turn}}` re-expand at delivery on the receiving instance
 
@@ -50,10 +52,10 @@ Each template (global or session-scoped) carries its own **switch + interval N**
 
 Besides fixed rounds, the plugin can remind the agent **because of what just happened**. It watches final tool results, detects two problems — **repeated preparation** (the same hand-built prefix such as environment variables plus an absolute interpreter path, with different tasks) and **repeated failure** (the same target failing the same way, or failing again after it had succeeded) — and appends one short reminder before the next model decision, including the tool-result steps that scheduled injection skips.
 
-- Two switches in series, both off by default: the deployment-level master `eventInject.enabled`, then each rule's own toggle — both are manageable in the panel's ⚙ dropdown (rule toggles, threshold/cooldown, read-only episode ledger); the master switch itself stays in deployment config
+- Two switches in series, both off by default: the deployment master `eventInject.enabled`, then each rule's toggle. The panel's ⚙ dropdown displays the master switch **read-only** and manages rule toggles, threshold/cooldown, and the read-only episode ledger; changing the master switch still requires deployment configuration.
 - Timing: observation happens after a tool result; the reminder is appended before the **next model decision in the same turn**. It cannot block a first violation, and cannot undo side effects or already-issued sibling parallel calls
 - What is stored: fingerprints (hashes) plus a length-bounded, heuristically redacted summary of the arguments. Raw arguments/output are not stored wholesale, but the summary may still carry argument fragments the redaction did not mask; it is never treated as an instruction or authorization
-- Failure classes come from structured fields only (`isError` / error codes), never from output text. Note the current contract: a tool result with `isError: false` counts as `ok` even when a non-zero exit code rides along in metadata (see issue #11 for the follow-up)
+- Failure classification prioritizes `isError` and its error code, then an integer `meta.exitCode` (including zero). Only when metadata has no valid exit code does the `bash` adapter read the exact trailing `[exit code: N]` marker from the last text part. Arbitrary output words such as success or failure do not decide the result. A command can print a lookalike marker, so this fallback can produce a false positive; `ok` means tool-layer completion, not verified task success. See the [failure contract](docs/event-failure-contract.md) for priority, recorded-host limits, and untested cases.
 - Budgeted: one reminder per **user turn** by default (long autonomous turns therefore get at most one), a character cap, a per-rule cooldown (3 turns by default), and a per-problem limit; no new evidence, no reminder
 - Delivery is at-least-once with dedup against the session log, so restarts and rejected steps neither lose nor duplicate a reminder
 - The plugin only marks a problem `notified`. The `changed` / `repeated` field is a weak behavioral hint, not a verdict: an unrelated command on the same tool can flip it. Closing an episode (`verified`, `rejected`, …) goes through `PATCH …/event-episodes/<id>` and requires evidence references — only a full-trajectory review counts as verification
@@ -72,7 +74,7 @@ Placeholders `{{date}}` `{{time}}` `{{datetime}}` `{{weekday}}` `{{session}}` `{
 ```text
 src/                  TypeScript plugin (host half + browser half)
   index.ts            Host: owns the TS store, exposes the HTTP routes
-  store.ts            Pure-TS template store over node:sqlite (schema v3)
+  store.ts            Pure-TS store over node:sqlite (database schema v5)
   inject.ts           Host: scheduled auto-injection on the pre-step waterfall
   invariant.ts        Host: registers the package's invariant companion
   cli/                The sync CLI (export/diff/merge/import) shipped as bin
@@ -112,7 +114,7 @@ dsh-prompt-templates import --db /path/to/db.sqlite3 --in merged.json --apply \
   --expect-db-sha256 <db-sha256> --confirm-summary-hash <dry-run-summary-sha256> --output=json
 ```
 
-`import` inserts/updates by template id and never prunes rows. It rejects unknown snapshot fields, unsupported schemas, mismatched hashes, same-name/different-id conflicts, and changes above `--max-changes` (default 100). Schema-v2 snapshots (pre-auto-inject) still import — the inject facts default to off; exports are always v3.
+`import` inserts/updates by template id and never prunes rows. It rejects unknown snapshot fields, unsupported schemas, mismatched hashes, same-name/different-id conflicts, and changes above `--max-changes` (default 100). Schema-v2 snapshots (pre-auto-inject) still import — the inject facts default to off; exports are always schema v4 (templates/categories only, not event policies or runtime state).
 
 ## Repository layout
 
@@ -122,7 +124,7 @@ Declared layout — anything outside this allowlist at the repo root is scatter,
 |---|---|
 | `src/` | Host plugin, CLI, and browser-client sources |
 | `scripts/` | Rerunnable ops entries: `patrol.sh`, `branch-audit.sh`, `remote-heads.sh`, `push-master.sh`, `release.sh` |
-| `docs/` | Human-facing documents: specs, release notes, handover |
+| `docs/` | Human-facing documents: specs, release notes, handover; the npm package ships only the explicitly listed user/acceptance guides |
 | `tests/` | `node:test` suites behind `pnpm verify` |
 | `images/` | Static assets referenced by the READMEs |
 | `tmp/<task>/` | Git-ignored scratch; automated tests use `tmp/test-runs/` via `tests/temp-dir.mjs`; task lifetime only, never in git |
@@ -144,7 +146,9 @@ pnpm verify:release    # alias of pnpm verify
 3. **build** — host `tsc`, client `tsc`, and the tsdown browser bundle
 4. **test:package** — every CSS module class is present in `lib/client.js`, then `npm pack` and the packed `dsh-prompt-templates --help` shim
 
-GitHub Actions (`.github/workflows/verify.yml`) runs the same command on pushes and pull requests to `master`. `test:cli` also carries the DSH 0.2.x contract tests (peer version line, patch sandbox, real store execution, slot declarations, icon exports) — upstream drift fails the gate. Repo `scripts/` hold the ops stable entries (branch-budget audit, absorption classification, privacy-checked push). and on `v*` tags, with Node 24. The `@deepseek-ai/*` devDependencies are public npm packages, so CI needs no registry token and no harness checkout.
+GitHub Actions (`.github/workflows/verify.yml`) runs the same command with Node 24 on pushes and pull requests to `master` and on `v*` tags. `test:cli` also carries the DSH 0.2.x contract tests (peer version line, patch sandbox, real store execution, slot declarations, icon exports) — upstream drift fails the gate. Repo `scripts/` hold the stable ops entries (branch-budget audit, absorption classification, privacy-checked push). The `@deepseek-ai/*` devDependencies are public npm packages, so CI needs no registry token and no harness checkout.
+
+A self-contained sharing test page can be generated with `node tests/clipboard-browser.mjs en` (or `zh`) after build. It includes synthetic copy scenarios and read-only environment checks; see [clipboard verification](docs/clipboard-verification.md) for privacy boundaries and macOS acceptance steps. Generating/parsing the page is not browser acceptance.
 
 Still manual, because they need a live harness profile: booting `dsh web`, the browser panel against the real web server, and resume or compaction against a real session log.
 
@@ -152,7 +156,7 @@ Still manual, because they need a live harness profile: booting `dsh web`, the b
 
 - **Session templates need a current session** — with no session open, only global templates are reachable
 - **Injections don't render in the chat transcript** — the DSH chat view omits injected context rows by design (they carry a non-`user` message source); see them in the trajectory tab. Templates with delivery mode **visible** are the exception: they render as ordinary user messages
-- **Install from the npm registry, not from a Git URL** — the plugin compiles against the DSH harness checkout; `pnpm add github:<user>/<repo>` fails at the prepare build step because the published `@deepseek-ai/*` npm snapshots lag the harness source. Use `dsh plugin --profile <name> add @nelsonlongxiang/dsh-prompt-templates` instead
+- **Use the published npm build for normal installation** — Git/source installations run a `prepare` build and require the development toolchain and dependencies. The documented verification gate uses public `@deepseek-ai/*` packages and requires no harness source checkout; direct Git-URL installation is not verified by that gate. Use `dsh plugin --profile <name> add @nelsonlongxiang/dsh-prompt-templates` for a prebuilt package.
 
 ## License
 

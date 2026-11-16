@@ -14,6 +14,8 @@ import type { EventEpisodeWire, EventPolicyWire } from './api.ts'
 import type { TemplateLibraryFace } from './slots.ts'
 import { filterTemplateRows, searchableTemplateRows } from './filter.ts'
 import { buildSharePayload, parseSharePayload, planShareImport } from './share.ts'
+import { copyShareText } from './clipboard.ts'
+import type { ShareCopyResult } from './clipboard.ts'
 import { GITHUB_REPOSITORY_URL, PLUGIN_VERSION, templateCountLabel } from './meta.ts'
 import type { PromptTemplateKey } from './locales.ts'
 import css from './Panel.module.css'
@@ -31,7 +33,7 @@ interface RowProps {
   onEdit: (id: string) => void
   onDelete: (id: string) => void
   /** Copy the row as a one-template clipboard share payload. */
-  onShare: (template: TemplateView) => void
+  onShare: (template: TemplateView, trigger: HTMLButtonElement) => void
   onMakeGlobal?: (id: string) => void
   /** Flip the row's auto-inject switch (rows without an interval route to the edit form). */
   onToggleInject: (template: TemplateView) => void
@@ -95,7 +97,7 @@ function TemplateRow({ template, onInsert, onSend, onInterject, onEdit, onDelete
       <button
         type="button"
         className={css.shareBtn}
-        onClick={() => { onShare(template) }}
+        onClick={(event) => { onShare(template, event.currentTarget) }}
         aria-label={t('panel.share')}
         title={t('panel.share')}
       >
@@ -484,26 +486,52 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
   const [showImport, setShowImport] = useState(false)
   const [importText, setImportText] = useState('')
   const [importBusy, setImportBusy] = useState(false)
+  const [manualShare, setManualShare] = useState<Extract<ShareCopyResult, { ok: false }> | null>(null)
+  const shareField = useRef<HTMLTextAreaElement>(null)
+  const shareOpener = useRef<HTMLElement | null>(null)
+  const shareRequest = useRef(0)
+  useEffect(() => {
+    shareRequest.current += 1
+    shareOpener.current = null
+    setManualShare(null)
+    return () => { shareRequest.current += 1 }
+  }, [sessionId])
   useEffect(() => {
     if (notice === null) return
     const timer = setTimeout(() => { setNotice(null) }, 3000)
     return () => { clearTimeout(timer) }
   }, [notice])
 
-  const copyPayload = useCallback(async (payload: string): Promise<void> => {
-    try {
-      await navigator.clipboard.writeText(payload)
+  const copyPayload = useCallback(async (payload: string, trigger: HTMLButtonElement): Promise<void> => {
+    const request = ++shareRequest.current
+    // Row mousedown intentionally preserves the composer focus. Safari also
+    // need not focus a clicked button, so activeElement is not the trigger.
+    shareOpener.current = trigger
+    const result = await copyShareText(payload, undefined, () => request === shareRequest.current)
+    if (request !== shareRequest.current) return
+    if (result.ok) {
+      setManualShare(null)
       setNotice(t('panel.shareCopied'))
-    } catch {
-      setNotice(t('panel.shareFailed'))
+    } else {
+      setManualShare(result)
+      setNotice(null)
+      setShowImport(false)
+      setEventsOpen(false)
+      setHistoryOpen(false)
     }
   }, [t])
 
-  const handleShareTemplate = useCallback((template: TemplateView) => {
-    return copyPayload(JSON.stringify(buildSharePayload([template])))
+  useEffect(() => {
+    if (manualShare === null) return
+    shareField.current?.focus()
+    shareField.current?.select()
+  }, [manualShare])
+
+  const handleShareTemplate = useCallback((template: TemplateView, trigger: HTMLButtonElement) => {
+    return copyPayload(JSON.stringify(buildSharePayload([template])), trigger)
   }, [copyPayload])
 
-  const handleShareCategory = useCallback((cat: CategoryView) => {
+  const handleShareCategory = useCallback((cat: CategoryView, trigger: HTMLButtonElement) => {
     const members = templates.filter(row => row.category === cat.name
       && row.scope === cat.scope
       && (cat.scope === 'global' || row.session_id === cat.session_id))
@@ -511,7 +539,7 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
       setNotice(t('panel.shareEmpty'))
       return
     }
-    return copyPayload(JSON.stringify(buildSharePayload(members, [cat])))
+    return copyPayload(JSON.stringify(buildSharePayload(members, [cat])), trigger)
   }, [templates, copyPayload, t])
 
   const handleImport = useCallback(async () => {
@@ -694,7 +722,7 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
           onInterject={(c) => { handleInterject(c) }}
           onEdit={(id) => { setEditingId(id) }}
           onDelete={(id) => { void handleRemove(id) }}
-          onShare={(tpl) => { void handleShareTemplate(tpl) }}
+          onShare={(tpl, trigger) => { void handleShareTemplate(tpl, trigger) }}
           onMakeGlobal={row.scope === 'session' ? (id) => { void handleMakeGlobal(id) } : undefined}
           onToggleInject={(tpl) => { void handleToggleInject(tpl) }}
           sortable={needle === ''}
@@ -758,6 +786,41 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
         {headerExtra}
       </div>
       {notice !== null && <div className={css.notice} role="status">{notice}</div>}
+      {manualShare !== null && (
+        <section className={css.importForm} data-prompt-share-manual aria-label={t('panel.shareManualTitle')}>
+          <div role="status">
+            {t(manualShare.failure.kind === 'unavailable' ? 'panel.copyUnavailable'
+              : manualShare.failure.kind === 'unfocused' ? 'panel.copyUnfocused'
+                : manualShare.failure.kind === 'denied' ? 'panel.copyDenied'
+                  : manualShare.failure.kind === 'security' ? 'panel.copySecurity' : 'panel.copyWriteFailed')}
+            {manualShare.failure.errorName !== null && ` (${manualShare.failure.errorName})`}
+          </div>
+          <div>{t('panel.shareManualHint')}</div>
+          <textarea
+            ref={shareField}
+            className={css.contentInput}
+            data-prompt-share-json
+            rows={5}
+            readOnly
+            value={manualShare.payload}
+            aria-label={t('panel.shareManualTitle')}
+            onFocus={(event) => { event.currentTarget.select() }}
+          />
+          <div className={css.importActions}>
+            <button type="button" className={css.saveBtn} onClick={() => { shareField.current?.focus(); shareField.current?.select() }}>
+              {t('panel.shareSelectAll')}
+            </button>
+            <button type="button" className={css.cancelBtn} onClick={() => {
+              setManualShare(null)
+              const opener = shareOpener.current
+              shareOpener.current = null
+              if (opener?.isConnected) opener.focus({ preventScroll: true })
+            }}>
+              {t('panel.shareDismiss')}
+            </button>
+          </div>
+        </section>
+      )}
       {showImport && (
         <div className={css.importForm} data-prompt-import>
           <textarea
@@ -886,7 +949,7 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
                 className={css.tabShare}
                 aria-label={t('panel.shareCategory')}
                 title={t('panel.shareCategory')}
-                onClick={() => { void handleShareCategory(cat) }}
+                onClick={(event) => { void handleShareCategory(cat, event.currentTarget) }}
               >
                 <IconCopyOutlineRegular size={11} />
               </button>
