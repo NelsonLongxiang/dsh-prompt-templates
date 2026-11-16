@@ -488,9 +488,11 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
   const [importBusy, setImportBusy] = useState(false)
   const [manualShare, setManualShare] = useState<Extract<ShareCopyResult, { ok: false }> | null>(null)
   const shareField = useRef<HTMLTextAreaElement>(null)
+  const shareOpener = useRef<HTMLElement | null>(null)
   const shareRequest = useRef(0)
   useEffect(() => {
     shareRequest.current += 1
+    shareOpener.current = null
     setManualShare(null)
     return () => { shareRequest.current += 1 }
   }, [sessionId])
@@ -502,6 +504,7 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
 
   const copyPayload = useCallback(async (payload: string): Promise<void> => {
     const request = ++shareRequest.current
+    shareOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
     const result = await copyShareText(payload, undefined, () => request === shareRequest.current)
     if (request !== shareRequest.current) return
     if (result.ok) {
@@ -805,7 +808,12 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
             <button type="button" className={css.saveBtn} onClick={() => { shareField.current?.focus(); shareField.current?.select() }}>
               {t('panel.shareSelectAll')}
             </button>
-            <button type="button" className={css.cancelBtn} onClick={() => { setManualShare(null) }}>
+            <button type="button" className={css.cancelBtn} onClick={() => {
+              setManualShare(null)
+              const opener = shareOpener.current
+              shareOpener.current = null
+              if (opener?.isConnected) opener.focus({ preventScroll: true })
+            }}>
               {t('panel.shareDismiss')}
             </button>
           </div>

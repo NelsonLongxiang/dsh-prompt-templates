@@ -1,10 +1,13 @@
-/** Usage: pnpm build && node tests/clipboard-browser.mjs; open the printed file URL in a browser. Synthetic UI fixture only. */
+/** Usage: pnpm build && node tests/clipboard-browser.mjs [en|zh]; open the printed file URL. Synthetic UI fixture, no host boot. */
 import { readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { createTestDirectory } from './temp-dir.mjs'
-import { en } from '../lib/client/locales.js'
+import { en, zh } from '../lib/client/locales.js'
+
+const locale = process.argv[2] ?? 'en'
+if (!['en', 'zh'].includes(locale)) throw new Error('expected fixture locale en or zh')
 
 const require = createRequire(import.meta.url)
 const project = dirname(dirname(require.resolve('./clipboard-browser.mjs')))
@@ -77,7 +80,7 @@ const mount = String.raw`
   const root = ReactDOM.createRoot(document.getElementById('root'));
   fixture.switchSession = sessionId => root.render(React.createElement(fixturePlugin.PromptTab, { ...props, sessionId }));
   root.render(React.createElement(fixturePlugin.PromptTab, props));
-`.replace('DICTIONARY', JSON.stringify(en));
+`.replace('DICTIONARY', JSON.stringify(locale === 'zh' ? zh : en));
 const script = value => '<script>' + value.replaceAll('</script', '<\\/script') + '</script>'
 const html = '<!doctype html><meta charset="utf-8"><title>Clipboard sharing isolated browser fixture</title>'
   + '<style>body{font:14px sans-serif;background:#fff;color:#222}#root{position:relative;width:420px;height:640px}textarea{color:#222;background:#fff}</style>'
