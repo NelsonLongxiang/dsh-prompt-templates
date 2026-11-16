@@ -18,7 +18,8 @@ const bundle = readFileSync(join(project, 'lib/client.js'), 'utf8')
 const dir = createTestDirectory('clipboard-browser-')
 const target = join(dir, 'index.html')
 const harness = String.raw`
-  window.fixture = { mode: 'missing', copies: [], originalPayload: null, writes: 0 };
+  window.fixture = { mode: 'missing', copies: [], originalPayload: null, writes: 0, pending: [], nativeWrites: 0 };
+  const originalClipboard = navigator.clipboard;
   const text = '合成提示词：line 1\nline 2 {{date}}';
   const rows = [{ id: 'safe-one', name: 'Synthetic example', content: text, scope: 'global', session_id: null,
     description: null, position: 0, category: 'Synthetic category', inject_enabled: false, inject_every: null,
@@ -29,6 +30,13 @@ const harness = String.raw`
     return { writeText: async value => {
       fixture.originalPayload = value;
       if (fixture.mode === 'success') { fixture.copies.push(value); return; }
+      if (fixture.mode === 'native') {
+        if (!originalClipboard?.writeText) throw new DOMException('native API absent', 'NotSupportedError');
+        await originalClipboard.writeText(value);
+        fixture.nativeWrites += 1;
+        return;
+      }
+      if (fixture.mode === 'delayed') return new Promise((resolve, reject) => { fixture.pending.push({ resolve, reject }); });
       throw new DOMException('synthetic browser restriction', fixture.mode === 'security' ? 'SecurityError' : 'NotAllowedError');
     } };
   } });
@@ -69,7 +77,7 @@ const mount = String.raw`
   fixture.switchSession = sessionId => root.render(React.createElement(fixturePlugin.PromptTab, { ...props, sessionId }));
   root.render(React.createElement(fixturePlugin.PromptTab, props));
 `.replace('DICTIONARY', JSON.stringify(en));
-const script = value => '<script>' + value.replaceAll('</script', '<\/script') + '</script>'
+const script = value => '<script>' + value.replaceAll('</script', '<\\/script') + '</script>'
 const html = '<!doctype html><meta charset="utf-8"><title>Clipboard sharing isolated browser fixture</title>'
   + '<style>body{font:14px sans-serif;background:#fff;color:#222}#root{position:relative;width:420px;height:640px}textarea{color:#222;background:#fff}</style>'
   + '<h1>Synthetic sharing fixture — no DSH host or production data</h1><div id="root"></div>'
