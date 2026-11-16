@@ -110,6 +110,108 @@
   text-align: left;
 }
 
+.eventsPanel {
+  position: absolute;
+  top: 40px;
+  left: 8px;
+  right: 8px;
+  max-height: 320px;
+  overflow-y: auto;
+  z-index: 30;
+  box-sizing: border-box;
+  padding: 6px 0;
+  border: 1px solid var(--dsw-alias-border-inverted);
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-base);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+  font-size: 11px;
+  text-align: left;
+}
+
+.eventsHead {
+  padding: 2px 10px 6px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.eventsBanner {
+  margin: 0 10px 6px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: rgba(46, 160, 67, 0.12);
+  color: var(--dsh-alias-label-primary, inherit);
+}
+
+.eventsBannerOff {
+  background: rgba(241, 76, 47, 0.12);
+}
+
+.eventsRule {
+  padding: 6px 10px;
+}
+
+.eventsRule + .eventsRule {
+  border-top: 1px solid var(--dsw-alias-border-inverted);
+}
+
+.eventsRuleHead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.eventsRuleName {
+  font-weight: 600;
+}
+
+.eventsToggle {
+  margin: 0;
+}
+
+.eventsParams {
+  display: flex;
+  gap: 12px;
+  padding: 4px 0 0 18px;
+}
+
+.eventsParam {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.eventsParam input {
+  width: 48px;
+}
+
+.eventsEpisodesTitle {
+  padding: 6px 10px 2px;
+  border-top: 1px solid var(--dsw-alias-border-inverted);
+  color: var(--dsw-alias-label-secondary);
+}
+
+.eventsEpisode {
+  padding: 4px 10px;
+}
+
+.eventsEpisodeHead {
+  color: var(--dsw-alias-label-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.eventsEpisodeSummary {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.eventsEmpty {
+  padding: 4px 10px;
+  color: var(--dsw-alias-label-secondary);
+}
+
 .injectHistoryTitle {
   padding: 2px 10px 6px;
   color: var(--dsw-alias-label-secondary);

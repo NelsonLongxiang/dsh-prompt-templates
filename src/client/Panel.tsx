@@ -48,7 +48,7 @@ export function PromptPanel(props: PromptPanelProps) {
   const {
     useStore, refresh, refreshCategories, createCategory, removeCategory,
     create, update, remove, makeGlobal,
-    insert, send, interject, injectStatus, injectionHistory, targetSession, targetVersion, subscribeTarget,
+    insert, send, interject, injectStatus, injectionHistory, eventPolicies, updateEventPolicy, eventEpisodes, targetSession, targetVersion, subscribeTarget,
     panelPosition, savePanelPosition, resetPanelPosition,
     actions, t,
   } = props
@@ -141,6 +141,7 @@ export function PromptPanel(props: PromptPanelProps) {
     refresh, refreshCategories, createCategory, removeCategory,
     create, update, remove, makeGlobal,
     insert, send, interject, injectStatus, injectionHistory,
+    eventPolicies, updateEventPolicy, eventEpisodes,
   }
 
   return (

@@ -30,6 +30,9 @@ import {
   listCategories,
   injectStatus,
   injectionHistory,
+  eventPolicies,
+  updateEventPolicy,
+  eventEpisodes,
   createCategory,
   deleteCategory,
   createTemplate,
@@ -131,6 +134,9 @@ export function apply(ctx: ClientContext): void {
     },
     injectStatus,
     injectionHistory,
+    eventPolicies,
+    updateEventPolicy,
+    eventEpisodes,
   }
 
   // Persisted prefs binding, filled by the overlay seat's inject (the seat
