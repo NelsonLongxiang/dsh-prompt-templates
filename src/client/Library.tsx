@@ -33,7 +33,7 @@ interface RowProps {
   onEdit: (id: string) => void
   onDelete: (id: string) => void
   /** Copy the row as a one-template clipboard share payload. */
-  onShare: (template: TemplateView) => void
+  onShare: (template: TemplateView, trigger: HTMLButtonElement) => void
   onMakeGlobal?: (id: string) => void
   /** Flip the row's auto-inject switch (rows without an interval route to the edit form). */
   onToggleInject: (template: TemplateView) => void
@@ -97,7 +97,7 @@ function TemplateRow({ template, onInsert, onSend, onInterject, onEdit, onDelete
       <button
         type="button"
         className={css.shareBtn}
-        onClick={() => { onShare(template) }}
+        onClick={(event) => { onShare(template, event.currentTarget) }}
         aria-label={t('panel.share')}
         title={t('panel.share')}
       >
@@ -502,9 +502,11 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
     return () => { clearTimeout(timer) }
   }, [notice])
 
-  const copyPayload = useCallback(async (payload: string): Promise<void> => {
+  const copyPayload = useCallback(async (payload: string, trigger: HTMLButtonElement): Promise<void> => {
     const request = ++shareRequest.current
-    shareOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    // Row mousedown intentionally preserves the composer focus. Safari also
+    // need not focus a clicked button, so activeElement is not the trigger.
+    shareOpener.current = trigger
     const result = await copyShareText(payload, undefined, () => request === shareRequest.current)
     if (request !== shareRequest.current) return
     if (result.ok) {
@@ -525,11 +527,11 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
     shareField.current?.select()
   }, [manualShare])
 
-  const handleShareTemplate = useCallback((template: TemplateView) => {
-    return copyPayload(JSON.stringify(buildSharePayload([template])))
+  const handleShareTemplate = useCallback((template: TemplateView, trigger: HTMLButtonElement) => {
+    return copyPayload(JSON.stringify(buildSharePayload([template])), trigger)
   }, [copyPayload])
 
-  const handleShareCategory = useCallback((cat: CategoryView) => {
+  const handleShareCategory = useCallback((cat: CategoryView, trigger: HTMLButtonElement) => {
     const members = templates.filter(row => row.category === cat.name
       && row.scope === cat.scope
       && (cat.scope === 'global' || row.session_id === cat.session_id))
@@ -537,7 +539,7 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
       setNotice(t('panel.shareEmpty'))
       return
     }
-    return copyPayload(JSON.stringify(buildSharePayload(members, [cat])))
+    return copyPayload(JSON.stringify(buildSharePayload(members, [cat])), trigger)
   }, [templates, copyPayload, t])
 
   const handleImport = useCallback(async () => {
@@ -720,7 +722,7 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
           onInterject={(c) => { handleInterject(c) }}
           onEdit={(id) => { setEditingId(id) }}
           onDelete={(id) => { void handleRemove(id) }}
-          onShare={(tpl) => { void handleShareTemplate(tpl) }}
+          onShare={(tpl, trigger) => { void handleShareTemplate(tpl, trigger) }}
           onMakeGlobal={row.scope === 'session' ? (id) => { void handleMakeGlobal(id) } : undefined}
           onToggleInject={(tpl) => { void handleToggleInject(tpl) }}
           sortable={needle === ''}
@@ -947,7 +949,7 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
                 className={css.tabShare}
                 aria-label={t('panel.shareCategory')}
                 title={t('panel.shareCategory')}
-                onClick={() => { void handleShareCategory(cat) }}
+                onClick={(event) => { void handleShareCategory(cat, event.currentTarget) }}
               >
                 <IconCopyOutlineRegular size={11} />
               </button>

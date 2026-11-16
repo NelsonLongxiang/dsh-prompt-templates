@@ -22,7 +22,8 @@ node tests/clipboard-browser.mjs zh    # 或 en
 | API 缺失 | 点分享分类/单模板；出现只读 JSON，自动聚焦/全选；提示 API 不可用而非系统剪贴板损坏 |
 | 写入拒绝 | 选择 Denied 再点分享；显示 NotAllowedError 与拒绝文案，仍能手动复制 |
 | 安全限制 | 选择 Security restriction；显示 SecurityError，保留相同 JSON |
-| 手动键盘流 | Tab 到全选，Enter；再 Tab 到关闭，Enter；面板关闭，焦点回原分享按钮 |
+| 手动键盘流 | Tab 到全选，Enter；再 Tab 到关闭，Enter；面板关闭，焦点回实际触发的分享按钮，而非之前获焦的输入框 |
+| 鼠标不抢焦点 | 先点搜索框，再鼠标点单模板分享（行会 preventDefault 保持原焦点）；关闭回退面板后焦点必须回这次分享按钮。类目分享也以实际触发按钮为准，不依赖浏览器自动focus |
 | 兼容复制 | 选择 Compatibility，明确允许合成剪贴板写入后点分享；只有浏览器 execCommand 返回 true 才提示成功，否则降为手动 |
 | 原生复制 | 选择 Native，明确允许合成剪贴板写入后点分享；只有实际 writeText resolved 才提示成功；拒绝则兼容/手动降级 |
 
