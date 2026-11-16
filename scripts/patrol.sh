@@ -15,4 +15,14 @@ echo "== master CI (latest) =="
 gh run list --repo NelsonLongXiang/dsh-prompt-templates --branch master --limit 1 || fail=1
 echo "== working tree =="
 git status --short --branch | head -3
+echo "== dir convention =="
+# 目录治理零容忍: 根级只认声明过的配置/构建/工具状态(白名单见 README 目录定义), 白名单外散落即失败;
+# 构建产物入库即失败; scripts/src 出现盘符路径报告式提示(隐私守卫自身的检测模式除外)。
+allow_re='^(node_modules|lib|\.claude|\.obelisk|\.npmrc|\.DS_Store|tmp)$'
+stray=$(git status --ignored --porcelain | awk '$1=="!!"||$1=="??" {print $2}' | sed 's:/$::' | grep -v '/' | grep -Ev "$allow_re" || true)
+if [ -n "$stray" ]; then echo "根级散落(白名单外):"; echo "$stray"; fail=1; fi
+art=$(git ls-files -- 'lib/*' 'dist/*' '*.tgz' '*.tsbuildinfo')
+if [ -n "$art" ]; then echo "构建产物入库:"; echo "$art"; fail=1; fi
+hard=$(git grep -nE '[CD]:[/\\]' -- 'scripts/*.sh' 'src/*' | grep -v 'push-master.sh' || true)
+[ -n "$hard" ] && { echo "提示: scripts/src 出现盘符路径(人工确认):"; echo "$hard"; }
 exit $fail
