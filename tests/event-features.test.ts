@@ -73,15 +73,51 @@ test('fingerprints: same prefix shares stable, different task changes target', (
 })
 
 test('outcome classes come from structured fields only', () => {
-  assert.equal(outcomeClass(OK), 'ok')
-  assert.equal(outcomeClass(FAIL('ENOENT')), 'error:ENOENT')
-  assert.equal(outcomeClass(FAIL()), 'error:unknown')
+  assert.equal(outcomeClass('bash', OK), 'ok')
+  assert.equal(outcomeClass('bash', FAIL('ENOENT')), 'error:ENOENT')
+  assert.equal(outcomeClass('bash', FAIL()), 'error:unknown')
   assert.equal(exitCodeOf({ exitCode: 2 }), 2)
   assert.equal(exitCodeOf({ exitCode: '2' }), null)
   assert.equal(exitCodeOf([1]), null)
   // Output text never decides the outcome.
   const textual = extractFeatures('bash', { command: 'make' }, { isError: false, meta: { stdout: 'ERROR failed' } } as never)
   assert.equal(textual.outcome, 'ok')
+})
+
+// Recorded contract (docs/event-failure-contract.md, DSH 0.2.2-rc.3): a non-zero
+// child exit arrives with isError:false and only a trailing `[exit code: N]`
+// line in the last text part of content. The old field set alone classified it
+// `ok`, so repeated failures never fired on this host.
+test('non-zero exits are failures through the pinned contract, not through wording', () => {
+  const text = (t: string) => ({ type: 'text', text: t })
+  // The recorded shape: marker is the trailing line of the last text part.
+  assert.equal(outcomeClass('bash', { isError: false, content: [text('(no output)\n[exit code: 3]')] }), 'error:exit:3')
+  assert.equal(outcomeClass('bash', { isError: false, content: [text('build ok'), text('done\n[exit code: 1]')] }), 'error:exit:1')
+  // exit 0 marker, no marker, and markers that are not the trailing line stay ok.
+  assert.equal(outcomeClass('bash', { isError: false, content: [text('(no output)\n[exit code: 0]')] }), 'ok')
+  assert.equal(outcomeClass('bash', { isError: false, content: [text('(no output)')] }), 'ok')
+  assert.equal(outcomeClass('bash', { isError: false, content: [text('[exit code: 3]\nmore output after')] }), 'ok')
+  // Wording inside the output never decides, and failure lines stay ok.
+  assert.equal(outcomeClass('bash', { isError: false, content: [text('ERROR: build failed')] }), 'ok')
+  // Other tools do not read a trailing marker (the contract is bash-only).
+  assert.equal(outcomeClass('read', { isError: false, content: [text('x\n[exit code: 2]')] }), 'ok')
+  // Structured fields win: isError first, then meta.exitCode over the marker.
+  assert.equal(outcomeClass('bash', { isError: true, error: { info: { code: 'EXIT_1' } }, content: [text('[exit code: 3]')] }), 'error:EXIT_1')
+  assert.equal(outcomeClass('bash', { isError: false, meta: { exitCode: 5 }, content: [text('[exit code: 1]')] }), 'error:exit:5')
+  // Non-zero meta exit code works for any tool; zero is a normal completion.
+  assert.equal(outcomeClass('read', { isError: false, meta: { exitCode: 4 } }), 'error:exit:4')
+  assert.equal(outcomeClass('read', { isError: false, meta: { exitCode: 0 } }), 'ok')
+  // Features carry the same exit code; a marker-only failure still fingerprints normally.
+  const features = extractFeatures('bash', { command: 'SECRET=1 /bin/sh -c build' }, { isError: false, content: [text('[exit code: 2]')] })
+  assert.equal(features.outcome, 'error:exit:2')
+  assert.equal(features.exitCode, 2)
+  assert.ok(features.stableFingerprint !== '')
+  // Detector: two marker-classified failures on one target fire the rule.
+  const rows = [obs({ outcome: 'error:exit:1', target_fingerprint: 'X' }), obs({ outcome: 'error:exit:1', target_fingerprint: 'X' })]
+  assert.ok(detectRepeatedFailure(rows, rows[1] as ObservationView, failPolicy))
+  // Regression path: error then success then error still fires through the marker class.
+  const regression = [obs({ outcome: 'error:exit:1', target_fingerprint: 'X' }), obs({ outcome: 'ok', target_fingerprint: 'X' }), obs({ outcome: 'error:exit:1', target_fingerprint: 'X' })]
+  assert.ok(detectRepeatedFailure(regression, regression[2] as ObservationView, failPolicy))
 })
 
 let seq = 0
