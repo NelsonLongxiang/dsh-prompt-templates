@@ -72,14 +72,14 @@ test('fingerprints: same prefix shares stable, different task changes target', (
   assert.equal(canonicalJson({ b: [1, { d: 1, c: 2 }], a: null }), '{"a":null,"b":[1,{"c":2,"d":1}]}')
 })
 
-test('outcome classes come from structured fields only', () => {
+test('structured error fields take priority and arbitrary output wording is ignored', () => {
   assert.equal(outcomeClass('bash', OK), 'ok')
   assert.equal(outcomeClass('bash', FAIL('ENOENT')), 'error:ENOENT')
   assert.equal(outcomeClass('bash', FAIL()), 'error:unknown')
   assert.equal(exitCodeOf({ exitCode: 2 }), 2)
   assert.equal(exitCodeOf({ exitCode: '2' }), null)
   assert.equal(exitCodeOf([1]), null)
-  // Output text never decides the outcome.
+  // Arbitrary output wording is ignored; the bash marker has a separate adapter.
   const textual = extractFeatures('bash', { command: 'make' }, { isError: false, meta: { stdout: 'ERROR failed' } } as never)
   assert.equal(textual.outcome, 'ok')
 })
@@ -118,6 +118,20 @@ test('non-zero exits are failures through the pinned contract, not through wordi
   // Regression path: error then success then error still fires through the marker class.
   const regression = [obs({ outcome: 'error:exit:1', target_fingerprint: 'X' }), obs({ outcome: 'ok', target_fingerprint: 'X' }), obs({ outcome: 'error:exit:1', target_fingerprint: 'X' })]
   assert.ok(detectRepeatedFailure(regression, regression[2] as ObservationView, failPolicy))
+})
+
+test('failure contract: metadata zero wins and output does not enter argument summaries', () => {
+  const text = (value: string) => ({ type: 'text', text: value })
+  const conflict = extractFeatures('bash', { command: 'synthetic task' }, { isError: false, meta: { exitCode: 0 }, content: [text('OUTPUT-ONLY-SENTINEL\n[exit code: 7]')] })
+  assert.equal(conflict.outcome, 'ok')
+  assert.equal(conflict.exitCode, 0)
+  assert.equal(conflict.summary.includes('OUTPUT-ONLY-SENTINEL'), false)
+  const invalidMeta = extractFeatures('bash', { command: 'synthetic task' }, { isError: false, meta: { exitCode: '0' }, content: [text('OUTPUT-ONLY-SENTINEL\r\n[exit code: 7]\r\n')] })
+  assert.equal(invalidMeta.outcome, 'error:exit:7')
+  assert.equal(invalidMeta.exitCode, 7)
+  assert.equal(invalidMeta.summary.includes('OUTPUT-ONLY-SENTINEL'), false)
+  assert.equal(outcomeClass('bash', { isError: true, meta: { exitCode: 0 }, error: { info: { code: 'E_TOOL' } }, content: [text('[exit code: 0]')] }), 'error:E_TOOL')
+  assert.equal(outcomeClass('read', { isError: false, content: [text('[exit code: 7]')] }), 'ok')
 })
 
 let seq = 0

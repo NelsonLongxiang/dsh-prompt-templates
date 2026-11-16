@@ -55,7 +55,7 @@ dsh plugin --profile web add @nelsonlongxiang/dsh-prompt-templates
 - 两级开关串联，默认全关：部署级总开关 `eventInject.enabled`，加上每条规则自己的开关——面板 ⚙ 下拉可管理规则开关、门槛/冷却与只读问题台账；总开关本体留在部署配置里
 - 介入时机：工具结果落地之后、**同轮下一次模型决策之前**追加提醒。它拦不住首次违规，也撤销不了已发生的副作用或已并行发出的兄弟调用
 - 存的是什么：指纹（哈希）加一条长度受限、启发式脱敏的参数摘要。不整存原始参数/输出，但摘要仍可能带上未被掩码的参数片段；摘要永不作为指令或授权
-- 失败类别只取结构化字段（`isError` / 错误码），不从输出文字猜。注意现行契约：`isError: false` 的工具结果即使元数据里带非零退出码也计为 `ok`（跟踪见 issue #11）
+- 失败分类优先取 `isError` 及错误码，再取整数 `meta.exitCode`（含零）；只有元数据没有有效退出码时，`bash` 适配才读取最后一个文本片段的精确尾行 `[exit code: N]`。输出里的成功／失败等任意措辞不改变分类；命令也能自行打印同形标记，因此回退存在误报可能。`ok` 仅代表工具层完成，不等于任务已验证成功。字段优先级、记录宿主限制与未测项见[失败契约](docs/event-failure-contract.md)。
 - 有预算：默认每个**用户轮**最多一条（长自治轮因此最多一条）、有字数上限、每条规则有冷却（默认 3 轮）、每个问题有次数上限；没有新证据就不提醒
 - 投递是"至少一次 + 按会话日志去重"，重启或步骤被拒都不会丢失或重复
 - 插件只把问题标到 `notified`。`changed` / `repeated` 只是弱行为信号不是结论：同工具跑一条无关命令也可能翻转它。结案（`verified`、`rejected` 等）走 `PATCH …/event-episodes/<id>`，必须带证据引用——只有完整轨迹复核才算验证完成
@@ -74,7 +74,7 @@ dsh plugin --profile web add @nelsonlongxiang/dsh-prompt-templates
 ```text
 src/                  TypeScript 插件（host 面 + 浏览器面）
   index.ts            Host：持有 TS 存储，暴露 HTTP 路由
-  store.ts            纯 TS 模板存储（node:sqlite，schema v3）
+  store.ts            纯 TS 存储（node:sqlite，数据库 schema v5）
   inject.ts           Host：挂在 pre-step waterfall 上的定时注入
   invariant.ts        Host：注册本包的 invariant 伴生插件
   cli/                随 bin 发布的同步 CLI（export/diff/merge/import）
@@ -113,7 +113,7 @@ dsh-prompt-templates import --db /path/to/db.sqlite3 --in merged.json --apply \
   --expect-db-sha256 <db-sha256> --confirm-summary-hash <dry-run-summary-sha256> --output=json
 ```
 
-`import` 仅按模板 ID 插入/更新，绝不自动删除；未知字段、错误 schema、hash 漂移、同名异 ID，以及超过 `--max-changes`（默认 100）的变更均阻断。schema-v2 快照（无注入字段）仍可导入——注入项默认关闭；导出恒为 v3。
+`import` 仅按模板 ID 插入/更新，绝不自动删除；未知字段、错误 schema、hash 漂移、同名异 ID，以及超过 `--max-changes`（默认 100）的变更均阻断。schema-v2 快照（无注入字段）仍可导入——注入项默认关闭；导出恒为 schema v4（仅模板与类目，不含事件策略及运行状态）。
 
 ## 目录定义
 
@@ -123,7 +123,7 @@ dsh-prompt-templates import --db /path/to/db.sqlite3 --in merged.json --apply \
 |---|---|
 | `src/` | 宿主插件、CLI 与浏览器客户端源码 |
 | `scripts/` | 可重跑运维入口：`patrol.sh`、`branch-audit.sh`、`remote-heads.sh`、`push-master.sh`、`release.sh` |
-| `docs/` | 面向人的文档：spec、发布说明、交接指南 |
+| `docs/` | 面向人的文档：spec、发布说明、交接指南；npm 包仅携带白名单明确列出的使用／验收说明 |
 | `tests/` | `pnpm verify` 背后的 `node:test` 套件 |
 | `images/` | README 引用的静态图 |
 | `tmp/<任务>/` | 已忽略的临时区；自动测试经 `tests/temp-dir.mjs` 使用 `tmp/test-runs/`；限任务生命周期，永不入库 |
@@ -155,7 +155,7 @@ GitHub Actions（`.github/workflows/verify.yml`）在指向 `master` 的 push / 
 
 - **会话模板需要当前会话**——无会话打开时只能用全局模板
 - **注入不在对话流中渲染**——DSH 对话视图按设计省略注入的 context 行（消息 source 非 `user`）；可在轨迹 tab 查看。交付模式为"对话流可见"的模板是例外：以普通用户消息渲染
-- **请从 npm registry 安装，不要装 Git URL**——插件编译对照 DSH harness 源码，公网 `@deepseek-ai/*` npm 快照落后于 harness 本体，`pnpm add github:<user>/<repo>` 会在 prepare 构建步失败。请用 `dsh plugin --profile <name> add @nelsonlongxiang/dsh-prompt-templates`
+- **正式使用优先安装 npm 发布构建**——Git／源码安装会执行 `prepare` 构建，需要开发工具链和依赖。本仓所述验证门禁使用公网 `@deepseek-ai/*` 包，不需要 harness 源码检出；该门禁没有验证直接 Git-URL 安装。使用预构建包请运行 `dsh plugin --profile <name> add @nelsonlongxiang/dsh-prompt-templates`。
 
 ## 许可证
 

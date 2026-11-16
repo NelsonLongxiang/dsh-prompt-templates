@@ -1,7 +1,7 @@
 import { createTestDirectory } from './temp-dir.mjs'
 import assert from 'node:assert/strict'
 import { readFileSync, readdirSync, rmSync } from 'node:fs'
-import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, posix, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Script } from 'node:vm'
 import { spawnSync } from 'node:child_process'
@@ -81,11 +81,42 @@ try {
   const packed = spawnSync('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', scratch], { encoding: 'utf8', shell: process.platform === 'win32' })
   assert.equal(packed.status, 0, packed.stderr)
   const manifest = parsePackManifest(packed.stdout)
+  const packedPaths = new Set(manifest[0].files.map(file => file.path))
+  const requiredDocs = [
+    'README.md', 'README_zh.md', 'docs/spec-event-inject.md',
+    'docs/event-failure-contract.md', 'docs/clipboard-verification.md', 'docs/test-plan-phase-c.md',
+  ]
+  for (const file of requiredDocs) assert.ok(packedPaths.has(file), 'packaged documentation missing: ' + file)
+  // Walk Markdown links from the shipped reading entry points: an installed
+  // README must not send users to a file omitted by package.json files.
+  const seen = new Set()
+  const pending = [...requiredDocs]
+  while (pending.length > 0) {
+    const file = pending.shift()
+    if (seen.has(file)) continue
+    seen.add(file)
+    const text = readFileSync(resolve(file), 'utf8')
+    for (const link of text.matchAll(/\[[^\]]*\]\(([^)]+)\)/g)) {
+      const destination = link[1].trim().replace(/^<|>$/g, '')
+      if (/^[a-z][a-z0-9+.-]*:/i.test(destination) || destination.startsWith('//') || destination.startsWith('#')) continue
+      const local = decodeURIComponent(destination.split(/[?#]/, 1)[0])
+      if (local === '') continue
+      const target = posix.normalize(posix.join(posix.dirname(file), local))
+      assert.ok(!target.startsWith('../') && !posix.isAbsolute(target), 'documentation link escapes package: ' + destination)
+      assert.ok(packedPaths.has(target), file + ' links to an omitted package file: ' + target)
+      if (target.endsWith('.md')) pending.push(target)
+    }
+  }
+  process.stdout.write('packaged documentation links: PASS\n')
   const tarball = resolve(scratch, manifest[0].filename)
   const prefix = join(scratch, 'install')
   const installed = spawnSync('npm', ['install', tarball, '--ignore-scripts', '--no-package-lock', '--omit=optional', '--prefix', prefix], { encoding: 'utf8', shell: process.platform === 'win32' })
   assert.equal(installed.status, 0, installed.stderr)
-  const packageJson = JSON.parse(readFileSync(join(prefix, 'node_modules', '@nelsonlongxiang', 'dsh-prompt-templates', 'package.json'), 'utf8'))
+  const installedRoot = join(prefix, 'node_modules', '@nelsonlongxiang', 'dsh-prompt-templates')
+  for (const file of seen) {
+    assert.equal(readFileSync(join(installedRoot, file), 'utf8'), readFileSync(resolve(file), 'utf8'), 'installed guide differs: ' + file)
+  }
+  const packageJson = JSON.parse(readFileSync(join(installedRoot, 'package.json'), 'utf8'))
   assert.equal(packageJson.version, expectedVersion)
   assert.equal(packageJson.bin['dsh-prompt-templates'].replace(/^\.\//, ''), 'lib/cli/main.js')
   const bin = join(prefix, 'node_modules', '.bin', process.platform === 'win32' ? 'dsh-prompt-templates.cmd' : 'dsh-prompt-templates')

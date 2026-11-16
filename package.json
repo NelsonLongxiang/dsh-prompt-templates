@@ -25,7 +25,11 @@
     "cordis.patch.yml",
     "README.md",
     "README_zh.md",
-    "images"
+    "images",
+    "docs/spec-event-inject.md",
+    "docs/event-failure-contract.md",
+    "docs/clipboard-verification.md",
+    "docs/test-plan-phase-c.md"
   ],
   "dsh": {
     "bundle": {
