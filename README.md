@@ -148,6 +148,8 @@ pnpm verify:release    # alias of pnpm verify
 
 GitHub Actions (`.github/workflows/verify.yml`) runs the same command on pushes and pull requests to `master`. `test:cli` also carries the DSH 0.2.x contract tests (peer version line, patch sandbox, real store execution, slot declarations, icon exports) — upstream drift fails the gate. Repo `scripts/` hold the ops stable entries (branch-budget audit, absorption classification, privacy-checked push). and on `v*` tags, with Node 24. The `@deepseek-ai/*` devDependencies are public npm packages, so CI needs no registry token and no harness checkout.
 
+A self-contained sharing test page can be generated with `node tests/clipboard-browser.mjs en` (or `zh`) after build. It includes synthetic copy scenarios and read-only environment checks; see [clipboard verification](docs/clipboard-verification.md) for privacy boundaries and macOS acceptance steps. Generating/parsing the page is not browser acceptance.
+
 Still manual, because they need a live harness profile: booting `dsh web`, the browser panel against the real web server, and resume or compaction against a real session log.
 
 ## Known limitations

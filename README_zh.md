@@ -147,6 +147,8 @@ pnpm verify:release    # pnpm verify 的别名
 
 GitHub Actions（`.github/workflows/verify.yml`）在指向 `master` 的 push / pull request 以及 `v*` tag 上用 Node 24 跑同一命令。`test:cli` 还含 DSH 0.2.x 契约测试（peer 版本线 / patch 沙箱 / store 真执行 / slot 声明 / 图标导出），上游漂移当场爆红。仓库 `scripts/` 提供运维稳定入口（分支预算审计 / 吸收分类 / 隐私排查推送）。`@deepseek-ai/*` devDependencies 来自公网 npm，CI 不需要 registry token，也不需要 harness 检出。
 
+构建后运行 `node tests/clipboard-browser.mjs zh`（或 `en`）可生成自包含分享测试页，内含合成复制场景和只读环境检查；隐私边界与 macOS 复验步骤见[复制验收说明](docs/clipboard-verification.md)。生成/解析页面不等于浏览器验收。
+
 仍需人工、因为它们依赖真实 harness profile：启动 `dsh web`、浏览器面板对接真实 web server，以及用真实会话日志验证 resume / compaction。
 
 ## 已知限制

@@ -1,6 +1,7 @@
 /** Usage: pnpm build && node tests/clipboard-browser.mjs [en|zh]; open the printed file URL. Synthetic UI fixture, no host boot. */
 import { readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
+import { createHash } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { createTestDirectory } from './temp-dir.mjs'
@@ -18,6 +19,7 @@ const scripts = [
   readFileSync(join(domRoot, 'umd/react-dom.development.js'), 'utf8'),
 ]
 const bundle = readFileSync(join(project, 'lib/client.js'), 'utf8')
+const bundleSha256 = createHash('sha256').update(bundle).digest('hex')
 const dir = createTestDirectory('clipboard-browser-')
 const target = join(dir, 'index.html')
 const harness = String.raw`
@@ -52,6 +54,17 @@ const harness = String.raw`
     // Exercise the actual browser compatibility path, without reading the clipboard.
     return originalExec?.(command) === true;
   };
+  fixture.environment = () => ({
+    origin: location.origin, secure: window.isSecureContext,
+    clipboardAPI: typeof originalClipboard?.writeText, focused: document.hasFocus(),
+    embedded: window.self !== window.top, userAgent: navigator.userAgent,
+  });
+  const modeControl = document.getElementById('copy-mode');
+  modeControl.addEventListener('change', () => { fixture.mode = modeControl.value; });
+  document.getElementById('environment-refresh').addEventListener('click', () => {
+    document.getElementById('environment').textContent = JSON.stringify(fixture.environment(), null, 2);
+  });
+  document.getElementById('environment-refresh').click();
   const runtime = {
     react: React,
     'react/jsx-runtime': {
@@ -84,7 +97,14 @@ const mount = String.raw`
 const script = value => '<script>' + value.replaceAll('</script', '<\\/script') + '</script>'
 const html = '<!doctype html><meta charset="utf-8"><title>Clipboard sharing isolated browser fixture</title>'
   + '<style>body{font:14px sans-serif;background:#fff;color:#222}#root{position:relative;width:420px;height:640px}textarea{color:#222;background:#fff}</style>'
-  + '<h1>Synthetic sharing fixture — no DSH host or production data</h1><div id="root"></div>'
+  + '<h1>Synthetic sharing fixture — no DSH host or production data</h1>'
+  + '<p>Candidate verification only, not a release. Built plugin SHA-256: <code data-bundle-sha256>' + bundleSha256 + '</code></p>'
+  + '<p>Default simulated failures do not write the clipboard. Native / compatibility success modes overwrite the clipboard with synthetic JSON, never read it.</p>'
+  + '<label>Copy mode / 复制场景 <select id="copy-mode"><option value="missing">API missing / API 缺失</option>'
+  + '<option value="denied">Denied / 写入拒绝</option><option value="security">Security restriction / 安全限制</option>'
+  + '<option value="legacy">Compatibility copy (writes clipboard) / 兼容复制（会写剪贴板）</option>'
+  + '<option value="native">Native copy (writes clipboard) / 原生复制（会写剪贴板）</option></select></label>'
+  + '<button id="environment-refresh" type="button">Refresh environment / 刷新只读环境</button><pre id="environment"></pre><div id="root"></div>'
   + scripts.map(script).join('') + script(harness) + script(bundle) + script(mount)
 writeFileSync(target, html)
 console.log(pathToFileURL(target).href)

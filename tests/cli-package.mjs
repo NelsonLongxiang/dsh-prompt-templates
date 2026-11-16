@@ -1,7 +1,9 @@
 import { createTestDirectory } from './temp-dir.mjs'
 import assert from 'node:assert/strict'
 import { readFileSync, readdirSync, rmSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { Script } from 'node:vm'
 import { spawnSync } from 'node:child_process'
 
 const expectedVersion = JSON.parse(readFileSync(resolve('package.json'), 'utf8')).version
@@ -49,6 +51,30 @@ function parsePackManifest(stdout) {
     process.stdout.write(`css map gate: ${file} (${classes.size} classes) PASS\n`)
   }
 }
+
+// The portable page is generated after build, with no CDN, host boot, or clipboard reads.
+for (const locale of ['en', 'zh']) {
+  const generated = spawnSync(process.execPath, ['tests/clipboard-browser.mjs', locale], { encoding: 'utf8', timeout: 30_000 })
+  assert.equal(generated.status, 0, generated.stderr)
+  const output = generated.stdout.trim()
+  assert.match(output, /^file:/)
+  const path = fileURLToPath(output)
+  const root = resolve('tmp/test-runs')
+  const child = relative(root, path)
+  assert.ok(child !== '' && !isAbsolute(child) && !child.startsWith('..'), 'fixture stays in the project-owned scratch')
+  assert.equal(basename(path), 'index.html')
+  assert.match(basename(dirname(path)), /^clipboard-browser-[A-Za-z0-9]+$/)
+  try {
+    const html = readFileSync(path, 'utf8')
+    assert.match(html, /id="copy-mode"/)
+    assert.match(html, /id="environment-refresh"/)
+    assert.doesNotMatch(html, /<script[^>]+src=/i)
+    const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)]
+    assert.equal(scripts.length, 5, 'React, ReactDOM, fixture setup, actual plugin bundle, mount')
+    for (const match of scripts) new Script(match[1], { filename: 'clipboard-fixture-' + locale + '.js' })
+  } finally { rmSync(dirname(path), { recursive: true, force: true }) }
+}
+process.stdout.write('portable clipboard fixture smoke: en/zh PASS (parse only, not browser acceptance)\n')
 
 const scratch = createTestDirectory('pt-cli-package-')
 try {
