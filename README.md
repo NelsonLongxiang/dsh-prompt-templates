@@ -33,7 +33,9 @@ No Python toolchain required — since 0.3.0 the host half persists templates th
 ## Sharing (cross-instance copy)
 
 - The row ⧉ button shares **one template**; the category tab ⧉ shares **a whole category** (member templates + the category definition)
-- The payload is self-describing JSON (`format`/`version` markers) carried over the clipboard — no files, no network
+- The **Share template JSON / Share category JSON** buttons share a self-describing payload (`format`/`version` markers), not just the prompt body. No files or network are used.
+- Automatic copying tries the browser Clipboard API first, then a compatibility copy command. If both fail, a read-only **Copy share JSON manually** panel preserves exactly the same payload: select all, press Ctrl+C / ⌘C, and paste into the target instance Import box. The panel distinguishes unavailable API, unfocused page, denied write and security restriction; it does not diagnose a damaged system clipboard.
+- Clipboard restrictions depend on the browser/context. Plain LAN HTTP may lack the API; loopback origins such as `http://127.0.0.1` can be trustworthy despite HTTP. No global security changes or clipboard-reading permission are needed.
 - Paste into the toolbar **Import** box on the target instance: missing categories are created, and **same-name same-scope templates raise an explicit overwrite confirm** — overwrite updates the existing row (content/description/category/inject facts), declining skips; the result reports created/overwritten/skipped counts
 - What is shared is the **raw text**: `{{date}}`/`{{turn}}` re-expand at delivery on the receiving instance
 

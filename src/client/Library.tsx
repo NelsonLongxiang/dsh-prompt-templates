@@ -14,6 +14,8 @@ import type { EventEpisodeWire, EventPolicyWire } from './api.ts'
 import type { TemplateLibraryFace } from './slots.ts'
 import { filterTemplateRows, searchableTemplateRows } from './filter.ts'
 import { buildSharePayload, parseSharePayload, planShareImport } from './share.ts'
+import { copyShareText } from './clipboard.ts'
+import type { ShareCopyResult } from './clipboard.ts'
 import { GITHUB_REPOSITORY_URL, PLUGIN_VERSION, templateCountLabel } from './meta.ts'
 import type { PromptTemplateKey } from './locales.ts'
 import css from './Panel.module.css'
@@ -484,6 +486,14 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
   const [showImport, setShowImport] = useState(false)
   const [importText, setImportText] = useState('')
   const [importBusy, setImportBusy] = useState(false)
+  const [manualShare, setManualShare] = useState<Extract<ShareCopyResult, { ok: false }> | null>(null)
+  const shareField = useRef<HTMLTextAreaElement>(null)
+  const shareRequest = useRef(0)
+  useEffect(() => {
+    shareRequest.current += 1
+    setManualShare(null)
+    return () => { shareRequest.current += 1 }
+  }, [sessionId])
   useEffect(() => {
     if (notice === null) return
     const timer = setTimeout(() => { setNotice(null) }, 3000)
@@ -491,13 +501,26 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
   }, [notice])
 
   const copyPayload = useCallback(async (payload: string): Promise<void> => {
-    try {
-      await navigator.clipboard.writeText(payload)
+    const request = ++shareRequest.current
+    const result = await copyShareText(payload)
+    if (request !== shareRequest.current) return
+    if (result.ok) {
+      setManualShare(null)
       setNotice(t('panel.shareCopied'))
-    } catch {
-      setNotice(t('panel.shareFailed'))
+    } else {
+      setManualShare(result)
+      setNotice(null)
+      setShowImport(false)
+      setEventsOpen(false)
+      setHistoryOpen(false)
     }
   }, [t])
+
+  useEffect(() => {
+    if (manualShare === null) return
+    shareField.current?.focus()
+    shareField.current?.select()
+  }, [manualShare])
 
   const handleShareTemplate = useCallback((template: TemplateView) => {
     return copyPayload(JSON.stringify(buildSharePayload([template])))
@@ -758,6 +781,36 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
         {headerExtra}
       </div>
       {notice !== null && <div className={css.notice} role="status">{notice}</div>}
+      {manualShare !== null && (
+        <section className={css.importForm} data-prompt-share-manual aria-label={t('panel.shareManualTitle')}>
+          <div role="status">
+            {t(manualShare.failure.kind === 'unavailable' ? 'panel.copyUnavailable'
+              : manualShare.failure.kind === 'unfocused' ? 'panel.copyUnfocused'
+                : manualShare.failure.kind === 'denied' ? 'panel.copyDenied'
+                  : manualShare.failure.kind === 'security' ? 'panel.copySecurity' : 'panel.copyWriteFailed')}
+            {manualShare.failure.errorName !== null && ` (${manualShare.failure.errorName})`}
+          </div>
+          <div>{t('panel.shareManualHint')}</div>
+          <textarea
+            ref={shareField}
+            className={css.contentInput}
+            data-prompt-share-json
+            rows={5}
+            readOnly
+            value={manualShare.payload}
+            aria-label={t('panel.shareManualTitle')}
+            onFocus={(event) => { event.currentTarget.select() }}
+          />
+          <div className={css.importActions}>
+            <button type="button" className={css.saveBtn} onClick={() => { shareField.current?.focus(); shareField.current?.select() }}>
+              {t('panel.shareSelectAll')}
+            </button>
+            <button type="button" className={css.cancelBtn} onClick={() => { setManualShare(null) }}>
+              {t('panel.shareDismiss')}
+            </button>
+          </div>
+        </section>
+      )}
       {showImport && (
         <div className={css.importForm} data-prompt-import>
           <textarea
