@@ -3,6 +3,8 @@
 #       verify → 发布提交 → 私仓发布 → npm pack 拉回直验(锚定版本字段) → 公网发布 → npmjs GET 200 确认
 #       → push master → tag v<ver> → GitHub Release → 双 registry 终态。
 #       任一断言失败即停; 公网发布被接受后绝不重发(重复版本会被 npm 拒绝)。
+#       断点恢复: 工作树只允许本版 bump+notes 未收尾改动; 未推提交只允许本版 release 提交;
+#       已存在的本版 release 提交/tag/GitHub Release 跳过重做; npm 已接受的版本由 npm 拒绝并停下。
 #       DRYRUN=1 只走守卫与 verify 并打印将执行的链, 不做任何实效动作。
 # 用法: bash scripts/release.sh "<本版一句话主题>"
 set -euo pipefail
@@ -12,9 +14,25 @@ subject="${1:-release}"
 dry=${DRYRUN:-0}
 
 echo "== guard =="
-[ -z "$(git status --porcelain)" ] || { echo "工作树不干净——bump/notes 先收尾提交或暂存"; exit 2; }
+dirty=$(git status --porcelain)
+if [ -n "$dirty" ]; then
+  foreign_paths=$(printf '%s\n' "$dirty" | cut -c4- | grep -vxF -e package.json -e "docs/release-notes-${ver}.md" || true)
+  if [ -n "$foreign_paths" ]; then
+    echo "工作树不干净——只允许本版 bump+notes 改动, 其他先收尾:"
+    echo "$foreign_paths"
+    exit 2
+  fi
+fi
 git fetch -q github
-[ -z "$(git rev-list github/master..master)" ] || { echo "存在待推提交——先 bash scripts/push-master.sh"; exit 2; }
+unpushed=$(git rev-list github/master..master)
+if [ -n "$unpushed" ]; then
+  foreign_subjects=$(git log --format=%s github/master..master | grep -vF "chore(release): ${ver}" || true)
+  if [ -n "$foreign_subjects" ]; then
+    echo "存在待推提交(不止本版 release 提交)——先 bash scripts/push-master.sh"
+    exit 2
+  fi
+  echo "未推提交仅含本版 release 提交——断点恢复流程"
+fi
 [ -f "docs/release-notes-${ver}.md" ] || { echo "缺 docs/release-notes-${ver}.md(人工定稿前置)"; exit 2; }
 echo "version=${ver} subject=${subject} dry=${dry}"
 
@@ -27,8 +45,13 @@ if [ "$dry" = "1" ]; then
 fi
 
 echo "== release commit =="
-git add "package.json" "docs/release-notes-${ver}.md"
-git commit -m "chore(release): ${ver} — ${subject}" --quiet
+if git log -1 --format=%s | grep -qF "chore(release): ${ver}"; then
+  [ -z "$(git status --porcelain)" ] || { echo "HEAD 已是本版 release 提交但工作树仍有改动——人工分辨"; exit 2; }
+  echo "本版 release 提交已存在(HEAD)——跳过提交"
+else
+  git add "package.json" "docs/release-notes-${ver}.md"
+  git commit -m "chore(release): ${ver} — ${subject}" --quiet
+fi
 
 echo "== private publish =="
 npm publish
@@ -60,9 +83,17 @@ done
 
 echo "== push + tag + release =="
 bash scripts/push-master.sh
-git tag "v${ver}"
+if git rev-parse -q --verify "refs/tags/v${ver}" >/dev/null; then
+  echo "tag v${ver} 已存在——跳过打 tag"
+else
+  git tag "v${ver}"
+fi
 git push github "v${ver}"
-gh release create "v${ver}" --repo NelsonLongXiang/dsh-prompt-templates --title "v${ver}" --notes-file "docs/release-notes-${ver}.md"
+if gh release view "v${ver}" --repo NelsonLongXiang/dsh-prompt-templates >/dev/null 2>&1; then
+  echo "GitHub Release v${ver} 已存在——跳过创建"
+else
+  gh release create "v${ver}" --repo NelsonLongXiang/dsh-prompt-templates --title "v${ver}" --notes-file "docs/release-notes-${ver}.md"
+fi
 
 echo "== final =="
 echo "private latest: $(npm view @nelsonlongxiang/dsh-prompt-templates version 2>/dev/null)"
