@@ -123,7 +123,8 @@ export function apply(ctx: Context, config: Config): void {
   const inject = registerAutoInject(ctx, { enabled: config.injectEnabled ?? true }, client)
   // Event-triggered reminders: a separate observer + pre-step consumer,
   // inert unless the deployment AND a rule policy turn them on.
-  registerEventInject(ctx, { ...DEFAULT_EVENT_INJECT_CONFIG, ...config.eventInject }, () => client().events)
+  const eventInjectConfig = { ...DEFAULT_EVENT_INJECT_CONFIG, ...config.eventInject }
+  registerEventInject(ctx, eventInjectConfig, () => client().events)
 
   let routesRegistered = false
   const registerRoutes = (): void => {
@@ -135,7 +136,7 @@ export function apply(ctx: Context, config: Config): void {
     ctx.effect(() => webServer.register({
       kind: 'prefix',
       path: '/plugins/dsh-prompt-templates',
-      handler: (req, res) => { void handle(req, res, client, inject.status, inject.history) },
+      handler: (req, res) => { void handle(req, res, client, inject.status, inject.history, () => eventInjectConfig.enabled) },
     }), 'prompt-templates: api routes')
   }
   registerRoutes()
@@ -153,6 +154,7 @@ async function handle(
   client: () => TemplateStore,
   injectStatus: (sessionId: string) => InjectionStatusView | null,
   injectHistory: (sessionId: string) => readonly InjectionHistoryEntry[],
+  eventInjectEnabled: () => boolean,
 ): Promise<void> {
   const url = new URL(req.url ?? '/', 'http://x')
   const segments = url.pathname.split('/').filter(part => part !== '')
@@ -196,7 +198,11 @@ async function handle(
     // Event-reminder audit surface: policies and per-session episodes. A
     // resolution must carry evidence references; self-reports are refused.
     if (resource === 'event-policies') {
-      if (rest.length === 0 && method === 'GET') return json(res, 200, { items: client().events.policies() })
+      // The config block carries the deployment master switch so the panel
+      // can show the feature's deployment state alongside the rule toggles.
+      if (rest.length === 0 && method === 'GET') {
+        return json(res, 200, { items: client().events.policies(), config: { enabled: eventInjectEnabled() } })
+      }
       const ruleId = rest[0]
       if (ruleId !== undefined && rest.length === 1 && method === 'PATCH') {
         const body = await readJson(req)

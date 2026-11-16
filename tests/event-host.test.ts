@@ -75,6 +75,8 @@ test('Config schema keeps event reminders off by default', () => {
 
 test('switched off (default): tool results write nothing and steps pass through untouched', async () => {
   await withHost({}, async (ctx, route) => {
+    const off = await request(route, 'GET', `${BASE}/event-policies`)
+    assert.equal(off.body.config.enabled, false)
     await request(route, 'PATCH', `${BASE}/event-policies/repeated-failure`, { enabled: true })
     for (let n = 0; n < 4; n += 1) await emitResult(ctx, 's', `c${n}`, 'make', true)
     const decision = await preStep(ctx, 's', 1, 2, [])
@@ -118,6 +120,8 @@ test('audit routes: policies, episodes, and evidence-gated resolutions', async (
     const policies = await request(route, 'GET', `${BASE}/event-policies`)
     assert.equal(policies.status, 200)
     assert.equal(policies.body.items.length, 2)
+    // The config block carries the deployment master switch for the panel.
+    assert.equal(policies.body.config.enabled, true)
     assert.equal((await request(route, 'PATCH', `${BASE}/event-policies/unknown`, { enabled: true })).status, 404)
     assert.equal((await request(route, 'PATCH', `${BASE}/event-policies/repeated-failure`, { threshold: -1 })).status, 400)
     assert.equal((await request(route, 'DELETE', `${BASE}/event-policies`)).status, 405)

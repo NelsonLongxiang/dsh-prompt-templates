@@ -107,6 +107,58 @@ export async function deleteTemplate(id: string): Promise<TemplateActionResult> 
   return mutate('DELETE', `/templates/${encodeURIComponent(id)}`)
 }
 
+/** One event-reminder rule's policy as the panel renders it (wire shape). */
+export interface EventPolicyWire {
+  readonly rule_id: string
+  readonly rule_version: number
+  readonly enabled: boolean
+  readonly threshold: number
+  readonly window_size: number
+  readonly cooldown_turns: number
+  readonly max_per_episode: number
+  readonly mode: TemplateInjectMode
+  readonly updated_at: string
+}
+
+/** Editable policy fields the panel sends (rule id/version are not editable). */
+export interface EventPolicyPatch {
+  readonly enabled?: boolean
+  readonly threshold?: number
+  readonly cooldown_turns?: number
+}
+
+/** One problem episode of one session, read-only in the panel (wire shape). */
+export interface EventEpisodeWire {
+  readonly episode_id: string
+  readonly rule_id: string
+  readonly state: string
+  readonly evidence_revision: number
+  readonly notify_count: number
+  readonly summary: string
+  readonly updated_at: string
+}
+
+/** Load the event rules plus the deployment master-switch state; null when unavailable. */
+export async function eventPolicies(): Promise<{ items: EventPolicyWire[]; enabled: boolean } | null> {
+  const response = await fetch(`${BASE}/event-policies`, { cache: 'no-store' })
+  if (!response.ok) return null
+  const body = await response.json() as { items?: EventPolicyWire[]; config?: { enabled?: boolean } }
+  return { items: [...body.items ?? []], enabled: body.config?.enabled === true }
+}
+
+/** Flip or tune one event rule (partial patch). */
+export function updateEventPolicy(ruleId: string, patch: EventPolicyPatch): Promise<TemplateActionResult> {
+  return mutate('PATCH', `/event-policies/${encodeURIComponent(ruleId)}`, patch)
+}
+
+/** Load one session's recent problem episodes (empty when none or unavailable). */
+export async function eventEpisodes(sessionId: string): Promise<EventEpisodeWire[]> {
+  const response = await fetch(`${BASE}/event-episodes?session_id=${encodeURIComponent(sessionId)}`, { cache: 'no-store' })
+  if (!response.ok) return []
+  const body = await response.json() as { items?: EventEpisodeWire[] }
+  return [...body.items ?? []]
+}
+
 /** Run one mutating request and settle it into the action envelope. */
 async function mutate(method: string, path: string, body?: unknown): Promise<TemplateActionResult> {
   try {

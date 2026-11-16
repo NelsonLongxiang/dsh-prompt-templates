@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { IconCopyOutlineRegular, IconDownloadOutlineRegular, IconEditOutlineRegular, IconGlobeOutlineRegular, IconPlusOutlineRegular, IconQueueOutlineRegular, IconSendOutlineRegular, IconTrashOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { CategoryView, InjectionHistoryEntry, InjectionStatusView, TemplateInjectMode, TemplateView } from '../types.ts'
+import type { EventEpisodeWire, EventPolicyWire } from './api.ts'
 import type { TemplateLibraryFace } from './slots.ts'
 import { filterTemplateRows, searchableTemplateRows } from './filter.ts'
 import { buildSharePayload, parseSharePayload, planShareImport } from './share.ts'
@@ -373,7 +374,7 @@ export interface TemplateLibraryProps {
  * @param props - target session, shared verbs, locale, optional title-row takeover.
  */
 export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: TemplateLibraryProps) {
-  const { refresh, refreshCategories, createCategory, removeCategory, create, update, remove, makeGlobal, insert, send, interject, injectStatus, injectionHistory } = face
+  const { refresh, refreshCategories, createCategory, removeCategory, create, update, remove, makeGlobal, insert, send, interject, injectStatus, injectionHistory, eventPolicies, updateEventPolicy, eventEpisodes } = face
   const [templates, setTemplates] = useState<TemplateView[]>([])
   const [categories, setCategories] = useState<CategoryView[]>([])
   const [showAdd, setShowAdd] = useState(false)
@@ -437,6 +438,43 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
     if (historyOpen) void loadHistory()
   }, [historyOpen, loadHistory, injected])
   useEffect(() => { setHistoryOpen(false) }, [sessionId])
+
+  // Event-reminders dropdown (⚙): the deployment master switch (read-only,
+  // the deployment config owns it) plus per-rule toggles and tunables, and
+  // the target session's read-only problem episodes. Loaded on demand so
+  // closed state costs nothing; a failed load keeps the banner's fallback.
+  const [eventsOpen, setEventsOpen] = useState(false)
+  const [policies, setPolicies] = useState<{ items: readonly EventPolicyWire[]; enabled: boolean } | null>(null)
+  const [episodes, setEpisodes] = useState<readonly EventEpisodeWire[]>([])
+  const loadPolicies = useCallback(async () => {
+    setPolicies(await eventPolicies())
+  }, [eventPolicies])
+  const loadEpisodes = useCallback(async () => {
+    if (sessionId === null) {
+      setEpisodes([])
+      return
+    }
+    setEpisodes(await eventEpisodes(sessionId))
+  }, [eventEpisodes, sessionId])
+  useEffect(() => {
+    if (eventsOpen) { void loadPolicies(); void loadEpisodes() }
+  }, [eventsOpen, loadPolicies, loadEpisodes])
+  useEffect(() => { setEventsOpen(false) }, [sessionId])
+  // Flip one rule's enabled switch; the write confirms before the row flips.
+  const handleToggleRule = useCallback(async (rule: EventPolicyWire) => {
+    const result = await updateEventPolicy(rule.rule_id, { enabled: !rule.enabled })
+    if (result.ok) void loadPolicies()
+    else setRowError(result.error.message)
+  }, [updateEventPolicy, loadPolicies])
+  // Commit one tunable (threshold / cooldown) after an explicit blur; an
+  // unchanged or unparsable value writes nothing.
+  const handleRuleParam = useCallback(async (rule: EventPolicyWire, field: 'threshold' | 'cooldown_turns', raw: string) => {
+    const value = Number.parseInt(raw, 10)
+    if (!Number.isFinite(value) || value === rule[field]) return
+    const result = await updateEventPolicy(rule.rule_id, { [field]: value })
+    if (result.ok) void loadPolicies()
+    else setRowError(result.error.message)
+  }, [updateEventPolicy, loadPolicies])
 
   // Clipboard sharing: one template per row, one category per tab. The
   // payload carries raw rows (variables stay literal — they re-expand on
@@ -705,6 +743,17 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
           >
             <IconDownloadOutlineRegular size={12} />
           </button>
+          <button
+            type="button"
+            className={css.importBtn}
+            data-prompt-events-toggle
+            onClick={() => { setEventsOpen(open => !open) }}
+            aria-label={t('panel.eventsTitle')}
+            aria-expanded={eventsOpen}
+            title={t('panel.eventsTitle')}
+          >
+            ⚙
+          </button>
         </span>
         {headerExtra}
       </div>
@@ -739,6 +788,62 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
                 ⟳{entry.turn} · {new Date(entry.at).toLocaleTimeString()} · {entry.templates.join(', ')}
               </div>
               <div className={css.injectHistoryContent}>{entry.content}</div>
+            </div>
+          ))}
+        </div>
+      )}
+      {eventsOpen && (
+        <div className={css.eventsPanel} data-prompt-events role="dialog" aria-label={t('panel.eventsTitle')}>
+          <div className={css.eventsHead}>{t('panel.eventsTitle')}</div>
+          <div className={policies !== null && policies.enabled ? css.eventsBanner : `${css.eventsBanner} ${css.eventsBannerOff}`}>
+            {policies === null ? t('panel.eventsLoadFailed') : policies.enabled ? t('panel.eventsMasterOn') : t('panel.eventsMasterOff')}
+          </div>
+          {(policies?.items ?? []).map(rule => (
+            <div key={rule.rule_id} className={css.eventsRule}>
+              <label className={css.eventsRuleHead}>
+                <input
+                  type="checkbox"
+                  className={css.eventsToggle}
+                  checked={rule.enabled}
+                  disabled={policies === null || !policies.enabled}
+                  onChange={() => { void handleToggleRule(rule) }}
+                />
+                <span className={css.eventsRuleName}>
+                  {t(rule.rule_id === 'repeated-preparation' ? 'panel.eventsRulePrep' : 'panel.eventsRuleFail')}
+                </span>
+              </label>
+              <div className={css.eventsParams}>
+                <label className={css.eventsParam}>
+                  {t('panel.eventsThreshold')}
+                  <input
+                    type="number"
+                    min={1}
+                    defaultValue={rule.threshold}
+                    disabled={!rule.enabled || policies === null || !policies.enabled}
+                    onBlur={(event) => { void handleRuleParam(rule, 'threshold', event.target.value) }}
+                  />
+                </label>
+                <label className={css.eventsParam}>
+                  {t('panel.eventsCooldown')}
+                  <input
+                    type="number"
+                    min={0}
+                    defaultValue={rule.cooldown_turns}
+                    disabled={!rule.enabled || policies === null || !policies.enabled}
+                    onBlur={(event) => { void handleRuleParam(rule, 'cooldown_turns', event.target.value) }}
+                  />
+                </label>
+              </div>
+            </div>
+          ))}
+          <div className={css.eventsEpisodesTitle}>{t('panel.eventsEpisodes')}</div>
+          {episodes.length === 0 && <div className={css.eventsEmpty}>{t('panel.eventsEpisodesEmpty')}</div>}
+          {episodes.slice(0, 8).map(episode => (
+            <div key={episode.episode_id} className={css.eventsEpisode}>
+              <div className={css.eventsEpisodeHead}>
+                {episode.rule_id} · {episode.state} · ×{episode.notify_count} · {new Date(episode.updated_at).toLocaleTimeString()}
+              </div>
+              <div className={css.eventsEpisodeSummary}>{episode.summary}</div>
             </div>
           ))}
         </div>
