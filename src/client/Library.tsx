@@ -502,7 +502,7 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
 
   const copyPayload = useCallback(async (payload: string): Promise<void> => {
     const request = ++shareRequest.current
-    const result = await copyShareText(payload)
+    const result = await copyShareText(payload, undefined, () => request === shareRequest.current)
     if (request !== shareRequest.current) return
     if (result.ok) {
       setManualShare(null)

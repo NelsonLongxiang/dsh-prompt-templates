@@ -119,6 +119,18 @@ test('a detached focus target cannot turn confirmed compatibility copy into fail
   assert.deepEqual(await copyShareText(PAYLOAD, f.env), { ok: true, method: 'legacy' })
 })
 
+test('a stale rejected Clipboard request must not run a fallback that can steal current selection', async () => {
+  const f = fixture({ copy: true })
+  let reject!: (error: Error) => void
+  let current = true
+  const pending = copyShareText(PAYLOAD, { ...f.env, navigator: { clipboard: { writeText() { return new Promise<void>((_resolve, fail) => { reject = fail }) } } } }, () => current)
+  current = false
+  reject(named('NotAllowedError'))
+  const result = await pending
+  assert.equal(result.ok, false)
+  assert.deepEqual(f.calls, [], 'stale request must not append, copy, or restore obsolete focus')
+})
+
 test('throwing clipboard getter still reaches the manual-copy path', async () => {
   const f = fixture({ available: false })
   const navigator = Object.defineProperty({}, 'clipboard', { get() { throw named('SecurityError') } })

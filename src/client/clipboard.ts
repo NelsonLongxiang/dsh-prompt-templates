@@ -68,7 +68,11 @@ function legacyCopy(payload: string, doc: Document): { ok: boolean; errorName: s
 }
 
 /** Only a confirmed write reports success. Both automatic failures retain the exact original JSON. */
-export async function copyShareText(payload: string, environment: CopyEnvironment = { navigator, document }): Promise<ShareCopyResult> {
+export async function copyShareText(
+  payload: string,
+  environment: CopyEnvironment = { navigator, document },
+  isCurrent: () => boolean = () => true,
+): Promise<ShareCopyResult> {
   let failure: CopyFailure
   try {
     const clipboard = environment.navigator.clipboard
@@ -80,6 +84,10 @@ export async function copyShareText(payload: string, environment: CopyEnvironmen
   } catch (error) {
     failure = copyFailure(error, environment.document)
   }
+  // The caller may have changed session/unmounted or begun a newer share
+  // while writeText was pending. Never copy/steal focus on its obsolete behalf.
+  // A native write already handed to the browser is not cancellable.
+  if (!isCurrent()) return { ok: false, payload, failure, legacyErrorName: null }
   let fallback: { ok: boolean; errorName: string | null }
   try { fallback = legacyCopy(payload, environment.document) }
   catch (error) { fallback = { ok: false, errorName: errorName(error) } }

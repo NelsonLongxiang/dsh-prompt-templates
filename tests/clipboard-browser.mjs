@@ -18,7 +18,7 @@ const bundle = readFileSync(join(project, 'lib/client.js'), 'utf8')
 const dir = createTestDirectory('clipboard-browser-')
 const target = join(dir, 'index.html')
 const harness = String.raw`
-  window.fixture = { mode: 'missing', copies: [], originalPayload: null, writes: 0, pending: [], nativeWrites: 0 };
+  window.fixture = { mode: 'missing', copies: [], originalPayload: null, writes: 0, pending: [], nativeWrites: 0, legacyCalls: 0 };
   const originalClipboard = navigator.clipboard;
   const text = '合成提示词：line 1\nline 2 {{date}}';
   const rows = [{ id: 'safe-one', name: 'Synthetic example', content: text, scope: 'global', session_id: null,
@@ -42,6 +42,7 @@ const harness = String.raw`
   } });
   document.execCommand = command => {
     if (command !== 'copy') return false;
+    fixture.legacyCalls += 1;
     const value = document.activeElement?.value;
     fixture.originalPayload = value;
     if (fixture.mode !== 'legacy') return false;
