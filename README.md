@@ -112,6 +112,21 @@ dsh-prompt-templates import --db /path/to/db.sqlite3 --in merged.json --apply \
 
 `import` inserts/updates by template id and never prunes rows. It rejects unknown snapshot fields, unsupported schemas, mismatched hashes, same-name/different-id conflicts, and changes above `--max-changes` (default 100). Schema-v2 snapshots (pre-auto-inject) still import — the inject facts default to off; exports are always v3.
 
+## Repository layout
+
+Declared layout — anything outside this allowlist at the repo root is scatter, and the patrol gate (`scripts/patrol.sh`, dir-convention section) fails on it:
+
+| Path | Responsibility |
+|---|---|
+| `src/` | Host plugin, CLI, and browser-client sources |
+| `scripts/` | Rerunnable ops entries: `patrol.sh`, `branch-audit.sh`, `remote-heads.sh`, `push-master.sh`, `release.sh` |
+| `docs/` | Human-facing documents: specs, release notes, handover |
+| `tests/` | `node:test` suites behind `pnpm verify` |
+| `images/` | Static assets referenced by the READMEs |
+| `tmp/<task>/` | Git-ignored scratch; session lifetime only, never in git |
+| `lib/`, `node_modules/` | Build output and dependencies — ignored, never tracked |
+| `.npmrc`, `.claude/`, `.obelisk/` | Local tool state (registry config, workbench junctions, agent memories) — ignored, never tracked |
+
 ## Development
 
 ```sh

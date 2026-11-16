@@ -111,6 +111,21 @@ dsh-prompt-templates import --db /path/to/db.sqlite3 --in merged.json --apply \
 
 `import` 仅按模板 ID 插入/更新，绝不自动删除；未知字段、错误 schema、hash 漂移、同名异 ID，以及超过 `--max-changes`（默认 100）的变更均阻断。schema-v2 快照（无注入字段）仍可导入——注入项默认关闭；导出恒为 v3。
 
+## 目录定义
+
+声明的目录布局——根级白名单之外即散落，巡检门（`scripts/patrol.sh` 的 dir convention 段）会判失败：
+
+| 路径 | 职责 |
+|---|---|
+| `src/` | 宿主插件、CLI 与浏览器客户端源码 |
+| `scripts/` | 可重跑运维入口：`patrol.sh`、`branch-audit.sh`、`remote-heads.sh`、`push-master.sh`、`release.sh` |
+| `docs/` | 面向人的文档：spec、发布说明、交接指南 |
+| `tests/` | `pnpm verify` 背后的 `node:test` 套件 |
+| `images/` | README 引用的静态图 |
+| `tmp/<任务>/` | gitignore 的临时区；生命周期 ≤ 会话，永不入库 |
+| `lib/`、`node_modules/` | 构建产物与依赖——忽略，永不入库 |
+| `.npmrc`、`.claude/`、`.obelisk/` | 本地工具状态（registry 配置、工坊 junction、代理记忆）——忽略，永不入库 |
+
 ## 开发
 
 ```sh
