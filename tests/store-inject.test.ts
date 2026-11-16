@@ -128,7 +128,7 @@ CREATE TABLE categories (
 }
 
 /** On-disk schema this build opens. Keep in lockstep with SCHEMA_VERSION in src/store.ts. */
-const CURRENT_SCHEMA_VERSION = 5
+const CURRENT_SCHEMA_VERSION = 6
 
 function userVersion(path: string): number {
   const db = new DatabaseSync(path)
@@ -205,3 +205,4 @@ test('unknown future schema versions refuse to open', () => {
     cleanup()
   }
 })
+

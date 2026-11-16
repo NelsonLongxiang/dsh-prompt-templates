@@ -157,3 +157,8 @@ Still manual, because they need a live harness profile: booting `dsh web`, the b
 ## License
 
 MIT
+
+
+### Atelier evolution checkpoint (unreleased)
+
+A session-scoped `工坊·演化自评估` template is provisioned once by default and scheduled every 100 user turns. Existing same-name global/session templates and user edits, disabling and deletion are preserved. This is a reminder, not migration execution or authorization. Set `evolutionAssessmentEnabled: false` to opt out. See [the lifecycle, counting and rollback contract](docs/evolution-default.md).

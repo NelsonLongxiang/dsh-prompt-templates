@@ -49,6 +49,8 @@ export interface Config {
   readonly dbPath?: string | null
   /** Scheduled-injection master switch; `false` keeps the listener pass-through. */
   readonly injectEnabled?: boolean
+  /** Auto-add Atelier session self-assessment once; never overwrites user settings. */
+  readonly evolutionAssessmentEnabled?: boolean
   /** Upper bound accepted for a template's inject interval (`inject_every`). */
   readonly injectMaxEvery?: number
   /** Event-triggered reminders; off by default and independent of `injectEnabled`. */
@@ -65,6 +67,7 @@ export interface Config {
 export const Config: s<Config> = s.object({
   dbPath: s.string(),
   injectEnabled: s.boolean().default(true),
+  evolutionAssessmentEnabled: s.boolean().default(true),
   injectMaxEvery: s.number().default(DEFAULT_INJECT_MAX_EVERY),
   eventInject: s.object({
     enabled: s.boolean().default(DEFAULT_EVENT_INJECT_CONFIG.enabled),
@@ -120,7 +123,7 @@ export function apply(ctx: Context, config: Config): void {
   // Scheduled auto-injection rides the agent loop's pre-step waterfall and
   // shares the route's store; it needs no web server, so headless profiles
   // inject too. The handle feeds the inject-status route (panel badge).
-  const inject = registerAutoInject(ctx, { enabled: config.injectEnabled ?? true }, client)
+  const inject = registerAutoInject(ctx, { enabled: config.injectEnabled ?? true, evolutionAssessmentEnabled: config.evolutionAssessmentEnabled ?? true }, client)
   // Event-triggered reminders: a separate observer + pre-step consumer,
   // inert unless the deployment AND a rule policy turn them on.
   const eventInjectConfig = { ...DEFAULT_EVENT_INJECT_CONFIG, ...config.eventInject }
@@ -317,4 +320,5 @@ function errorBody(code: string, message: string): unknown {
 
 export { TemplateStore, TemplateRuleError } from './store.ts'
 export type { TemplateRow } from './store.ts'
+
 

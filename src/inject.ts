@@ -62,6 +62,7 @@ export interface InjectionEventProbe {
 /** Deployment-facing switch; the listener stays registered but pass-through when off. */
 export interface AutoInjectConfig {
   readonly enabled: boolean
+  readonly evolutionAssessmentEnabled?: boolean
 }
 
 /**
@@ -268,7 +269,11 @@ export function registerAutoInject(ctx: Context, config: AutoInjectConfig, store
       // Compaction or a log rewrite can shrink the array: memo indexes would
       // go stale, so fall back to a full rescan.
       if (events.length < state.scanned) state.scanned = 0
-      const due = dueTemplates(store().listInjectable(sessionId), turn)
+      signal.throwIfAborted()
+      const templateStore = store()
+      const evolutionEnabled = config.evolutionAssessmentEnabled ?? true
+      if (evolutionEnabled) templateStore.ensureEvolutionDefault(sessionId, turn)
+      const due = dueTemplates(templateStore.listScheduled(sessionId, turn, evolutionEnabled), turn)
       if (due.length === 0) return decision
       // Expand variable placeholders with this delivery context;
       // unresolved ones stay literal. The history surface records the
@@ -310,3 +315,4 @@ export function registerAutoInject(ctx: Context, config: AutoInjectConfig, store
   })
   return { status: tracker.status.bind(tracker), history: tracker.history.bind(tracker) }
 }
+

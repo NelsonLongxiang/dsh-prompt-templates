@@ -156,3 +156,8 @@ GitHub Actions（`.github/workflows/verify.yml`）在指向 `master` 的 push / 
 ## 许可证
 
 MIT
+
+
+### Atelier 演化自评估（待发布）
+
+默认按会话补充 `工坊·演化自评估`，每100用户轮次调用 Agent Atelier 指引；已有同名模板、编辑、关闭和删除不被覆盖。仅提醒，不执行迁移或授予权限。可用 `evolutionAssessmentEnabled: false` 停用。首次历史边界不追补、升级/退出/回滚详见 [演化自评估合同](docs/evolution-default.md)。

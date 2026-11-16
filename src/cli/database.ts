@@ -35,7 +35,7 @@ export interface ImportResult {
  * adds the event-reminder tables, which hold runtime data and are never
  * exported or imported).
  */
-const SUPPORTED_DB_VERSIONS: readonly number[] = [4, 5]
+const SUPPORTED_DB_VERSIONS: readonly number[] = [4, 5, 6]
 
 /** A valid operation blocked by a safety/business gate (CLI exit 1). */
 export class ImportBlockedError extends Error {
@@ -48,7 +48,7 @@ export function exportDatabase(dbPath: string, filters: { scope?: 'global' | 'se
   try {
     db.exec('PRAGMA query_only=ON')
     const version = Number((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
-    if (!SUPPORTED_DB_VERSIONS.includes(version)) throw new Error(`${path} has schema version ${version}, expected 4 or 5`)
+    if (!SUPPORTED_DB_VERSIONS.includes(version)) throw new Error(`${path} has schema version ${version}, expected 4, 5 or 6`)
     const clauses: string[] = []
     const args: string[] = []
     if (filters.scope !== undefined) { clauses.push('scope = ?'); args.push(filters.scope) }
@@ -157,7 +157,7 @@ export async function importDatabase(dbPath: string, incoming: DataSnapshot, opt
   try {
     db.exec(`PRAGMA busy_timeout=${options.busyTimeoutMs ?? 5000}`)
     const version = Number((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
-    if (!SUPPORTED_DB_VERSIONS.includes(version)) throw new Error(`${path} has schema version ${version}, expected 4 or 5`)
+    if (!SUPPORTED_DB_VERSIONS.includes(version)) throw new Error(`${path} has schema version ${version}, expected 4, 5 or 6`)
     backupPath = resolve(options.backupOut ?? `${path}.${timestampName()}.bak`)
     mkdirSync(dirname(backupPath), { recursive: true })
     await backup(db, backupPath)
@@ -202,3 +202,4 @@ function safeDatabasePath(input: string): string {
 }
 
 function timestampName(): string { return new Date().toISOString().replaceAll(':', '').replaceAll('.', '').replace('Z', 'Z') }
+

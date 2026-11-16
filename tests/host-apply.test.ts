@@ -622,3 +622,23 @@ test('listener faults stay inside the step, and dispose closes the store', async
     }
   })
 })
+
+
+test('Atelier defaults enroll once and inject at a future 100-user-turn boundary, not empty steps', async () => {
+  await withHost({}, { when: 'before' }, async handle => {
+    await preStep(handle.ctx, { sessionId: 'evo', turn: 1, messages: [] })
+    assert.equal((await request(handle.handler(), 'GET', TEMPLATES)).body.items.length, 0)
+    await preStep(handle.ctx, { sessionId: 'evo', turn: 1 })
+    const first = await preStep(handle.ctx, { sessionId: 'evo', turn: 100 })
+    assert.equal(first.messages?.length, 2)
+    assert.match(textOf(first.messages?.[1]), /演化自评估/)
+    const retry = await preStep(handle.ctx, { sessionId: 'evo', turn: 100 })
+    assert.equal(retry.messages?.length, 1)
+  })
+  await withHost({ evolutionAssessmentEnabled: false }, { when: 'before' }, async handle => {
+    await preStep(handle.ctx, { sessionId: 'off', turn: 1 })
+    const result = await preStep(handle.ctx, { sessionId: 'off', turn: 100 })
+    assert.equal(result.messages?.length, 1)
+    assert.equal((await request(handle.handler(), 'GET', TEMPLATES)).body.items.length, 0)
+  })
+})

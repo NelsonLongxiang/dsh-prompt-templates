@@ -85,7 +85,7 @@ test('v3 database migrates to the current schema in place, mode defaults inject'
     const probe = new DatabaseSync(db)
     const version = (probe.prepare('PRAGMA user_version').get() as { user_version: number }).user_version
     probe.close()
-    assert.equal(version, 5)
+    assert.equal(version, 6)
   } finally {
     // Windows: a WAL-mode sqlite keeps -shm/-wal siblings; close before remove.
     try { store?.close() } catch { /* already closed */ }
@@ -136,3 +136,4 @@ test('renderVisibleInjectionMessage stamps the user channel with the schedule ma
   assert.match(silent.content[0].type === 'text' ? silent.content[0].text : '', /^<system-reminder>/)
   assert.equal((silent.source as { kind: string }).kind, 'prompt-template-schedule')
 })
+
