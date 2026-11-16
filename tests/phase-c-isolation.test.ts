@@ -1,5 +1,7 @@
 /** Phase C isolation: real SQLite files + synthetic tool/log fixtures, not a live DSH/model verdict. */
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 import { copyFileSync, existsSync, rmSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { backup, DatabaseSync } from 'node:sqlite'
@@ -140,6 +142,37 @@ test('M04/M05 linked restart stages retain their original database and durable-l
     assert.notEqual(store.events.outbox(SESSION)[1]?.dedup_key, key)
     assert.equal(store.events.episodes(SESSION)[0]?.notify_count, 2)
   } finally { store.close() }
+})
+
+test('M05 survives separate process exits before prepare, before logging, and before reconciliation', t => {
+  const dir = createTestDirectory('phase-c-process-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const db = join(dir, 'db.sqlite3')
+  const log = join(dir, 'events.json')
+  const worker = fileURLToPath(new URL('./phase-c-worker.mjs', import.meta.url))
+  const run = (stage: string) => {
+    const result = spawnSync(process.execPath, ['--experimental-strip-types', worker, stage, db, log], { encoding: 'utf8', timeout: 20_000 })
+    assert.equal(result.error, undefined)
+    assert.equal(result.status, 0, result.stderr)
+    return JSON.parse(result.stdout) as { messages: number; episodes: Array<{ episode_id: string }>; outbox: Array<{ dedup_key: string; attempts: number; state: string }> }
+  }
+  const seeded = run('seed')
+  assert.equal(seeded.episodes.length, 1)
+  assert.equal(seeded.outbox.length, 0)
+  const prepared = run('prepare')
+  assert.equal(prepared.messages, 1)
+  assert.equal(prepared.episodes[0]?.episode_id, seeded.episodes[0]?.episode_id)
+  assert.equal(prepared.outbox[0]?.state, 'prepared')
+  assert.equal(existsSync(log), false, 'first process never logged the reminder')
+  const logged = run('log')
+  assert.equal(logged.messages, 1)
+  assert.equal(logged.outbox[0]?.dedup_key, prepared.outbox[0]?.dedup_key)
+  assert.equal(logged.outbox[0]?.attempts, 2)
+  assert.equal(existsSync(log), true)
+  const reconciled = run('reconcile')
+  assert.equal(reconciled.messages, 0)
+  assert.equal(reconciled.outbox[0]?.state, 'persisted')
+  assert.equal(reconciled.outbox[0]?.attempts, 2)
 })
 
 test('SQLite backup includes live WAL state; restoration into a fresh stopped target preserves all tables', async t => {
