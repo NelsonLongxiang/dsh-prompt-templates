@@ -1,7 +1,7 @@
+import { createTestDirectory } from './temp-dir.mjs'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { rmSync } from 'node:fs'
 import test from 'node:test'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { DEFAULT_INJECT_MAX_EVERY, TemplateRuleError, TemplateStore } from '../src/store.ts'
@@ -9,7 +9,7 @@ import { DEFAULT_INJECT_MAX_EVERY, TemplateRuleError, TemplateStore } from '../s
 // Migration tests need ONE database file shared across two connections, so
 // they run against real temp files (:memory: is per-connection).
 function tempDbPath(): { path: string, cleanup: () => void } {
-  const dir = mkdtempSync(join(tmpdir(), 'pti-store-'))
+  const dir = createTestDirectory('pti-store-')
   return { path: join(dir, 'test.sqlite3'), cleanup: () => rmSync(dir, { recursive: true, force: true }) }
 }
 

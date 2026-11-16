@@ -1,6 +1,6 @@
+import { createTestDirectory } from './temp-dir.mjs'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readFileSync, readdirSync, rmSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 
@@ -50,7 +50,7 @@ function parsePackManifest(stdout) {
   }
 }
 
-const scratch = mkdtempSync(join(tmpdir(), 'pt-cli-package-'))
+const scratch = createTestDirectory('pt-cli-package-')
 try {
   const packed = spawnSync('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', scratch], { encoding: 'utf8', shell: process.platform === 'win32' })
   assert.equal(packed.status, 0, packed.stderr)

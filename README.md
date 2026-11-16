@@ -125,7 +125,7 @@ Declared layout — anything outside this allowlist at the repo root is scatter,
 | `docs/` | Human-facing documents: specs, release notes, handover |
 | `tests/` | `node:test` suites behind `pnpm verify` |
 | `images/` | Static assets referenced by the READMEs |
-| `tmp/<task>/` | Git-ignored scratch; session lifetime only, never in git |
+| `tmp/<task>/` | Git-ignored scratch; automated tests use `tmp/test-runs/` via `tests/temp-dir.mjs`; task lifetime only, never in git |
 | `lib/`, `node_modules/` | Build output and dependencies — ignored, never tracked |
 | `.npmrc`, `.claude/`, `.obelisk/` | Local tool state (registry config, workbench junctions, agent memories) — ignored, never tracked |
 
