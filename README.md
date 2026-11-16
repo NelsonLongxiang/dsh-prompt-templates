@@ -43,18 +43,20 @@ Each template (global or session-scoped) carries its own **switch + interval N**
 
 - The injected content arrives as one durable `<system-reminder>` user message recorded in the session log (source kind `prompt-template-schedule`), so replays and audits reconstruct exactly what the model saw
 - A boundary round is never injected twice, even across restarts or step retries
-- Config persists in the plugin's SQLite database (schema v5); the deployment can silence everything with `injectEnabled: false` in the patch config
+- Config persists in the plugin's SQLite database (schema v5); `injectEnabled: false` in the patch config silences **scheduled injection only** — event reminders (below) have their own independent master switch `eventInject.enabled`
 - Each template picks a delivery mode: **silent** (default, model context only) or **visible in chat** (rendered as a normal user message with a ⚙️ scheduled-injection header)
 
 ## Event reminders (off by default)
 
 Besides fixed rounds, the plugin can remind the agent **because of what just happened**. It watches final tool results, detects two problems — **repeated preparation** (the same hand-built prefix such as environment variables plus an absolute interpreter path, with different tasks) and **repeated failure** (the same target failing the same way, or failing again after it had succeeded) — and appends one short reminder before the next model decision, including the tool-result steps that scheduled injection skips.
 
-- Off unless the deployment sets `eventInject.enabled: true` **and** a rule is enabled (`PATCH /plugins/dsh-prompt-templates/event-policies/<rule>`); both rules ship disabled
-- Only hashes and a short redacted summary are stored — never raw arguments, output, environment values or tokens; failure classes come from structured fields, never from output text
-- Budgeted: one reminder per turn by default, a character cap, a per-rule cooldown and per-problem limit; no evidence, no reminder
+- Two switches in series, both off by default: the deployment-level master `eventInject.enabled`, then each rule's own toggle — both are manageable in the panel's ⚙ dropdown (rule toggles, threshold/cooldown, read-only episode ledger); the master switch itself stays in deployment config
+- Timing: observation happens after a tool result; the reminder is appended before the **next model decision in the same turn**. It cannot block a first violation, and cannot undo side effects or already-issued sibling parallel calls
+- What is stored: fingerprints (hashes) plus a length-bounded, heuristically redacted summary of the arguments. Raw arguments/output are not stored wholesale, but the summary may still carry argument fragments the redaction did not mask; it is never treated as an instruction or authorization
+- Failure classes come from structured fields only (`isError` / error codes), never from output text. Note the current contract: a tool result with `isError: false` counts as `ok` even when a non-zero exit code rides along in metadata (see issue #11 for the follow-up)
+- Budgeted: one reminder per **user turn** by default (long autonomous turns therefore get at most one), a character cap, a per-rule cooldown (3 turns by default), and a per-problem limit; no new evidence, no reminder
 - Delivery is at-least-once with dedup against the session log, so restarts and rejected steps neither lose nor duplicate a reminder
-- The plugin only marks a problem `notified` (with a `changed` / `repeated` hint). Closing it (`verified`, `rejected`, …) goes through `PATCH …/event-episodes/<id>` and requires evidence references
+- The plugin only marks a problem `notified`. The `changed` / `repeated` field is a weak behavioral hint, not a verdict: an unrelated command on the same tool can flip it. Closing an episode (`verified`, `rejected`, …) goes through `PATCH …/event-episodes/<id>` and requires evidence references — only a full-trajectory review counts as verification
 - A reminder is a user-role message: not a user instruction, no extra permission. How an agent should handle it is defined in Agent Atelier's `references/improvement-loop.md`; the design is in [docs/spec-event-inject.md](docs/spec-event-inject.md)
 
 ## Template variables
@@ -85,7 +87,7 @@ The store is pure TS inside the host half; no child process is spawned.
 
 ## Security
 
-- Template content reaches a model request in exactly two ways: as ordinary user text the user chose to insert, or as scheduled auto-injection of templates where the switch was explicitly enabled — every injection is a durable session event
+- Template **content** reaches a model request in exactly two ways: as ordinary user text the user chose to insert, or as scheduled auto-injection of templates where the switch was explicitly enabled — every injection is a durable session event. Event reminders are a separate channel: they carry no template content, and their switch is independent of scheduled injection
 - The panel talks to the host store over the Host's plugin routes only; no extra listener, no outbound network
 
 ## Database sync CLI
