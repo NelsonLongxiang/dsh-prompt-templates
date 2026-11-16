@@ -1,11 +1,11 @@
+import { createTestDirectory } from './temp-dir.mjs'
 /**
  * Event reminders, storage and delivery: schema v5, policies, episodes, the
  * outbox state machine, budgets, and the crash/restart/compaction windows
  * (spec M04–M06). Drives the exported halves directly with a fake log.
  */
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import test from 'node:test'
@@ -78,7 +78,7 @@ test('fresh databases get the v5 event tables with every rule disabled', () => {
 })
 
 test('v4 databases migrate to v5 in place, keeping templates and seeding disabled policies', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'pt-v4-'))
+  const dir = createTestDirectory('pt-v4-')
   const path = join(dir, 'v4.sqlite3')
   try {
     const legacy = new DatabaseSync(path)
@@ -198,7 +198,7 @@ test('M05: newer evidence supersedes an undelivered reminder instead of sending 
 })
 
 test('M05/M06: restart and compaction reconcile from the durable log, never from memory', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'pt-ev-'))
+  const dir = createTestDirectory('pt-ev-')
   const path = join(dir, 'db.sqlite3')
   try {
     const before = harness(new TemplateStore(path))

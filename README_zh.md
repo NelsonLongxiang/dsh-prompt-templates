@@ -124,7 +124,7 @@ dsh-prompt-templates import --db /path/to/db.sqlite3 --in merged.json --apply \
 | `docs/` | 面向人的文档：spec、发布说明、交接指南 |
 | `tests/` | `pnpm verify` 背后的 `node:test` 套件 |
 | `images/` | README 引用的静态图 |
-| `tmp/<任务>/` | gitignore 的临时区；生命周期 ≤ 会话，永不入库 |
+| `tmp/<任务>/` | 已忽略的临时区；自动测试经 `tests/temp-dir.mjs` 使用 `tmp/test-runs/`；限任务生命周期，永不入库 |
 | `lib/`、`node_modules/` | 构建产物与依赖——忽略，永不入库 |
 | `.npmrc`、`.claude/`、`.obelisk/` | 本地工具状态（registry 配置、工坊 junction、代理记忆）——忽略，永不入库 |
 
