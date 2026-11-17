@@ -1,13 +1,18 @@
+import { rmSync } from 'node:fs'
+import { createTestDirectory } from './temp-dir.mjs'
 import assert from 'node:assert/strict'
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import test from 'node:test'
+import test, { after } from 'node:test'
 import { TemplateStore } from '../src/store.ts'
 import { searchTemplates } from '../src/cli/database.ts'
 
+const directories: string[] = []
+after(() => { for (const dir of directories) rmSync(dir, { recursive: true, force: true }) })
+
 function tempDb(): string {
-  const path = join(mkdtempSync(join(tmpdir(), 'pt-search-')), 'db.sqlite3')
+  const dir = createTestDirectory('pt-search-')
+  directories.push(dir)
+  const path = join(dir, 'db.sqlite3')
   const store = new TemplateStore(path)
   store.createCategory({ name: 'ops', scope: 'global' })
   store.create({ name: '发布和更新', content: 'use tea registry publish', scope: 'global', category: 'ops' })

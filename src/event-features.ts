@@ -4,10 +4,11 @@
  * storage, so the extraction can be replayed offline and tested exhaustively.
  *
  * What is kept: the tool name, two fingerprints (the shared "preparation"
- * part of the arguments and the task-specific "target" part), a structured
- * outcome class, and a short redacted summary for audit and reminder text.
- * What is never kept: raw arguments, output content, environment values,
- * tokens or passwords.
+ * part of the arguments and the task-specific "target" part), an outcome
+ * class, and a bounded, heuristically redacted summary for audit/reminders.
+ * Full raw arguments and output bodies are not persisted. The summary can
+ * retain unmasked argument fragments; redaction is not a no-secrets guarantee.
+ * The pinned bash adapter may read a trailing exit marker, never persist it.
  *
  * @module dsh-prompt-templates/event-features
  */
@@ -24,9 +25,9 @@ export interface ObservationFeatures {
   readonly stableFingerprint: string
   /** Hash of the task-specific remainder of the arguments. */
   readonly targetFingerprint: string
-  /** `ok`, `error:<code>` or `error:unknown`; from structured fields only. */
+  /** `ok`, `error:<code>` / `error:exit:<N>` or `error:unknown`; see the failure contract. */
   readonly outcome: string
-  /** Structured exit code when the tool reports one in `meta`, else null. */
+  /** Integer meta exit code, or the pinned bash trailing-marker fallback; otherwise null. */
   readonly exitCode: number | null
   /** Short redacted summary for audit views and reminder text. */
   readonly summary: string
@@ -37,7 +38,17 @@ export interface ToolOutcomeProbe {
   readonly isError: boolean
   readonly error?: { readonly info?: { readonly code?: unknown } } | undefined
   readonly meta?: unknown
+  /** Message content parts; only the trailing bash exit marker is read from it. */
+  readonly content?: unknown
 }
+
+/**
+ * Marker the bash tool appends for a non-zero child exit, as recorded from a
+ * real host (docs/event-failure-contract.md pins the observed build). Matched
+ * only as the exact last line of the last text part, and only when no
+ * structured field already classified the outcome.
+ */
+const EXIT_MARKER = /^\[exit code: (\d+)\]$/
 
 /** Short stable hash (hex) of a canonical string. */
 export function fingerprint(text: string): string {
@@ -153,11 +164,44 @@ export function canonicalJson(value: unknown): string {
   return `{${Object.keys(record).sort().map(key => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(',')}}`
 }
 
-/** Outcome class from structured fields only — never from output text. */
-export function outcomeClass(result: ToolOutcomeProbe): string {
-  if (!result.isError) return 'ok'
-  const code = result.error?.info?.code
-  return typeof code === 'string' && code !== '' ? `error:${code}` : 'error:unknown'
+/** Trailing `[exit code: N]` marker of the last text part, or null. */
+export function exitMarkerOf(content: unknown): number | null {
+  if (!Array.isArray(content)) return null
+  let lastText: string | undefined
+  for (const part of content) {
+    if (part === null || typeof part !== 'object') continue
+    const record = part as Record<string, unknown>
+    if (record['type'] === 'text' && typeof record['text'] === 'string') lastText = record['text']
+  }
+  if (lastText === undefined) return null
+  const lines = lastText.trimEnd().split('\n')
+  const match = EXIT_MARKER.exec((lines[lines.length - 1] ?? '').trim())
+  if (match === null) return null
+  const code = Number.parseInt(match[1] ?? '', 10)
+  return Number.isInteger(code) ? code : null
+}
+
+/** Exit code priority: integer metadata (including zero), then the bash-only trailing marker. */
+export function structuredExitCode(toolName: string, result: ToolOutcomeProbe): number | null {
+  const fromMeta = exitCodeOf(result.meta)
+  if (fromMeta !== null) return fromMeta
+  if (toolName !== 'bash') return null
+  return exitMarkerOf(result.content)
+}
+
+/**
+ * Outcome class. Priority: `isError` → integer meta exit code → bash trailing
+ * marker → `ok`. Metadata zero suppresses a conflicting marker. `ok` means
+ * tool-layer completion, not task success; arbitrary output wording is ignored.
+ */
+export function outcomeClass(toolName: string, result: ToolOutcomeProbe): string {
+  if (result.isError) {
+    const code = result.error?.info?.code
+    return typeof code === 'string' && code !== '' ? `error:${code}` : 'error:unknown'
+  }
+  const exit = structuredExitCode(toolName, result)
+  if (exit !== null && exit !== 0) return `error:exit:${exit}`
+  return 'ok'
 }
 
 /** Structured exit code when `meta` carries one (`exitCode` number), else null. */
@@ -169,8 +213,8 @@ export function exitCodeOf(meta: unknown): number | null {
 
 /** Extract the redacted features of one final tool outcome. */
 export function extractFeatures(toolName: string, args: unknown, result: ToolOutcomeProbe): ObservationFeatures {
-  const outcome = outcomeClass(result)
-  const exitCode = exitCodeOf(result.meta)
+  const outcome = outcomeClass(toolName, result)
+  const exitCode = structuredExitCode(toolName, result)
   const command = shellCommandOf(args)
   if (command !== null) {
     const { prefix, task } = splitShellPreparation(command)

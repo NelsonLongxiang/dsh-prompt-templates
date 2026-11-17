@@ -1,3 +1,4 @@
+import { createTestDirectory } from './temp-dir.mjs'
 /**
  * Visible-mode scheduled injection (v4 schema): mode column persistence,
  * migration from v3, delivery-mode validation, the dual-shape dedup scan,
@@ -5,8 +6,7 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { TemplateRuleError, TemplateStore } from '../src/store.ts'
@@ -33,7 +33,7 @@ function template(over: Partial<TemplateView> = {}): TemplateView {
 }
 
 test('mode column: defaults to inject, persists visible, rejects unknown', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'pt-mode-'))
+  const dir = createTestDirectory('pt-mode-')
   const db = join(dir, 'm.sqlite3').replaceAll('\\', '/')
   let store: TemplateStore | undefined
   try {
@@ -63,7 +63,7 @@ test('mode column: defaults to inject, persists visible, rejects unknown', () =>
 })
 
 test('v3 database migrates to the current schema in place, mode defaults inject', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'pt-mig-'))
+  const dir = createTestDirectory('pt-mig-')
   const db = join(dir, 'v3.sqlite3').replaceAll('\\', '/')
   let store: TemplateStore | undefined
   try {

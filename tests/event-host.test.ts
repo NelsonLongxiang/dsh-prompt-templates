@@ -1,3 +1,4 @@
+import { createTestDirectory } from './temp-dir.mjs'
 /**
  * Event reminders, host wiring: the plugin mounted on a real cordis Context,
  * `tools/result` emitted, `agent/pre-step` driven through the waterfall, and
@@ -5,8 +6,7 @@
  */
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import test from 'node:test'
 import { Context } from '@deepseek-ai/cordis'
@@ -36,7 +36,7 @@ async function request(route: Route, method: string, url: string, body?: unknown
 }
 
 async function withHost(config: Record<string, unknown>, fn: (ctx: Context, route: Route, dir: string) => Promise<void>, dbPath?: string): Promise<void> {
-  const dir = mkdtempSync(join(tmpdir(), 'pt-evhost-'))
+  const dir = createTestDirectory('pt-evhost-')
   const ctx = new Context()
   const routes: Route[] = []
   ctx.provide('webServer', { register(route: Route) { routes.push(route); return () => {} } })
@@ -147,7 +147,7 @@ test('M08: a broken store never fails the tool result or the step; the fault is 
   const original = console.error
   console.error = (...args: unknown[]) => { errors.push(args) }
   try {
-    const dir = mkdtempSync(join(tmpdir(), 'pt-evbad-'))
+    const dir = createTestDirectory('pt-evbad-')
     const notAFile = join(dir, 'db.sqlite3')
     mkdirSync(notAFile)
     try {

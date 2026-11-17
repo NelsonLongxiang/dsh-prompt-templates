@@ -1,3 +1,4 @@
+import { createTestDirectory } from './temp-dir.mjs'
 /**
  * Host wiring without a live DeepSeek Harness process: mount `apply()` on a
  * real Cordis context, stand in for the web server, and drive the HTTP
@@ -7,9 +8,8 @@
  */
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, rmSync } from 'node:fs'
 import test from 'node:test'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { Context } from '@deepseek-ai/cordis'
@@ -123,7 +123,7 @@ async function withHost(
   options: { server?: 'webServer' | 'httpServer' | 'none', when?: 'before' | 'after' },
   fn: (handle: HostHandle) => Promise<void>,
 ): Promise<void> {
-  const dir = mkdtempSync(join(tmpdir(), 'pt-host-'))
+  const dir = createTestDirectory('pt-host-')
   const dbPath = join(dir, 'db.sqlite3')
   const ctx = new Context()
   const routes: RegisteredRoute[] = []

@@ -1,8 +1,8 @@
+import { createTestDirectory } from './temp-dir.mjs'
 import assert from 'node:assert/strict'
-import { mkdtempSync, existsSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import test from 'node:test'
+import test, { after } from 'node:test'
 import { TemplateStore } from '../src/store.ts'
 import { databaseSha256, exportDatabase, importDatabase } from '../src/cli/database.ts'
 import { createSnapshot } from '../src/cli/model.ts'
@@ -23,8 +23,13 @@ function row(over: {
   }
 }
 
+const directories: string[] = []
+after(() => { for (const dir of directories) rmSync(dir, { recursive: true, force: true }) })
+
 function tempDb(): string {
-  const path = join(mkdtempSync(join(tmpdir(), 'pt-cli-')), 'db.sqlite3')
+  const dir = createTestDirectory('pt-cli-')
+  directories.push(dir)
+  const path = join(dir, 'db.sqlite3')
   const store = new TemplateStore(path)
   store.createCategory({ name: 'ops', scope: 'global' })
   store.create({ name: 'base', content: 'old', scope: 'global', category: 'ops' })

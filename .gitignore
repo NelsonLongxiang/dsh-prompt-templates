@@ -9,7 +9,4 @@ python/src/*.egg-info/
 *.tgz
 .npmrc
 .obelisk/
-
-
-# Test scratch owned by this project
-tmp/
+/tmp/
