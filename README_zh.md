@@ -151,6 +151,21 @@ GitHub Actions（`.github/workflows/verify.yml`）在指向 `master` 的 push / 
 
 仍需人工、因为它们依赖真实 harness profile：启动 `dsh web`、浏览器面板对接真实 web server，以及用真实会话日志验证 resume / compaction。
 
+### 维护者发布流程
+
+发布需另有属主明确授权。`bash scripts/release.sh "<主题>"` 只允许在 **master** 上执行，输入仅限两种：
+
+- 仅改版本号的 package bump，加本版非空发布说明；其他变更已入主干，当前 HEAD 与远端 master 一致；或
+- 已提交且干净的精确 `chore(release): <版本> — <主题>` 提交，仅含本版 bump 与说明。未推历史最多这一条提交。
+
+首次发布前续接必须传相同主题。生成发布提交前会核对暂存路径与 Git 规范化后的 blob，提交命令限定为本版两个路径，不吸收外来暂存；启用 CRLF 规范化时仍用原始工作文件摘要检测材料漂移。脚本在 verify／publish 之前核对分支、包身份、允许路径、实际远端 master、本地／远端版本标签剥离后的目标，并在 verify 后重查 HEAD、材料与暂存 blob。冲突即拒绝，不自行切分支、不改写已有标签；远端标签已指向验证提交时无需推送，即使两端标签对象不同。
+
+`DRYRUN=1 bash scripts/release.sh "<主题>"` 只走预检和正常 verify／构建门，不生成发布提交、不 publish／tag／push／创建 GitHub Release。它不是“零落盘”：常规构建与测试临时物仍会生成。
+
+拉回直验只用本次拥有的忽略目录 `tmp/release/run-*/`；EXIT／INT／TERM 仅清理路径与所有权标记均相符的目录，身份不符则保留排查。这是拒绝式预检，不是文件系统沙箱，也不是阻止并发写入的锁。
+
+**发布后不盲重试**：脚本不自动重发，也不是任意阶段的恢复器。registry 已接受版本、publish 超时或结果未知时，必须先对该 registry 对账；不能为续做后面的 push／tag／Release 而重跑整条链。自动回归只用新建合成 Git 仓与离线命令 stub，不代表真实发布或生产部署已验证。
+
 ## 已知限制
 
 - **会话模板需要当前会话**——无会话打开时只能用全局模板
