@@ -56,6 +56,10 @@ function fixture(t: { after(fn: () => void): void }, space = false, removedGuard
     writeFileSync(join(stubs, tool), content, { mode: 0o755 })
   }
   const env = { ...baseEnv, RELEASE_FIXTURE_ROOT: root, RELEASE_FIXTURE_HANDLER: join(stubs, 'handler.mjs'), RELEASE_FIXTURE_TRACE: trace }
+  // A maintainer's DRYRUN=1 release.sh run executes pnpm verify, which runs
+  // these tests. Fixture scripts must exercise the REAL flow, so strip the
+  // ambient DRYRUN; individual tests opt back in via f.run({ DRYRUN: '1' }).
+  delete (env as Record<string, string | undefined>).DRYRUN
   const pathKey = Object.keys(env).find(key => key.toLowerCase() === 'path') ?? 'PATH'
   const oldPath = env[pathKey] ?? ''
   delete env[pathKey]; env.PATH = stubs + delimiter + oldPath
