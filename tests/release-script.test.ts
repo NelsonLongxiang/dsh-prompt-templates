@@ -12,7 +12,7 @@ const subject = 'synthetic release'
 const version = '1.1.0'
 const message = 'chore(release): ' + version + ' — ' + subject
 
-function fixture(t: { after(fn: () => void): void }, space = false) {
+function fixture(t: { after(fn: () => void): void }, space = false, removedGuard?: string) {
   const dir = createTestDirectory('release-guard-')
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   const root = join(dir, space ? 'project with spaces' : 'project')
@@ -21,7 +21,15 @@ function fixture(t: { after(fn: () => void): void }, space = false) {
   const trace = join(dir, 'commands.jsonl')
   mkdirSync(join(root, 'scripts'), { recursive: true }); mkdirSync(join(root, 'docs')); mkdirSync(stubs)
   copyFileSync(join(project, 'scripts', 'release.sh'), join(root, 'scripts', 'release.sh'))
-  if (existsSync(join(project, 'scripts', 'release-guard.mjs'))) copyFileSync(join(project, 'scripts', 'release-guard.mjs'), join(root, 'scripts', 'release-guard.mjs'))
+  copyFileSync(join(project, 'scripts', 'release-guard.mjs'), join(root, 'scripts', 'release-guard.mjs'))
+  if (removedGuard !== undefined) {
+    // Mutation is confined to this new fixture BEFORE its baseline commit.
+    // Never modify the reviewed project source or a shared checkout to prove a test.
+    const helper = join(root, 'scripts', 'release-guard.mjs')
+    const source = readFileSync(helper, 'utf8')
+    assert.equal(source.split(removedGuard).length, 2, 'mutation must remove exactly one matching guard')
+    writeFileSync(helper, source.replace(removedGuard, '// one identity guard removed by offline regression'))
+  }
   writeFileSync(join(root, 'scripts', 'push-master.sh'), '#!/usr/bin/env bash\nset -euo pipefail\ngit push github master\n')
   writeFileSync(join(root, '.gitignore'), '/tmp/\n')
   writeFileSync(join(root, 'package.json'), JSON.stringify({ name: '@nelsonlongxiang/dsh-prompt-templates', version: '1.0.0' }, null, 2) + '\n')
@@ -59,8 +67,8 @@ function fixture(t: { after(fn: () => void): void }, space = false) {
     writeFileSync(join(root, 'docs', 'release-notes-' + version + '.md'), '# synthetic notes\n')
   }
   const commit = (title = message, files = ['package.json', 'docs/release-notes-' + version + '.md']) => { git('add', ...files); git('commit', '-qm', title); return git('rev-parse', 'HEAD') }
-  const run = (extra: Record<string, string> = {}) => {
-    const r = spawnSync('bash', ['scripts/release.sh', subject], { cwd: root, env: { ...env, ...extra }, encoding: 'utf8', timeout: 45_000, maxBuffer: 2 * 1024 * 1024 })
+  const run = (extra: Record<string, string> = {}, releaseSubject = subject) => {
+    const r = spawnSync('bash', ['scripts/release.sh', releaseSubject], { cwd: root, env: { ...env, ...extra }, encoding: 'utf8', timeout: 45_000, maxBuffer: 2 * 1024 * 1024 })
     assert.equal(r.error, undefined, r.error?.message)
     return r
   }
@@ -114,7 +122,7 @@ for (const dirty of [false, true]) test('rejects foreign ' + (dirty ? 'dirty pat
   const r = f.run({ DRYRUN: '1' }); assert.equal(r.status, 2, r.stdout + r.stderr); assert.equal(f.calls().length, 0)
 })
 
-test('rejects a package edit beyond the version even with an exact release title', t => {
+test('rejects a different package name even with an exact release title', t => {
   const f = fixture(t); f.prepare(); const p = JSON.parse(readFileSync(join(f.root, 'package.json'), 'utf8')); p.name = 'different-package'
   writeFileSync(join(f.root, 'package.json'), JSON.stringify(p)); f.commit()
   const r = f.run({ DRYRUN: '1' }); assert.equal(r.status, 2, r.stdout + r.stderr); assert.equal(f.calls().length, 0)
@@ -269,3 +277,81 @@ test('CRLF working files with Git autocrlf use Git blob identity without rejecti
   assert.equal(result.status, 0, result.stdout + result.stderr)
   assert.equal(f.pubs().length, 2)
 })
+
+// PR #20 review cases A/B/C: each must fail before verification as well as
+// before publication. The mutation checks call the SAME assertions and prove
+// a single removed guard breaks its regression, even if a later layer stops it.
+type ReleaseFixture = ReturnType<typeof fixture>
+function remoteMaster(f: ReleaseFixture): string {
+  const refs = f.git('ls-remote', '--heads', 'github', 'refs/heads/master').split(/\s+/)
+  assert.equal(refs[1], 'refs/heads/master')
+  return refs[0]!
+}
+function foreignCommit(f: ReleaseFixture): void {
+  writeFileSync(join(f.root, 'foreign.txt'), 'not approved for release')
+  f.git('add', 'foreign.txt')
+  f.git('commit', '-qm', 'foreign unpublished change')
+}
+const identityCases = [
+  {
+    key: 'A-new-history',
+    removedGuard: "if (head !== remote) fail('new release material requires master to equal remote github/master')",
+    diagnostic: 'new release material requires master to equal remote github/master',
+    setup(f: ReleaseFixture) { foreignCommit(f); f.prepare() },
+  },
+  {
+    key: 'B-resume-history',
+    removedGuard: "if (head !== remote && parents[1] !== remote) fail('unpublished history contains changes beyond the one exact release commit')",
+    diagnostic: 'unpublished history contains changes beyond the one exact release commit',
+    setup(f: ReleaseFixture) { foreignCommit(f); f.prepare(); f.commit() },
+  },
+  {
+    key: 'C-version-only',
+    removedGuard: "if (!isDeepStrictEqual(old, next)) fail('release package.json may change the version only; land other changes first')",
+    diagnostic: 'release package.json may change the version only; land other changes first',
+    setup(f: ReleaseFixture) {
+      f.prepare()
+      const path = join(f.root, 'package.json')
+      const pkg = JSON.parse(readFileSync(path, 'utf8'))
+      assert.equal(pkg.name, '@nelsonlongxiang/dsh-prompt-templates')
+      pkg.dependencies = { 'synthetic-never-installed': '1.0.0' }
+      writeFileSync(path, JSON.stringify(pkg, null, 2) + '\n')
+      f.commit()
+    },
+  },
+]
+function assertIdentityRejected(f: ReleaseFixture, result: ReturnType<ReleaseFixture['run']>, head: string, remote: string): void {
+  assert.equal(result.status, 2, result.stdout + result.stderr)
+  assert.equal(f.pubs().length, 0, 'identity guard must stop before any publish')
+  assert.equal(f.calls().length, 0, 'identity guard must stop before verify, not rely on a later check')
+  assert.equal(f.git('rev-parse', 'HEAD'), head, 'do not create a release commit on rejected inputs')
+  assert.equal(remoteMaster(f), remote, 'remote master must remain unchanged')
+}
+for (const scenario of identityCases) {
+  test('review identity ' + scenario.key + ' rejects exact counterexample before verify or publish', t => {
+    const f = fixture(t); scenario.setup(f)
+    const head = f.git('rev-parse', 'HEAD'); const remote = remoteMaster(f)
+    assert.notEqual(head, remote, 'counterexample must really differ from remote master')
+    const result = f.run()
+    assertIdentityRejected(f, result, head, remote)
+    assert.ok(result.stderr.includes(scenario.diagnostic), result.stderr)
+    t.diagnostic(JSON.stringify({ case: scenario.key, guard: 'intact', exit: result.status, verify: 0, publish: 0, remoteChanged: false }))
+  })
+  test('review identity ' + scenario.key + ' regression turns red when only its guard is removed', t => {
+    const f = fixture(t, false, scenario.removedGuard); scenario.setup(f)
+    const head = f.git('rev-parse', 'HEAD'); const remote = remoteMaster(f)
+    const result = f.run()
+    assert.ok(f.calls().some(call => call.tool === 'pnpm'), 'mutant must pass the specific preflight, not fail on fixture/syntax setup')
+    assert.throws(() => assertIdentityRejected(f, result, head, remote), assert.AssertionError)
+    t.diagnostic(JSON.stringify({ case: scenario.key, guard: 'removed', exit: result.status,
+      verify: f.calls().filter(call => call.tool === 'pnpm').length, publish: f.pubs().length,
+      remoteChanged: remoteMaster(f) !== remote, rejectionAssertion: 'red' }))
+  })
+}
+
+for (const releaseSubject of [' synthetic release', 'synthetic release ']) {
+  test('rejects subject edge whitespace before verify and before creating a release commit: ' + JSON.stringify(releaseSubject), t => {
+    const f = fixture(t); f.prepare(); const result = f.run({}, releaseSubject)
+    assertIdentityRejected(f, result, f.base, f.base)
+  })
+}

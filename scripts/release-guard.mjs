@@ -69,7 +69,7 @@ function tagState(version, expected) {
 }
 function inspect(subject) {
   const project = root(); master()
-  if (typeof subject !== 'string' || subject.trim() === '' || /[\r\n\0]/.test(subject)) fail('release subject must be one non-empty line')
+  if (typeof subject !== 'string' || subject.trim() === '' || subject !== subject.trim() || /[\r\n\0]/.test(subject)) fail('release subject must be one non-empty line without leading/trailing whitespace')
   const packageBytes = regularFile(join(project, 'package.json'))
   const pkg = JSON.parse(packageBytes)
   if (pkg.name !== '@nelsonlongxiang/dsh-prompt-templates') fail('wrong package identity')
