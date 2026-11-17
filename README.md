@@ -45,8 +45,12 @@ Each template (global or session-scoped) carries its own **switch + interval N**
 
 - The injected content arrives as one durable `<system-reminder>` user message recorded in the session log (source kind `prompt-template-schedule`), so replays and audits reconstruct exactly what the model saw
 - A boundary round is never injected twice, even across restarts or step retries
-- Config persists in the plugin's SQLite database (schema v5); `injectEnabled: false` in the patch config silences **scheduled injection only** — event reminders (below) have their own independent master switch `eventInject.enabled`
+- Config persists in the plugin's SQLite database (schema v6, including evolution enrollment); `injectEnabled: false` in the patch config silences **scheduled injection only** — event reminders (below) have their own independent master switch `eventInject.enabled`
 - Each template picks a delivery mode: **silent** (default, model context only) or **visible in chat** (rendered as a normal user message with a ⚙️ scheduled-injection header)
+
+## Atelier evolution checkpoint (unreleased)
+
+A session-scoped `工坊·演化自评估` template is provisioned once by default and scheduled every 100 user turns. Existing same-name global/session templates and user edits, disabling and deletion are preserved. This is a reminder, not migration execution or authorization. Set `evolutionAssessmentEnabled: false` to opt out. See [the lifecycle, counting and rollback contract](docs/evolution-default.md).
 
 ## Event reminders (off by default)
 
@@ -74,7 +78,7 @@ Placeholders `{{date}}` `{{time}}` `{{datetime}}` `{{weekday}}` `{{session}}` `{
 ```text
 src/                  TypeScript plugin (host half + browser half)
   index.ts            Host: owns the TS store, exposes the HTTP routes
-  store.ts            Pure-TS store over node:sqlite (database schema v5)
+  store.ts            Pure-TS store over node:sqlite (database schema v6)
   inject.ts           Host: scheduled auto-injection on the pre-step waterfall
   invariant.ts        Host: registers the package's invariant companion
   cli/                The sync CLI (export/diff/merge/import) shipped as bin
@@ -89,7 +93,7 @@ The store is pure TS inside the host half; no child process is spawned.
 
 ## Security
 
-- Template **content** reaches a model request in exactly two ways: as ordinary user text the user chose to insert, or as scheduled auto-injection of templates where the switch was explicitly enabled — every injection is a durable session event. Event reminders are a separate channel: they carry no template content, and their switch is independent of scheduled injection
+- Template **content** reaches a model request in exactly two ways: as ordinary user text the user chose to insert, or through scheduled auto-injection. User templates follow their saved switches; the unreleased Atelier default is enabled at once-per-session creation unless the deployment opts out, and remains editable/disableable/deletable by the user. Each delivered injection is a durable session event. Event reminders are a separate channel: they carry no template content, and their switch is independent of scheduled injection
 - The panel talks to the host store over the Host's plugin routes only; no extra listener, no outbound network
 
 ## Database sync CLI
@@ -161,8 +165,3 @@ Still manual, because they need a live harness profile: booting `dsh web`, the b
 ## License
 
 MIT
-
-
-### Atelier evolution checkpoint (unreleased)
-
-A session-scoped `工坊·演化自评估` template is provisioned once by default and scheduled every 100 user turns. Existing same-name global/session templates and user edits, disabling and deletion are preserved. This is a reminder, not migration execution or authorization. Set `evolutionAssessmentEnabled: false` to opt out. See [the lifecycle, counting and rollback contract](docs/evolution-default.md).

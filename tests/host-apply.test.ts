@@ -120,11 +120,11 @@ async function preStep(ctx: Context, options: {
 
 async function withHost(
   config: Record<string, unknown>,
-  options: { server?: 'webServer' | 'httpServer' | 'none', when?: 'before' | 'after' },
+  options: { server?: 'webServer' | 'httpServer' | 'none', when?: 'before' | 'after', dbPath?: string },
   fn: (handle: HostHandle) => Promise<void>,
 ): Promise<void> {
-  const dir = createTestDirectory('pt-host-')
-  const dbPath = join(dir, 'db.sqlite3')
+  const dir = options.dbPath === undefined ? createTestDirectory('pt-host-') : undefined
+  const dbPath = options.dbPath ?? join(dir!, 'db.sqlite3')
   const ctx = new Context()
   const routes: RegisteredRoute[] = []
   let registers = 0
@@ -162,7 +162,7 @@ async function withHost(
     await fn(handle)
   } finally {
     await handle.dispose()
-    rmSync(dir, { recursive: true, force: true })
+    if (dir !== undefined) rmSync(dir, { recursive: true, force: true })
   }
 }
 
@@ -640,5 +640,100 @@ test('Atelier defaults enroll once and inject at a future 100-user-turn boundary
     const result = await preStep(handle.ctx, { sessionId: 'off', turn: 100 })
     assert.equal(result.messages?.length, 1)
     assert.equal((await request(handle.handler(), 'GET', TEMPLATES)).body.items.length, 0)
+  })
+})
+
+test('Atelier enrollment skips denied, empty, disabled and capped steps without changing user templates', async () => {
+  await withHost({}, { when: 'before' }, async handle => {
+    await preStep(handle.ctx, { sessionId: 'admission', turn: 1, next: async () => ({ kind: 'reject' }) })
+    await preStep(handle.ctx, { sessionId: 'admission', turn: 1, messages: [] })
+    assert.deepEqual((await request(handle.handler(), 'GET', TEMPLATES)).body.items, [])
+    // Repeated tool/model steps at user turn 99 are not a 100-user-turn boundary.
+    for (let step = 1; step <= 105; step += 1) {
+      const result = await preStep(handle.ctx, { sessionId: 'admission', turn: 99, step })
+      assert.equal(result.messages?.length, 1)
+    }
+    assert.equal((await request(handle.handler(), 'GET', TEMPLATES)).body.items.length, 1)
+    const result = await preStep(handle.ctx, { sessionId: 'admission', turn: 100 })
+    assert.equal(result.messages?.[1]?.source?.kind, 'user')
+    assert.equal(result.messages?.[1]?.source?.scheduled, 'prompt-template')
+    assert.match(textOf(result.messages?.[1]), /演化自评估/)
+  })
+  for (const config of [{ injectEnabled: false }, { evolutionAssessmentEnabled: false }, { injectMaxEvery: 99 }]) {
+    await withHost(config, { when: 'before' }, async handle => {
+      await preStep(handle.ctx, { sessionId: 'off', turn: 1 })
+      await preStep(handle.ctx, { sessionId: 'off', turn: 100 })
+      assert.deepEqual((await request(handle.handler(), 'GET', TEMPLATES)).body.items, [])
+      const db = new DatabaseSync(handle.dbPath, { readOnly: true })
+      try { assert.equal(db.prepare('SELECT count(*) AS n FROM evolution_defaults').get()!.n, 0) }
+      finally { db.close() }
+    })
+  }
+})
+
+test('Atelier first visit on a historical boundary enrolls only and honors later UI edit/disable/delete', async () => {
+  await withHost({}, { when: 'before' }, async handle => {
+    const initial = await preStep(handle.ctx, { sessionId: 'historical', turn: 200 })
+    assert.equal(initial.messages?.length, 1)
+    const rows = (await request(handle.handler(), 'GET', TEMPLATES)).body.items
+    assert.equal(rows.length, 1)
+    const id = rows[0].id as string
+    assert.equal((await request(handle.handler(), 'PATCH', TEMPLATES + '/' + id, { name: 'my review', content: 'owner-only text', inject_every: 250, mode: 'inject' })).status, 200)
+    const later = await preStep(handle.ctx, { sessionId: 'historical', turn: 250 })
+    assert.equal(later.messages?.[1]?.source?.kind, 'prompt-template-schedule')
+    assert.match(textOf(later.messages?.[1]), /owner-only text/)
+    await request(handle.handler(), 'PATCH', TEMPLATES + '/' + id, { inject_enabled: false })
+    assert.equal((await preStep(handle.ctx, { sessionId: 'historical', turn: 500 })).messages?.length, 1)
+    await request(handle.handler(), 'DELETE', TEMPLATES + '/' + id)
+    assert.equal((await preStep(handle.ctx, { sessionId: 'historical', turn: 750 })).messages?.length, 1)
+    assert.deepEqual((await request(handle.handler(), 'GET', TEMPLATES)).body.items, [])
+  })
+})
+
+test('Atelier durable visible log dedup and deletion intent survive plugin restart on the same database', async t => {
+  const dir = createTestDirectory('evolution-host-restart-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const dbPath = join(dir, 'db.sqlite3')
+  const log: unknown[] = []
+  let templateId = ''
+  await withHost({}, { when: 'before', dbPath }, async handle => {
+    await preStep(handle.ctx, { sessionId: 'restart', turn: 1 })
+    const result = await preStep(handle.ctx, { sessionId: 'restart', turn: 100 })
+    const delivered = result.messages?.[1]
+    assert.ok(delivered?.source)
+    templateId = (await request(handle.handler(), 'GET', TEMPLATES)).body.items[0].id
+    log.push({ type: 'user/message', data: { source: delivered.source } })
+  })
+  await withHost({}, { when: 'before', dbPath }, async handle => {
+    assert.equal((await preStep(handle.ctx, { sessionId: 'restart', turn: 100, readEvents: () => log })).messages?.length, 1)
+    const later = await preStep(handle.ctx, { sessionId: 'restart', turn: 200, readEvents: () => log })
+    assert.equal(later.messages?.length, 2)
+    await request(handle.handler(), 'DELETE', TEMPLATES + '/' + templateId)
+  })
+  await withHost({}, { when: 'before', dbPath }, async handle => {
+    assert.equal((await preStep(handle.ctx, { sessionId: 'restart', turn: 300, readEvents: () => log })).messages?.length, 1)
+    assert.deepEqual((await request(handle.handler(), 'GET', TEMPLATES)).body.items, [])
+    const db = new DatabaseSync(dbPath, { readOnly: true })
+    try {
+      const row = db.prepare('SELECT template_id FROM evolution_defaults WHERE session_id = ?').get('restart')!
+      assert.equal(row.template_id, templateId, 'enrollment keeps the deleted id as durable suppression')
+    } finally { db.close() }
+  })
+})
+
+test('Atelier opt-out suppresses managed templates but leaves explicitly created user schedules alone', async t => {
+  const dir = createTestDirectory('evolution-host-off-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const dbPath = join(dir, 'db.sqlite3')
+  const store = new TemplateStore(dbPath)
+  try {
+    store.ensureEvolutionDefault('off', 1)
+    store.create({ name: 'user review', content: 'ordinary user schedule', inject_enabled: true, inject_every: 100 })
+  } finally { store.close() }
+  await withHost({ evolutionAssessmentEnabled: false }, { when: 'before', dbPath }, async handle => {
+    const result = await preStep(handle.ctx, { sessionId: 'off', turn: 100 })
+    assert.equal(result.messages?.length, 2)
+    assert.deepEqual(result.messages?.[1]?.source?.templates?.map(row => row.name), ['user review'])
+    assert.doesNotMatch(textOf(result.messages?.[1]), /每100个用户轮次的检查点/)
   })
 })

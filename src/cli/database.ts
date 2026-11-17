@@ -31,9 +31,9 @@ export interface ImportResult {
 
 /**
  * Database schema versions the CLI reads and writes. The CLI only touches
- * `templates` and `categories`, which are identical in v4 and v5 (v5 only
- * adds the event-reminder tables, which hold runtime data and are never
- * exported or imported).
+ * `templates` and `categories`, whose columns are identical in v4/v5/v6.
+ * v5 event tables and v6 evolution enrollment/tombstones are not part of
+ * template JSON exports/imports; CLI snapshots preserve template switches.
  */
 const SUPPORTED_DB_VERSIONS: readonly number[] = [4, 5, 6]
 

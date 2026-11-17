@@ -27,7 +27,8 @@ import type { CategoryCreateRequest, CategoryView, PromptScope, TemplateCreateRe
 
 /**
  * Schema version gate; v4 adds `templates.mode` (inject|visible), v5 adds
- * the event-reminder tables (policies, observations, episodes, outbox).
+ * the event-reminder tables (policies, observations, episodes, outbox);
+ * v6 adds once-per-session evolution enrollment and deletion tombstones.
  */
 export const SCHEMA_VERSION = 6
 
@@ -109,28 +110,21 @@ export class TemplateStore {
       try { chmodSync(dirname(dbPath), 0o700) } catch { /* best-effort on non-POSIX */ }
     }
     this.db = new DatabaseSync(dbPath)
-    this.db.exec('PRAGMA busy_timeout=5000')
-    this.db.exec('PRAGMA journal_mode=WAL')
-    // Serialize schema inspection and migration, including first creation.
-    this.db.exec('BEGIN IMMEDIATE')
-    const onDisk = Number((this.db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
-    if (onDisk === 0) {
-      try {
+    try {
+      this.db.exec('PRAGMA busy_timeout=5000')
+      this.db.exec('PRAGMA journal_mode=WAL')
+      // Inspect and migrate under the same write lock so concurrent first
+      // openers never act on a stale schema version.
+      this.db.exec('BEGIN IMMEDIATE')
+      const onDisk = Number((this.db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
+      if (onDisk === 0) {
         this.db.exec(SCHEMA_V4_SQL)
         this.db.exec(EVENT_SCHEMA_SQL)
         this.db.exec(EVOLUTION_SCHEMA_SQL)
         seedDefaultPolicies(this.db)
         this.db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`)
-        this.db.exec('COMMIT')
-      } catch (error) {
-        this.db.exec('ROLLBACK')
-        throw error
-      }
-    } else if (onDisk >= 1 && onDisk < SCHEMA_VERSION) {
-      // Migration DDL runs in ONE transaction: a crash mid-way rolls back to
-      // the intact previous schema instead of stranding a half-altered table
-      // (same BEGIN/COMMIT posture as the category delete below).
-      try {
+      } else if (onDisk >= 1 && onDisk < SCHEMA_VERSION) {
+        // Every DDL change commits or rolls back together.
         if (onDisk === 1) {
           this.db.exec('ALTER TABLE templates ADD COLUMN category TEXT')
           this.db.exec('CREATE TABLE categories (name TEXT NOT NULL, scope TEXT NOT NULL, session_id TEXT, PRIMARY KEY (scope, session_id, name))')
@@ -139,30 +133,28 @@ export class TemplateStore {
           this.db.exec('ALTER TABLE templates ADD COLUMN inject_enabled INTEGER NOT NULL DEFAULT 0')
           this.db.exec('ALTER TABLE templates ADD COLUMN inject_every INTEGER')
         }
-        if (onDisk <= 3) {
-          this.db.exec("ALTER TABLE templates ADD COLUMN mode TEXT NOT NULL DEFAULT 'inject'")
-        }
+        if (onDisk <= 3) this.db.exec("ALTER TABLE templates ADD COLUMN mode TEXT NOT NULL DEFAULT 'inject'")
         if (onDisk <= 4) {
           this.db.exec(EVENT_SCHEMA_SQL)
           seedDefaultPolicies(this.db)
         }
         if (onDisk <= 5) this.db.exec(EVOLUTION_SCHEMA_SQL)
         this.db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`)
-        this.db.exec('COMMIT')
-      } catch (error) {
-        this.db.exec('ROLLBACK')
-        throw error
+      } else if (onDisk !== SCHEMA_VERSION) {
+        throw new Error(`${dbPath} has schema version ${onDisk}, incompatible with this build (expected ${SCHEMA_VERSION})`)
       }
-    } else if (onDisk !== SCHEMA_VERSION) {
-      this.db.exec('ROLLBACK')
-      this.db.close()
-      throw new Error(`${dbPath} has schema version ${onDisk}, incompatible with this build (expected ${SCHEMA_VERSION})`)
+      this.db.exec('COMMIT')
+      if (dbPath !== ':memory:') {
+        try { chmodSync(dbPath, 0o600) } catch { /* best-effort */ }
+      }
+      this.events = new EventStore(this.db)
+    } catch (error) {
+      // A failed constructor has no owner to close it later. Preserve the
+      // original fault even when initialization failed before BEGIN.
+      try { this.db.exec('ROLLBACK') } catch { /* transaction may not exist */ }
+      try { this.db.close() } catch { /* preserve initialization fault */ }
+      throw error
     }
-    if (onDisk === SCHEMA_VERSION) this.db.exec('COMMIT')
-    if (dbPath !== ':memory:') {
-      try { chmodSync(dbPath, 0o600) } catch { /* best-effort */ }
-    }
-    this.events = new EventStore(this.db)
   }
 
   /** Close the underlying database handle. */
