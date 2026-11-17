@@ -298,3 +298,42 @@ test('M07: PTC sub-calls are observed and flagged; observations are trimmed per 
     assert.equal(h.store.events.window(SESSION, 100).length, 10)
   } finally { h.store.close() }
 })
+
+
+test('master switch: config seeds once, stored flag is authoritative afterwards', () => {
+  const file = join(createTestDirectory('pt-master-'), 'db.sqlite3')
+  let store = new TemplateStore(file)
+  try {
+    assert.equal(store.events.masterEnabled(true), true, 'first read seeds from config true')
+    assert.equal(store.events.masterEnabled(false), true, 'later config value no longer overrides the stored flag')
+    assert.equal(store.events.setMasterEnabled(false), false)
+    assert.equal(store.events.masterEnabled(true), false)
+  } finally { store.close() }
+  store = new TemplateStore(file)
+  try {
+    assert.equal(store.events.masterEnabled(true), false, 'flipped state survives a restart; seed never re-applies')
+    const db = new DatabaseSync(file, { readOnly: true })
+    try {
+      const row = db.prepare('SELECT id, enabled FROM event_master').get() as { id: number, enabled: number }
+      assert.equal(row.id, 1)
+      assert.equal(row.enabled, 0, 'single enforced row id=1, stored off')
+    } finally { db.close() }
+  } finally { store.close() }
+})
+
+test('master switch: config false seeds off and the observer honors the stored flag', () => {
+  const store = new TemplateStore(':memory:')
+  try {
+    assert.equal(store.events.masterEnabled(false), false)
+    enable(store, 'repeated-failure')
+    const h = harness(store, { ...ON, enabled: false })
+    const fail = { isError: true, error: { info: { code: 'EXIT_1' } } }
+    h.call('make test', fail)
+    h.call('make test', fail)
+    assert.equal(h.step(3, 1).length, 0, 'stored master off observes nothing')
+    store.events.setMasterEnabled(true)
+    h.call('make test', fail)
+    h.call('make test', fail)
+    assert.equal(h.step(4, 1).length, 1, 'flipping the stored master enables observation mid-flight')
+  } finally { store.close() }
+})

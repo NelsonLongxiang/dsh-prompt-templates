@@ -16,6 +16,7 @@
  *   DELETE /plugins/dsh-prompt-templates/templates/:id    → { deleted }
  *   GET    /plugins/dsh-prompt-templates/inject-status?session_id=… → { status, history }
  *   GET    /plugins/dsh-prompt-templates/event-policies             → { items }
+ *   PATCH  /plugins/dsh-prompt-templates/event-policies/master      → { config }
  *   PATCH  /plugins/dsh-prompt-templates/event-policies/:rule_id    → { policy } | 404
  *   GET    /plugins/dsh-prompt-templates/event-episodes?session_id=… → { items, outbox }
  *   PATCH  /plugins/dsh-prompt-templates/event-episodes/:id         → { episode } | 404 (evidence_refs required)
@@ -136,7 +137,7 @@ export function apply(ctx: Context, config: Config): void {
     ctx.effect(() => webServer.register({
       kind: 'prefix',
       path: '/plugins/dsh-prompt-templates',
-      handler: (req, res) => { void handle(req, res, client, inject.status, inject.history, () => eventInjectConfig.enabled) },
+      handler: (req, res) => { void handle(req, res, client, inject.status, inject.history, () => client().events.masterEnabled(eventInjectConfig.enabled)) },
     }), 'prompt-templates: api routes')
   }
   registerRoutes()
@@ -202,6 +203,13 @@ async function handle(
       // can show the feature's deployment state alongside the rule toggles.
       if (rest.length === 0 && method === 'GET') {
         return json(res, 200, { items: client().events.policies(), config: { enabled: eventInjectEnabled() } })
+      }
+      // The master switch is panel-owned state (seeded from deployment
+      // config on first read); flipping it takes effect without a restart.
+      if (rest[0] === 'master' && rest.length === 1 && method === 'PATCH') {
+        const body = await readJson(req)
+        const enabled = client().events.setMasterEnabled(body['enabled'] === true)
+        return json(res, 200, { config: { enabled } })
       }
       const ruleId = rest[0]
       if (ruleId !== undefined && rest.length === 1 && method === 'PATCH') {

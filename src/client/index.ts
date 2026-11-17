@@ -31,6 +31,7 @@ import {
   injectStatus,
   injectionHistory,
   eventPolicies,
+  setEventMaster,
   updateEventPolicy,
   eventEpisodes,
   createCategory,
@@ -135,6 +136,7 @@ export function apply(ctx: ClientContext): void {
     injectStatus,
     injectionHistory,
     eventPolicies,
+    setEventMaster,
     updateEventPolicy,
     eventEpisodes,
   }

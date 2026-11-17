@@ -90,6 +90,13 @@ export const DEFAULT_POLICIES: readonly Omit<EventPolicyView, 'updated_at'>[] = 
   { rule_id: RULE_REPEATED_FAILURE, rule_version: 1, enabled: false, threshold: 2, window_size: 50, cooldown_turns: 3, max_per_episode: 2, mode: 'visible' },
 ]
 
+/** DDL for the v6 master-switch row; one row, enforced by the id CHECK. */
+export const EVENT_MASTER_SQL = `CREATE TABLE event_master (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  enabled INTEGER NOT NULL,
+  updated_at TEXT NOT NULL
+)`
+
 /** Seed the default policy rows (idempotent). */
 export function seedDefaultPolicies(db: DatabaseSync): void {
   const insert = db.prepare(`INSERT OR IGNORE INTO event_policies
@@ -239,6 +246,25 @@ export class EventStore {
 
   constructor(db: DatabaseSync) {
     this.db = db
+  }
+
+  /**
+   * Effective master switch. The row is created on first read with the
+   * deployment config value as the seed; afterwards the stored flag is
+   * authoritative (the panel owns it via setMasterEnabled).
+   */
+  masterEnabled(seed: boolean): boolean {
+    const existing = this.db.prepare('SELECT enabled FROM event_master WHERE id = 1').get() as { enabled: number } | undefined
+    if (existing !== undefined) return existing.enabled === 1
+    this.db.prepare('INSERT INTO event_master (id, enabled, updated_at) VALUES (1, ?, ?)').run(seed ? 1 : 0, now())
+    return seed
+  }
+
+  /** Flip the stored master switch; returns the stored value afterwards. */
+  setMasterEnabled(value: boolean): boolean {
+    if (typeof value !== 'boolean') throw new EventRuleError('enabled must be a boolean')
+    this.db.prepare('INSERT INTO event_master (id, enabled, updated_at) VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET enabled = excluded.enabled, updated_at = excluded.updated_at').run(value ? 1 : 0, now())
+    return value
   }
 
   /** Every rule policy, in rule order. */

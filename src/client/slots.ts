@@ -102,8 +102,10 @@ export interface PromptPanelFace {
    * the 30s badge poll stays O(1).
    */
   injectionHistory: (sessionId: string) => Promise<readonly InjectionHistoryEntry[]>
-  /** Load the event-reminder rules + deployment master-switch state (the ⚙ dropdown). */
+  /** Load the event-reminder rules + stored master-switch state (the ⚙ dropdown). */
   eventPolicies: () => Promise<{ items: readonly EventPolicyWire[]; enabled: boolean } | null>
+  /** Flip the stored master switch (takes effect without a restart). */
+  setEventMaster: (enabled: boolean) => Promise<TemplateActionResult>
   /** Flip or tune one event rule (partial patch). */
   updateEventPolicy: (ruleId: string, patch: EventPolicyPatch) => Promise<TemplateActionResult>
   /** Load the target session's recent problem episodes (read-only audit view). */
@@ -137,5 +139,5 @@ export type TemplateLibraryFace = Pick<
   | 'refresh' | 'refreshCategories' | 'createCategory' | 'removeCategory'
   | 'create' | 'update' | 'remove' | 'makeGlobal'
   | 'insert' | 'send' | 'interject' | 'injectStatus' | 'injectionHistory'
-  | 'eventPolicies' | 'updateEventPolicy' | 'eventEpisodes'
+  | 'eventPolicies' | 'setEventMaster' | 'updateEventPolicy' | 'eventEpisodes'
 >

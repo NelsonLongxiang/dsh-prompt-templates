@@ -76,13 +76,26 @@ test('Config schema keeps event reminders off by default', () => {
 test('switched off (default): tool results write nothing and steps pass through untouched', async () => {
   await withHost({}, async (ctx, route) => {
     const off = await request(route, 'GET', `${BASE}/event-policies`)
-    assert.equal(off.body.config.enabled, false)
+    assert.equal(off.body.config.enabled, false, 'config seeds the stored flag on first read')
     await request(route, 'PATCH', `${BASE}/event-policies/repeated-failure`, { enabled: true })
     for (let n = 0; n < 4; n += 1) await emitResult(ctx, 's', `c${n}`, 'make', true)
     const decision = await preStep(ctx, 's', 1, 2, [])
     assert.deepEqual(decision.messages, [])
     const episodes = await request(route, 'GET', `${BASE}/event-episodes?session_id=s`)
     assert.deepEqual(episodes.body, { items: [], outbox: [] })
+    // Flipping the panel-owned master takes effect without a restart: the
+    // same live listeners start observing on the very next tool result.
+    const flipped = await request(route, 'PATCH', `${BASE}/event-policies/master`, { enabled: true })
+    assert.equal(flipped.body.config.enabled, true)
+    for (let n = 0; n < 2; n += 1) await emitResult(ctx, 's2', `m${n}`, 'make test', true)
+    const after = await preStep(ctx, 's2', 2, 1, [])
+    assert.equal(after.messages?.length, 1, 'repeated failure fires once the stored master is on')
+    const back = await request(route, 'PATCH', `${BASE}/event-policies/master`, { enabled: false })
+    assert.equal(back.body.config.enabled, false)
+    await emitResult(ctx, 's3', 'z1', 'make test', true)
+    await emitResult(ctx, 's3', 'z2', 'make test', true)
+    const quiet = await request(route, 'GET', `${BASE}/event-episodes?session_id=s3`)
+    assert.deepEqual(quiet.body, { items: [], outbox: [] }, 'stored master off stops observation immediately')
   })
 })
 
@@ -120,7 +133,7 @@ test('audit routes: policies, episodes, and evidence-gated resolutions', async (
     const policies = await request(route, 'GET', `${BASE}/event-policies`)
     assert.equal(policies.status, 200)
     assert.equal(policies.body.items.length, 2)
-    // The config block carries the deployment master switch for the panel.
+    // The config block carries the effective (stored) master switch.
     assert.equal(policies.body.config.enabled, true)
     assert.equal((await request(route, 'PATCH', `${BASE}/event-policies/unknown`, { enabled: true })).status, 404)
     assert.equal((await request(route, 'PATCH', `${BASE}/event-policies/repeated-failure`, { threshold: -1 })).status, 400)
