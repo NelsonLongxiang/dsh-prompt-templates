@@ -152,6 +152,21 @@ A self-contained sharing test page can be generated with `node tests/clipboard-b
 
 Still manual, because they need a live harness profile: booting `dsh web`, the browser panel against the real web server, and resume or compaction against a real session log.
 
+### Maintainer release workflow
+
+Publishing requires separate owner authorization. Use `bash scripts/release.sh "<subject>"` only on **master**, with either:
+
+- a version-only package bump plus the matching non-empty release notes (all other changes already landed, and HEAD equals remote master); or
+- a clean, exact `chore(release): <version> — <subject>` commit containing only that version bump and its notes. At most this one commit may be ahead of remote master.
+
+The same subject must be supplied on a pre-publish resume. Leading/trailing whitespace is rejected before verification or commit, rather than silently normalizing a title that Git may trim. Immediately before creating a release commit, staged paths and Git-normalized blobs are checked; the commit is limited to the two release paths so foreign staging is not absorbed. Raw working-file hashes still detect changed inputs when CRLF normalization is active. The script checks branch, package identity, allowed paths, actual remote master and peeled local/remote version tags **before** verification/publishing, then rechecks HEAD, release inputs and staged blobs after verification. Conflicts fail closed; it never switches branches or rewrites existing tags. A remote tag already pointing at the verified commit needs no push, even when local/remote tag objects differ.
+
+`DRYRUN=1 bash scripts/release.sh "<subject>"` performs preflight and the ordinary verify/build gate, without a release commit, publish, tag, push or GitHub Release. It is not a promise of zero filesystem writes: normal verification builds and test scratch still run.
+
+Pull-back verification uses ignored `tmp/release/run-*/` owned by this invocation. EXIT/INT/TERM clean only a directory whose path and ownership marker still match; a mismatch is preserved for inspection. These are fail-closed preflights, not a filesystem sandbox or a lock against concurrent writers.
+
+**No blind retry after publish:** the script does not retry publishing and is not an arbitrary-phase recovery engine. A version already accepted by a registry, a timed-out publish, or an unknown result must be reconciled at that registry before any further action; do not rerun the whole chain to resume its later push/tag/Release steps. The automated regressions use fresh synthetic Git repositories and offline command doubles only, not real publishing or production deployment.
+
 ## Known limitations
 
 - **Session templates need a current session** — with no session open, only global templates are reachable
