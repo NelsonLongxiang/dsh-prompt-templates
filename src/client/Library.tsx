@@ -376,7 +376,7 @@ export interface TemplateLibraryProps {
  * @param props - target session, shared verbs, locale, optional title-row takeover.
  */
 export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: TemplateLibraryProps) {
-  const { refresh, refreshCategories, createCategory, removeCategory, create, update, remove, makeGlobal, insert, send, interject, injectStatus, injectionHistory, eventPolicies, updateEventPolicy, eventEpisodes } = face
+  const { refresh, refreshCategories, createCategory, removeCategory, create, update, remove, makeGlobal, insert, send, interject, injectStatus, injectionHistory, eventPolicies, setEventMaster, updateEventPolicy, eventEpisodes } = face
   const [templates, setTemplates] = useState<TemplateView[]>([])
   const [categories, setCategories] = useState<CategoryView[]>([])
   const [showAdd, setShowAdd] = useState(false)
@@ -441,10 +441,10 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
   }, [historyOpen, loadHistory, injected])
   useEffect(() => { setHistoryOpen(false) }, [sessionId])
 
-  // Event-reminders dropdown (⚙): the deployment master switch (read-only,
-  // the deployment config owns it) plus per-rule toggles and tunables, and
-  // the target session's read-only problem episodes. Loaded on demand so
-  // closed state costs nothing; a failed load keeps the banner's fallback.
+  // Event-reminders dropdown (⚙): the stored master switch (panel-owned,
+  // seeded once from deployment config) plus per-rule toggles and tunables,
+  // and the target session's read-only problem episodes. Loaded on demand
+  // so closed state costs nothing; a failed load keeps the banner's fallback.
   const [eventsOpen, setEventsOpen] = useState(false)
   const [policies, setPolicies] = useState<{ items: readonly EventPolicyWire[]; enabled: boolean } | null>(null)
   const [episodes, setEpisodes] = useState<readonly EventEpisodeWire[]>([])
@@ -462,6 +462,13 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
     if (eventsOpen) { void loadPolicies(); void loadEpisodes() }
   }, [eventsOpen, loadPolicies, loadEpisodes])
   useEffect(() => { setEventsOpen(false) }, [sessionId])
+  // Flip the stored master switch; takes effect immediately, no restart.
+  const handleToggleMaster = useCallback(async () => {
+    if (policies === null) return
+    const result = await setEventMaster(!policies.enabled)
+    if (result.ok) void loadPolicies()
+    else setRowError(result.error.message)
+  }, [policies, setEventMaster, loadPolicies])
   // Flip one rule's enabled switch; the write confirms before the row flips.
   const handleToggleRule = useCallback(async (rule: EventPolicyWire) => {
     const result = await updateEventPolicy(rule.rule_id, { enabled: !rule.enabled })
@@ -859,7 +866,16 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
         <div className={css.eventsPanel} data-prompt-events role="dialog" aria-label={t('panel.eventsTitle')}>
           <div className={css.eventsHead}>{t('panel.eventsTitle')}</div>
           <div className={policies !== null && policies.enabled ? css.eventsBanner : `${css.eventsBanner} ${css.eventsBannerOff}`}>
-            {policies === null ? t('panel.eventsLoadFailed') : policies.enabled ? t('panel.eventsMasterOn') : t('panel.eventsMasterOff')}
+            <label className={css.eventsRuleHead}>
+              <input
+                type="checkbox"
+                className={css.eventsToggle}
+                checked={policies?.enabled === true}
+                disabled={policies === null}
+                onChange={() => { void handleToggleMaster() }}
+              />
+              <span>{policies === null ? t('panel.eventsLoadFailed') : policies.enabled ? t('panel.eventsMasterOn') : t('panel.eventsMasterOff')}</span>
+            </label>
           </div>
           {(policies?.items ?? []).map(rule => (
             <div key={rule.rule_id} className={css.eventsRule}>

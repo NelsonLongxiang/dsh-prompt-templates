@@ -595,7 +595,9 @@ test('listener faults stay inside the step, and dispose closes the store', async
       assert.equal(decision.messages?.[0]?.id, 'downstream')
       const again = await preStep(handle.ctx, { sessionId: 'sess-a', turn: 2, step: 2 })
       assert.equal(again.messages?.length, 1)
-      assert.equal(logged.length, before + 1)
+      // Both listeners read the stored master flag through the same broken
+      // store; each reports its own first fault once, then stays silent.
+      assert.equal(logged.length, before + 2)
       const response = await request(handle.handler(), 'GET', TEMPLATES)
       assert.equal(response.status, 500)
       assert.equal(response.body.error.code, 'store-error')

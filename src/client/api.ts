@@ -146,6 +146,11 @@ export async function eventPolicies(): Promise<{ items: EventPolicyWire[]; enabl
   return { items: [...body.items ?? []], enabled: body.config?.enabled === true }
 }
 
+/** Flip the stored master switch (panel-owned; deployment config seeds it once). */
+export function setEventMaster(enabled: boolean): Promise<TemplateActionResult> {
+  return mutate('PATCH', '/event-policies/master', { enabled })
+}
+
 /** Flip or tune one event rule (partial patch). */
 export function updateEventPolicy(ruleId: string, patch: EventPolicyPatch): Promise<TemplateActionResult> {
   return mutate('PATCH', `/event-policies/${encodeURIComponent(ruleId)}`, patch)

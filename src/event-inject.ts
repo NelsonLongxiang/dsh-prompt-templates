@@ -186,7 +186,7 @@ function faultReporter(label: string): (error: unknown) => void {
  * host path is the `tools/result` listener registered below.
  */
 export function observeToolResult(store: EventStore, config: EventInjectConfig, exec: ToolExecProbe, result: ToolOutcomeProbe): void {
-  if (!config.enabled) return
+  if (!store.masterEnabled(config.enabled)) return
   if (config.ignoreTools.includes(exec.name)) return
   const sessionId = exec.agent?.session.header.id
   if (sessionId === undefined || sessionId === null) return
@@ -299,8 +299,10 @@ export function prepareEventReminders(
 export function registerEventInject(ctx: Context, config: EventInjectConfig, store: () => EventStore): void {
   const observeFault = faultReporter('event observer skipped a tool result')
   ctx.on('tools/result', (exec, result) => {
-    if (!config.enabled) return
     try {
+      // Gate inside the guard: reading the stored master flag hits the same
+      // store, and a broken store must stay contained exactly like observe.
+      if (!store().masterEnabled(config.enabled)) return
       observeToolResult(store(), config, exec as unknown as ToolExecProbe, result as unknown as ToolOutcomeProbe)
     } catch (error) {
       observeFault(error)
@@ -312,8 +314,9 @@ export function registerEventInject(ctx: Context, config: EventInjectConfig, sto
   ctx.on('agent/pre-step', async ({ agent, turn, step, signal }, next): Promise<PreStepDecision> => {
     const decision = await next()
     if (decision.kind === 'reject') return decision
-    if (!config.enabled || signal.aborted) return decision
+    if (signal.aborted) return decision
     try {
+      if (!store().masterEnabled(config.enabled)) return decision
       const sessionId = String(agent.session.header.id)
       const memo = memos.get(sessionId) ?? { scanned: 0, keys: new Set<string>() }
       memos.set(sessionId, memo)

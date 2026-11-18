@@ -21,14 +21,15 @@ import { randomUUID } from 'node:crypto'
 import { mkdirSync, chmodSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { EVENT_SCHEMA_SQL, EventStore, seedDefaultPolicies } from './event-store.ts'
+import { EVENT_MASTER_SQL, EVENT_SCHEMA_SQL, EventStore, seedDefaultPolicies } from './event-store.ts'
 import type { CategoryCreateRequest, CategoryView, PromptScope, TemplateCreateRequest, TemplateInjectMode, TemplateUpdateRequest, TemplateView } from './types.ts'
 
 /**
  * Schema version gate; v4 adds `templates.mode` (inject|visible), v5 adds
- * the event-reminder tables (policies, observations, episodes, outbox).
+ * the event-reminder tables (policies, observations, episodes, outbox),
+ * v6 adds the UI-owned `event_master` switch row (config is the seed).
  */
-export const SCHEMA_VERSION = 5
+export const SCHEMA_VERSION = 6
 
 /** Upper bound of the inject interval when the deployment config omits one. */
 export const DEFAULT_INJECT_MAX_EVERY = 1000
@@ -116,6 +117,7 @@ export class TemplateStore {
       try {
         this.db.exec(SCHEMA_V4_SQL)
         this.db.exec(EVENT_SCHEMA_SQL)
+        this.db.exec(EVENT_MASTER_SQL)
         seedDefaultPolicies(this.db)
         this.db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`)
         this.db.exec('COMMIT')
@@ -144,6 +146,7 @@ export class TemplateStore {
           this.db.exec(EVENT_SCHEMA_SQL)
           seedDefaultPolicies(this.db)
         }
+        if (onDisk <= 5) this.db.exec(EVENT_MASTER_SQL)
         this.db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`)
         this.db.exec('COMMIT')
       } catch (error) {
