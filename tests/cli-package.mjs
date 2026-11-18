@@ -85,6 +85,7 @@ try {
   const requiredDocs = [
     'README.md', 'README_zh.md', 'docs/spec-event-inject.md',
     'docs/event-failure-contract.md', 'docs/clipboard-verification.md', 'docs/test-plan-phase-c.md',
+    'docs/evolution-default.md',
   ]
   for (const file of requiredDocs) assert.ok(packedPaths.has(file), 'packaged documentation missing: ' + file)
   // Walk Markdown links from the shipped reading entry points: an installed

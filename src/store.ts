@@ -1,7 +1,7 @@
 /**
  * Pure-TS template store over `node:sqlite`, replacing the former Python
  * backend child. Owns the same SQLite database file and schema
- * (`templates` + `categories` tables plus the v5 event tables, `user_version` 5), so an existing
+ * (`templates` + `categories` tables plus event tables and evolution enrollment, `user_version` 6), so an existing
  * `$DSH_HOME/ext/prompt-templates/db.sqlite3` keeps working and migrates
  * in place.
  *
@@ -17,6 +17,7 @@
  * @module dsh-prompt-templates/store
  */
 
+import { EVOLUTION_NAME, EVOLUTION_SOURCE, EVOLUTION_VERSION, EVOLUTION_EVERY, EVOLUTION_CONTENT, EVOLUTION_SCHEMA_SQL } from './evolution-default.ts'
 import { randomUUID } from 'node:crypto'
 import { mkdirSync, chmodSync } from 'node:fs'
 import { dirname } from 'node:path'
@@ -27,9 +28,10 @@ import type { CategoryCreateRequest, CategoryView, PromptScope, TemplateCreateRe
 /**
  * Schema version gate; v4 adds `templates.mode` (inject|visible), v5 adds
  * the event-reminder tables (policies, observations, episodes, outbox),
- * v6 adds the UI-owned `event_master` switch row (config is the seed).
+ * v6 the UI-owned `event_master` switch + evolution enrollment/tombstones,
+ * v7 combines both migrations into one schema version.
  */
-export const SCHEMA_VERSION = 6
+export const SCHEMA_VERSION = 7
 
 /** Upper bound of the inject interval when the deployment config omits one. */
 export const DEFAULT_INJECT_MAX_EVERY = 1000
@@ -109,28 +111,22 @@ export class TemplateStore {
       try { chmodSync(dirname(dbPath), 0o700) } catch { /* best-effort on non-POSIX */ }
     }
     this.db = new DatabaseSync(dbPath)
-    this.db.exec('PRAGMA journal_mode=WAL')
-    this.db.exec('PRAGMA busy_timeout=5000')
-    const onDisk = Number((this.db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
-    if (onDisk === 0) {
-      this.db.exec('BEGIN')
-      try {
+    try {
+      this.db.exec('PRAGMA busy_timeout=5000')
+      this.db.exec('PRAGMA journal_mode=WAL')
+      // Inspect and migrate under the same write lock so concurrent first
+      // openers never act on a stale schema version.
+      this.db.exec('BEGIN IMMEDIATE')
+      const onDisk = Number((this.db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
+      if (onDisk === 0) {
         this.db.exec(SCHEMA_V4_SQL)
         this.db.exec(EVENT_SCHEMA_SQL)
         this.db.exec(EVENT_MASTER_SQL)
+        this.db.exec(EVOLUTION_SCHEMA_SQL)
         seedDefaultPolicies(this.db)
         this.db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`)
-        this.db.exec('COMMIT')
-      } catch (error) {
-        this.db.exec('ROLLBACK')
-        throw error
-      }
-    } else if (onDisk >= 1 && onDisk < SCHEMA_VERSION) {
-      // Migration DDL runs in ONE transaction: a crash mid-way rolls back to
-      // the intact previous schema instead of stranding a half-altered table
-      // (same BEGIN/COMMIT posture as the category delete below).
-      this.db.exec('BEGIN')
-      try {
+      } else if (onDisk >= 1 && onDisk < SCHEMA_VERSION) {
+        // Every DDL change commits or rolls back together.
         if (onDisk === 1) {
           this.db.exec('ALTER TABLE templates ADD COLUMN category TEXT')
           this.db.exec('CREATE TABLE categories (name TEXT NOT NULL, scope TEXT NOT NULL, session_id TEXT, PRIMARY KEY (scope, session_id, name))')
@@ -139,28 +135,29 @@ export class TemplateStore {
           this.db.exec('ALTER TABLE templates ADD COLUMN inject_enabled INTEGER NOT NULL DEFAULT 0')
           this.db.exec('ALTER TABLE templates ADD COLUMN inject_every INTEGER')
         }
-        if (onDisk <= 3) {
-          this.db.exec("ALTER TABLE templates ADD COLUMN mode TEXT NOT NULL DEFAULT 'inject'")
-        }
+        if (onDisk <= 3) this.db.exec("ALTER TABLE templates ADD COLUMN mode TEXT NOT NULL DEFAULT 'inject'")
         if (onDisk <= 4) {
           this.db.exec(EVENT_SCHEMA_SQL)
           seedDefaultPolicies(this.db)
         }
         if (onDisk <= 5) this.db.exec(EVENT_MASTER_SQL)
+        if (onDisk <= 6) this.db.exec(EVOLUTION_SCHEMA_SQL)
         this.db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`)
-        this.db.exec('COMMIT')
-      } catch (error) {
-        this.db.exec('ROLLBACK')
-        throw error
+      } else if (onDisk !== SCHEMA_VERSION) {
+        throw new Error(`${dbPath} has schema version ${onDisk}, incompatible with this build (expected ${SCHEMA_VERSION})`)
       }
-    } else if (onDisk !== SCHEMA_VERSION) {
-      this.db.close()
-      throw new Error(`${dbPath} has schema version ${onDisk}, incompatible with this build (expected ${SCHEMA_VERSION})`)
+      this.db.exec('COMMIT')
+      if (dbPath !== ':memory:') {
+        try { chmodSync(dbPath, 0o600) } catch { /* best-effort */ }
+      }
+      this.events = new EventStore(this.db)
+    } catch (error) {
+      // A failed constructor has no owner to close it later. Preserve the
+      // original fault even when initialization failed before BEGIN.
+      try { this.db.exec('ROLLBACK') } catch { /* transaction may not exist */ }
+      try { this.db.close() } catch { /* preserve initialization fault */ }
+      throw error
     }
-    if (dbPath !== ':memory:') {
-      try { chmodSync(dbPath, 0o600) } catch { /* best-effort */ }
-    }
-    this.events = new EventStore(this.db)
   }
 
   /** Close the underlying database handle. */
@@ -188,6 +185,45 @@ export class TemplateStore {
     return (this.db.prepare(
       "SELECT * FROM templates WHERE inject_enabled = 1 AND (scope = 'global' OR (scope = 'session' AND session_id = ?)) ORDER BY position, created_at",
     ).all(sessionId) as unknown as TemplateRow[]).map(rowToView)
+  }
+
+  /** Enroll once, atomically. Never repairs deleted templates or rewrites edits. */
+  ensureEvolutionDefault(sessionId: string, turn: number): void {
+    if (!Number.isInteger(turn) || turn < 1 || this.#injectMaxEvery < EVOLUTION_EVERY) return
+    if (this.db.prepare('SELECT 1 FROM evolution_defaults WHERE session_id = ?').get(sessionId) !== undefined) return
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      if (this.db.prepare('SELECT 1 FROM evolution_defaults WHERE session_id = ?').get(sessionId) === undefined) {
+        const existing = this.db.prepare("SELECT id FROM templates WHERE name = ? AND (scope = 'global' OR (scope = 'session' AND session_id = ?)) LIMIT 1").get(EVOLUTION_NAME, sessionId) as { id: string } | undefined
+        const template = existing === undefined ? this.create({
+          name: EVOLUTION_NAME, content: EVOLUTION_CONTENT, scope: 'session', session_id: sessionId,
+          description: `${EVOLUTION_SOURCE}@${EVOLUTION_VERSION}; auto-added once; edits/disabling/deletion are preserved`,
+          inject_enabled: true, inject_every: EVOLUTION_EVERY, mode: 'visible',
+        }) : undefined
+        this.db.prepare('INSERT INTO evolution_defaults VALUES (?, ?, ?, ?, ?, ?)').run(
+          sessionId, template?.id ?? null, EVOLUTION_SOURCE, EVOLUTION_VERSION, turn,
+          template === undefined ? 'existing-template-preserved' : 'created',
+        )
+      }
+      this.db.exec('COMMIT')
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  /** Gate only the managed row; user templates retain their original semantics. */
+  listScheduled(sessionId: string, turn: number, evolutionEnabled: boolean): TemplateView[] {
+    const managed = this.db.prepare("SELECT e.template_id, e.session_id, e.enrolled_turn FROM evolution_defaults e JOIN templates t ON t.id = e.template_id WHERE t.scope = 'global' OR (t.scope = 'session' AND t.session_id = ?)").all(sessionId) as unknown as { template_id: string, session_id: string, enrolled_turn: number }[]
+    const globals = this.db.prepare("SELECT id FROM templates WHERE scope = 'global' AND name = ?").all(EVOLUTION_NAME) as unknown as { id: string }[]
+    return this.listInjectable(sessionId).filter(template => {
+      const enrollment = managed.find(row => row.template_id === template.id)
+      if (enrollment === undefined) return true
+      if (!evolutionEnabled) return false
+      // An explicit make-global is the user's scope change; ordinary global schedule applies.
+      if (template.scope === 'global') return true
+      return turn > enrollment.enrolled_turn && globals.length === 0
+    })
   }
 
   /** Fetch one template; `undefined` when absent. */
