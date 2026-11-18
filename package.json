@@ -29,7 +29,8 @@
     "docs/spec-event-inject.md",
     "docs/event-failure-contract.md",
     "docs/clipboard-verification.md",
-    "docs/test-plan-phase-c.md"
+    "docs/test-plan-phase-c.md",
+    "docs/evolution-default.md"
   ],
   "dsh": {
     "bundle": {

@@ -45,8 +45,12 @@ dsh plugin --profile web add @nelsonlongxiang/dsh-prompt-templates
 
 - 注入内容是一条持久的 `<system-reminder>` 用户消息，记入会话日志（source kind `prompt-template-schedule`），重放与审计可精确还原模型所见
 - 同一边界轮绝不重复注入——跨重启、跨步骤重试都不例外
-- 配置持久化在插件 SQLite 库（schema v5）；patch 配置里的 `injectEnabled: false` 只关**定时注入**——事件提醒（见下）有独立总开关 `eventInject.enabled`，互不控制
+- 配置持久化在插件 SQLite 库（schema v6，含演化模板登记）；patch 配置里的 `injectEnabled: false` 只关**定时注入**——事件提醒（见下）有独立总开关 `eventInject.enabled`，互不控制
 - 每条模板可选交付模式：**静默**（默认，只进模型上下文）或**对话流可见**（以普通用户消息渲染，带 ⚙️ 定时注入标记）
+
+## Atelier 演化自评估（待发布）
+
+默认按会话补充 `工坊·演化自评估`，每100用户轮次调用 Agent Atelier 指引；已有同名模板、编辑、关闭和删除不被覆盖。仅提醒，不执行迁移或授予权限。可用 `evolutionAssessmentEnabled: false` 停用。首次历史边界不追补、升级/退出/回滚详见 [演化自评估合同](docs/evolution-default.md)。
 
 ## 事件提醒（默认关闭）
 
@@ -74,7 +78,7 @@ dsh plugin --profile web add @nelsonlongxiang/dsh-prompt-templates
 ```text
 src/                  TypeScript 插件（host 面 + 浏览器面）
   index.ts            Host：持有 TS 存储，暴露 HTTP 路由
-  store.ts            纯 TS 存储（node:sqlite，数据库 schema v5）
+  store.ts            纯 TS 存储（node:sqlite，数据库 schema v6）
   inject.ts           Host：挂在 pre-step waterfall 上的定时注入
   invariant.ts        Host：注册本包的 invariant 伴生插件
   cli/                随 bin 发布的同步 CLI（export/diff/merge/import）
@@ -88,7 +92,7 @@ cordis.patch.yml      Bundle patch：挂插件行
 
 ## 安全
 
-- 模板**内容**进入模型请求只有两条路：用户主动插入的普通用户文本，或开关被显式打开的定时注入模板——每次注入都是一条持久会话事件。事件提醒是独立通道：不携带模板内容，开关也与定时注入互不控制
+- 模板**内容**进入模型请求只有两条路：用户主动插入的普通用户文本，或经定时注入通道。用户模板按已保存的开关执行；本分支未发布的 Atelier 默认项在每会话首次创建时启用，可由部署退出，用户仍可编辑、关闭或删除。每次实际投递均记为持久会话事件。事件提醒是独立通道：不携带模板内容，开关也与定时注入互不控制
 - 面板仅经 Host 的插件路由访问 host 存储；无额外监听、无外联网络
 
 ## 数据同步 CLI
