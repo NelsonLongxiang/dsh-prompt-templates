@@ -13,7 +13,7 @@
  */
 
 import { existsSync, readFileSync } from 'node:fs'
-import { basename, dirname, resolve as resolvePath, sep } from 'node:path'
+import { basename, dirname, relative, resolve as resolvePath, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { transform } from 'lightningcss'
 import { defineConfig, type UserConfig } from 'tsdown'
@@ -41,6 +41,9 @@ const GENERATED_REMOTE = /^@deepseek-ai\/dsh-[a-z0-9]+(?:-[a-z0-9]+)*\/remote$/
 /** Virtual-id wrapper keeping module CSS away from tsdown's own css pipeline. */
 const CSS_VIRTUAL_PREFIX = '\0dsh-css:'
 const CSS_VIRTUAL_SUFFIX = '.mjs'
+
+/** Package root for reproducible CSS-module virtual ids (relative, not absolute). */
+const PACKAGE_ROOT = dirname(fileURLToPath(new URL('./package.json', import.meta.url)))
 
 /**
  * Module id this bundle registers under via `__ModuleLoader__.load`. The host
@@ -89,15 +92,24 @@ const config: UserConfig = {
     resolveId(source: string, importer: string | undefined) {
       if (!source.endsWith('.module.css')) return null
       const abs = importer !== undefined ? sourceAssetPath(source, importer) : source
-      return CSS_VIRTUAL_PREFIX + abs + CSS_VIRTUAL_SUFFIX
+      // Reproducibility (issue #26): CSS-module hash derives from this virtual
+      // id. Using the package-root-relative path makes any checkout produce the
+      // same class-name hashes and the same bytes in lib/client.js.
+      const rel = relative(PACKAGE_ROOT, abs).split(sep).join('/')
+      return CSS_VIRTUAL_PREFIX + rel + CSS_VIRTUAL_SUFFIX
     },
     async load(virtualId: string) {
       if (!virtualId.startsWith(CSS_VIRTUAL_PREFIX)) return null
-      const fileId = virtualId.slice(CSS_VIRTUAL_PREFIX.length, -CSS_VIRTUAL_SUFFIX.length)
+      // The virtual id is package-root-relative (reproducibility, issue #26);
+      // resolve it back to an absolute path for reading and watch.
+      const relId = virtualId.slice(CSS_VIRTUAL_PREFIX.length, -CSS_VIRTUAL_SUFFIX.length)
+      const fileId = resolvePath(PACKAGE_ROOT, relId)
       this.addWatchFile(fileId)
       const source = readFileSync(fileId)
       const { code, exports: cssExports } = transform({
-        filename: fileId,
+        // lightningcss derives CSS-module hashes from this filename;
+        // the relative path keeps them reproducible across checkouts (issue #26).
+        filename: relId,
         code: source,
         cssModules: { pattern: '[hash]_[local]' },
         minify: true,
