@@ -32,6 +32,7 @@
     "docs/test-plan-phase-c.md",
     "docs/evolution-default.md",
     "docs/library-packs.md",
+    "docs/self-check.md",
     "packs"
   ],
   "dsh": {

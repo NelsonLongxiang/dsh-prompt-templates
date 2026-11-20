@@ -116,6 +116,7 @@ test('v7 databases migrate to the current schema: existing episodes gain 提醒�
       ALTER TABLE templates DROP COLUMN version;
       DROP TABLE interventions;
       DROP TABLE template_versions;
+      DROP TABLE self_check_log;
       PRAGMA user_version=7;`)
     old.close()
     const store = new TemplateStore(path)
@@ -126,7 +127,7 @@ test('v7 databases migrate to the current schema: existing episodes gain 提醒�
       assert.ok(store.library().every(card => card.active_version === null && card.stored_versions.length === 0))
     } finally { store.close() }
     const check = new DatabaseSync(path)
-    assert.equal((check.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, 9)
+    assert.equal((check.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, 10)
     check.close()
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
