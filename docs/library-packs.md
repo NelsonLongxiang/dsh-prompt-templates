@@ -36,7 +36,7 @@
 
 ## 读取面（只读）
 
-- `GET /plugins/dsh-prompt-templates/library`：卡库，返回名称、生效版本、范围、开关、间隔、模式、生效正文摘要（`content_sha256`）和已存的版本列表，不含正文。
+- `GET /plugins/dsh-prompt-templates/library`：卡库，返回名称、生效版本、范围、开关、间隔、模式、生效正文摘要（`content_sha256`）和已存的版本列表，不含正文。加 `?session_id=<会话>` 只返回这个会话自己的模板（会话级模板，范围 `session`），比如它自己配的自查模板；没有就返回空列表。写会话级模板的工具留到第 2 期，第 1 期只读。
 - `GET /plugins/dsh-prompt-templates/interventions?session_id=&since=&source=&limit=`：介入记录，按时间从旧到新。
   - `source` 取 `schedule`（按轮次）、`event`（按事件）、`manual`（人在面板上手动发，`method` 分 `insert`、`send`、`interject`）、`plugin`（别的插件发起，留给第 2 期；第 2 期的投卡服务只接受 a2a 插件，记录里的 `caller` 字段写调用方，认不出的调用方被拒）。
   - 每条只记模板的标识、版本、所发文字的 sha256、会话、轮、步和时间，不记会话里的其他内容。

@@ -20,7 +20,7 @@
  *   PATCH  /plugins/dsh-prompt-templates/event-policies/:rule_id    → { policy } | 404
  *   GET    /plugins/dsh-prompt-templates/event-episodes?session_id=… → { items, outbox }
  *   PATCH  /plugins/dsh-prompt-templates/event-episodes/:id         → { episode } | 404 (evidence_refs required)
- *   GET    /plugins/dsh-prompt-templates/library                    → { items, schema } (read-only card library, v9)
+ *   GET    /plugins/dsh-prompt-templates/library[?session_id=]      → { items, schema } (read-only card library, v9; with session_id: that session's own templates)
  *   POST   /plugins/dsh-prompt-templates/library/import             → { plan } (versioned pack; dry run unless apply: true)
  *   GET    /plugins/dsh-prompt-templates/interventions?session_id=&since=&source=&limit= → { items, schema } (read-only, v9)
  *   POST   /plugins/dsh-prompt-templates/interventions/manual       → { intervention } (the panel's insert/send/interject)
@@ -201,7 +201,12 @@ async function handle(
     // Observer phase 1 (v9): the read-only library and intervention faces. `schema` lets a reader (the a2a observer) tell
     // whether this plugin is new enough; phase 2 offers the same shapes as a service to other plugins.
     if (resource === 'library') {
-      if (rest.length === 0 && method === 'GET') return json(res, 200, { schema: SCHEMA_VERSION, items: client().library() })
+      if (rest.length === 0 && method === 'GET') {
+        // `?session_id=` narrows to that session's own templates (scope session), e.g. its own self-check cards (#888).
+        const sessionId = url.searchParams.get('session_id')
+        const items = client().library()
+        return json(res, 200, { schema: SCHEMA_VERSION, items: sessionId === null ? items : items.filter(card => card.scope === 'session' && card.session_id === sessionId) })
+      }
       if (rest[0] === 'import' && rest.length === 1 && method === 'POST') {
         const body = await readJson(req)
         try {

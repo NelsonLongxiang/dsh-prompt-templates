@@ -839,5 +839,13 @@ test('library: a versioned pack is stored beside the active text and never switc
     const editedAgain = await request(handler, 'PATCH', `${TEMPLATES}/${id}`, { content: 'more words' })
     assert.equal(editedAgain.body.template.version, null)
     assert.equal((await request(handler, 'POST', `${LIB}/import`, { pack: { format: 'other' } })).status, 400)
+    // #888: one session's own templates, read-only; another session's and the globals are not in it.
+    await request(handler, 'POST', TEMPLATES, { name: '我的自查', content: 'check myself', scope: 'session', session_id: 'sess-own', inject_enabled: true, inject_every: 10 })
+    await request(handler, 'POST', TEMPLATES, { name: '别人的', content: 'other', scope: 'session', session_id: 'sess-other' })
+    const own = (await request(handler, 'GET', `${LIB}?session_id=sess-own`)).body
+    assert.equal(own.schema, 9)
+    assert.deepEqual(own.items.map((c: { name: string; scope: string; inject_every: number; active_version: null }) => [c.name, c.scope, c.inject_every, c.active_version]), [['我的自查', 'session', 10, null]])
+    assert.equal(own.items[0].content, undefined)
+    assert.deepEqual((await request(handler, 'GET', `${LIB}?session_id=sess-none`)).body.items, [])
   })
 })
