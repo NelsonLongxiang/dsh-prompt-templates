@@ -1,6 +1,6 @@
 # dsh-prompt-templates 交接文档（HANDOVER）
 
-> 面向：接手本插件维护的下一个会话/开发者。状态截至 2026-11-14；权威状态以 git log、npm registry 与 ygl-trees 台账为准，本文只是导航。
+> 面向：接手本插件维护的下一个会话/开发者。状态截至 2026-11-20（0.17.0）；权威状态以 git log、npm registry 与 ygl-trees 台账为准，本文只是导航。
 
 ## 1. 项目一句话与当前状态
 
@@ -12,12 +12,16 @@ DSH（DeepSeek Harness）的提示词模板库插件：悬浮面板 + 右侧栏 
 
 ## 2. 架构速览
 
-- host 面（src/index.ts）：cordis 插件，node:sqlite 存储（schema v5：v4 的 templates.mode 列 + 事件提醒四张表，v1–v4 单事务迁移），HTTP 路由 /plugins/dsh-prompt-templates/*（templates/categories CRUD + inject-status?session_id= → { status, history }），headless profile 无 web server 也能注入。
+- host 面（src/index.ts）：cordis 插件，node:sqlite 存储（schema v10；每一版加了什么见 src/store.ts 里 SCHEMA_VERSION 上方的注释，旧库逐版迁移上来），HTTP 路由 /plugins/dsh-prompt-templates/*（templates/categories CRUD + inject-status?session_id= → { status, history }），headless profile 无 web server 也能注入。
 - 注入机制（src/inject.ts）：agent/pre-step 瀑布，边界轮（turn % every === 0）注入；幂等锚定在持久日志回扫（alreadyInjectedAtTurn 双源形状匹配），重启/重试不重注；InjectionTracker（内存）供 ⟳N 徽标轮询与历史下拉（每会话上限 20 条）。
 - visible 模式：renderVisibleInjectionMessage 走用户通道，聊天流以普通用户消息渲染，头标记 ⚙️ 定时注入。
 - client 面（src/client/*）：slots 注入（shell.overlay / conversation.input.right / sidebar.right.pane.tab）；CSS Modules 经 tsdown 内联；⟳N 徽标 30s 轮询，点开最近注入历史。
 - 同步 CLI（src/cli/*）：快照 schema 4（兼容导入 v2/v3），export/import/diff/merge，内容哈希 + dry-run/confirm 门。
 - 跨实例分享（src/client/share.ts，0.13.3）：剪贴板载荷 format/version 1/kind=templates，版本不符即拒绝；0.13.4 起导入与同名覆盖都不开启目标的定时注入开关（间隔与模式保留）。
+- 事件提醒（src/event-*.ts，0.14.0 首发，默认关）：识别重复准备、重复失败，在同轮下一次模型决策前追加一条短提醒；0.15.0 起总开关由面板 ⚙ 持有（`eventInject.enabled` 只在首次读取时当种子），0.16.0 起每条提醒带交接行。设计见 docs/spec-event-inject.md，失败分类见 docs/event-failure-contract.md。
+- 演化自评估默认模板（src/evolution-default.ts，0.15.0）：每个会话补一条「工坊·演化自评估」，默认每 100 用户轮次；见 docs/evolution-default.md。
+- 卡库版本与介入记录（0.16.0，schema v9）：模板带版本号，版本包导入默认只预演；`interventions` 记每次介入（src/interventions.ts）。见 docs/library-packs.md。
+- 收尾自查与投卡服务（src/self-check.ts、src/cast.ts，0.17.0，schema v10）：`selfCheck.enabled`、`cast.enabled` 都默认关，开启要另外批准。见 docs/self-check.md。
 
 ## 3. 开发回路
 
@@ -34,7 +38,7 @@ DSH（DeepSeek Harness）的提示词模板库插件：悬浮面板 + 右侧栏 
 4. 推 master + tag 到 github（单端）；GitHub Release（gh release create）
 5. 隐私红线：公开面推送前过四层排查（跟踪文件/内容 grep 内网信息与机器路径/提交消息/Co-Authored-By 尾行）——历史为此做过一次全量改写。提交尾行不加 AI Co-Authored-By。
 
-## 5. 待办（2026-11-14 刷新）
+## 5. 待办（2026-11-20 刷新）
 
 | # | 事项 | 状态 |
 |---|---|---|
@@ -45,7 +49,7 @@ DSH（DeepSeek Harness）的提示词模板库插件：悬浮面板 + 右侧栏 
 | 5 | gitee 旧分支处置 | 随 gitee 冻结消解（2026-11-08 裁定） |
 | 6 | 下一版发布节奏 | 待属主裁决 |
 | 7 | drawio 类模板依赖外部技能 | 需要时另配工具 |
-| 8 | 事件触发提醒（docs/spec-event-inject.md） | 已实现、未发布（默认关闭）；真实宿主与模型行为 NOT_RUN，待按 docs/test-plan-phase-c.md 在独立 DSH_HOME 测试宿主验证 |
+| 8 | 事件触发提醒（docs/spec-event-inject.md） | 已发布（0.14.0 首发，默认关闭）；真实宿主与模型行为的 Phase C 整套仍 NOT_RUN，待按 docs/test-plan-phase-c.md 在独立 DSH_HOME 测试宿主验证 |
 
 ## 6. 知识沉淀在哪
 
@@ -53,6 +57,8 @@ DSH（DeepSeek Harness）的提示词模板库插件：悬浮面板 + 右侧栏 
 - docs/spec-template-auto-inject.md：定时注入机制 spec（file:line 引用）。
 - docs/spec-event-inject.md：事件触发提醒设计与实现差异（第 9 节）。
 - docs/test-plan-phase-c.md：事件提醒的真实宿主与行为验证流程（Phase C，尚未执行）。
+- docs/evolution-default.md、docs/library-packs.md、docs/self-check.md：0.15–0.17 各功能的合同、导入步骤与回退。
+- docs/release-notes-<版本>.md：各版发布说明（同文进 GitHub Release）。
 - 技能目录：dsh-plugin-dev-test（开发回路）、双 registry 发布、开源隐私纪律相关技能。
 
 ## 7. 红线（违反过一次的教训）
