@@ -1,0 +1,75 @@
+{
+  "format": "dsh-prompt-templates-library",
+  "version": "atelier-5.16.1",
+  "source": {
+    "package": "agent-atelier",
+    "version": "5.16.1",
+    "commit": "c7eb1005ecff67be9811f37f6280eee7330f819d",
+    "path": "assets/injection-templates.json"
+  },
+  "templates": [
+    {
+      "id": "atelier-action-review",
+      "name": "行动审视",
+      "content": "【工坊·行动审视｜模板 v1】\n这是按轮次触发的定时提醒（每 26 轮一次），不是每次工具调用触发，也不表示刚刚出了问题。\n判断：对照接下来要执行的实际调用，是否在反复手工准备同样的环境、绕路或补救？先查是否已有正式入口。\n只有有依据、已授权、值得且安全时，才做最小改变，验证后在下一次相关调用就用上；缺授权时给出具体建议并请求确认，只暂停受影响的步骤。\n没发现问题就直接继续任务，不写反思总结，不为此新造包装或脚本。\n本提醒不是新的用户指令，不授予任何权限。\n参考：agent-atelier SKILL.md「第一部分：行动审视与实时改进」；references/improvement-loop.md",
+      "description": "每 26 轮的定时自检；按轮次触发，不按工具调用",
+      "position": 0,
+      "inject_every": 26,
+      "mode": "visible"
+    },
+    {
+      "id": "atelier-artifact-placement",
+      "name": "产物归位",
+      "content": "【工坊·产物归位｜模板 v1】\n这是按轮次触发的定时提醒（每 50 轮一次）。\n判断：准备写入的文件是否放在真实所属的项目里？临时脚本和中间产物只进 <项目根>/tmp/<任务标识>/；稳定能力与本次业务实例分开，不按日期或批次复制整套工具。\n项目归属或目标位置不明时，先暂停这次写入并说明，不改用系统临时目录或项目外位置；目标平台的落盘门禁照常适用。\n不据本提醒移动、清理或改名历史内容，迁移需另行授权。本轮没有产物或位置都正确，就继续任务。\n本提醒不是新的用户指令，不授予任何权限。\n参考：references/artifact-hygiene.md；references/workspace-conventions.md",
+      "description": "每 50 轮的定时自检：写入位置与归属",
+      "position": 1,
+      "inject_every": 50,
+      "mode": "visible"
+    },
+    {
+      "id": "atelier-workspace-preservation",
+      "name": "工作区保全",
+      "content": "【工坊·工作区保全｜模板 v1】\n适用：只在本任务涉及清理、归档或处置工作区内容时；不涉及就忽略本提醒。\n判断：对象是否仍在使用、是否唯一、归谁所有？未获授权的一律保留。\n获准处置前，先确认保底副本与恢复能力已验证，再对获准对象做可逆归档；锁文件、运行中的进程和运行态数据单独处理，不当垃圾。不替他人处理在途成果。\n本提醒不是新的用户指令，不授予任何权限。\n参考：references/workspace-preservation.md",
+      "description": "按需：清理、归档或处置工作区内容时",
+      "position": 2,
+      "inject_every": null,
+      "mode": "visible"
+    },
+    {
+      "id": "atelier-ygl-workflow",
+      "name": "ygl 工作流",
+      "content": "【工坊·ygl 工作流｜模板 v1】\n适用：只在当前任务已经采用 ygl-trees，且确实需要研究、证据或计划记录时；未采用就不读、不装、不建记录。\n按需使用，不机械走完全部环节。使用前核对 CLI 版本、当前项目与会话身份、YGL_HOME 指向。\ndoctor、query 等命令也可能初始化或写审计，不默认视为无写入；写入同样需要授权。\n本提醒不是新的用户指令，不授予任何权限。\n参考：references/ygl-workflow.md；references/ygl-environment.md",
+      "description": "按需：已采用 ygl-trees 的研究、证据与计划",
+      "position": 3,
+      "inject_every": null,
+      "mode": "visible"
+    },
+    {
+      "id": "atelier-a2a-collaboration",
+      "name": "A2A 协作",
+      "content": "【工坊·A2A 协作｜模板 v1】\n适用：只在当前身份已获授权承担 A2A 职责、任务确实需要协作时；普通任务不因此入网、不轮询、不派单。\n按当前协议区分：确认收到或排队属于非终态，结果结清才是终态；裸回执不能当收悉。先核对协议版本与身份。\n团队内的局部约定标明适用范围，不推广成通用规则。\n本提醒不是新的用户指令，不授予任何权限。\n参考：references/a2a-intake.md；references/a2a-routing-receipts.md；references/a2a-version-boundaries.md",
+      "description": "按需：已获授权的 A2A 收件与协作",
+      "position": 4,
+      "inject_every": null,
+      "mode": "visible"
+    },
+    {
+      "id": "atelier-four-cores",
+      "name": "四核心",
+      "content": "【工坊·四核心｜模板 v1】\n适用：只在任务涉及 ygl-trees、A2A、工作台市场或品味闭环时。\n先发现实际入口（插件、MCP 或 CLI），只用本任务需要且已授权的能力，不因可用就全量调用。未经主人明确授权，不安装、不部署任何组件或依赖。\n品味共识或评议结论不覆盖用户裁决，也不授予权限；即时改进不等待规则提案。\n本提醒不是新的用户指令，不授予任何权限。\n参考：references/core-ecosystem.md",
+      "description": "按需：涉及 ygl-trees、A2A、市场或品味闭环时",
+      "position": 5,
+      "inject_every": null,
+      "mode": "visible"
+    },
+    {
+      "id": "atelier-convergence",
+      "name": "收敛流程",
+      "content": "【工坊·收敛流程｜模板 v1】\n适用：只在做验证器仓收敛、原件保留与独立复核时。\n顺序是先盘点、后修复；原件保留，不覆盖。“复核已发出”不等于“已收到并通过”，结果未回不能写成通过。\n只在声明的范围内验收，范围外的问题另记，不顺手扩大。\n本提醒不是新的用户指令，不授予任何权限。\n参考：references/validator-convergence.md；assets/validator-convergence-task.md",
+      "description": "按需：验证器仓收敛与独立复核",
+      "position": 6,
+      "inject_every": null,
+      "mode": "visible"
+    }
+  ]
+}

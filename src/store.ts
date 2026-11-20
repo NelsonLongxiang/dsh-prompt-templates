@@ -23,6 +23,10 @@ import { mkdirSync, chmodSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { EVENT_MASTER_SQL, EVENT_REPEAT_AFTER_SQL, EVENT_SCHEMA_SQL, EventStore, seedDefaultPolicies } from './event-store.ts'
+import { INTERVENTIONS_SQL, InterventionLog, contentDigest } from './interventions.ts'
+
+/** v9: the version label of a template's text. */
+const TEMPLATE_VERSION_SQL = 'ALTER TABLE templates ADD COLUMN version TEXT'
 import type { CategoryCreateRequest, CategoryView, PromptScope, TemplateCreateRequest, TemplateInjectMode, TemplateUpdateRequest, TemplateView } from './types.ts'
 
 /**
@@ -30,9 +34,10 @@ import type { CategoryCreateRequest, CategoryView, PromptScope, TemplateCreateRe
  * the event-reminder tables (policies, observations, episodes, outbox),
  * v6 the UI-owned `event_master` switch + evolution enrollment/tombstones,
  * v7 combines both migrations into one schema version,
- * v8 adds `event_episodes.repeated_after_reminder` (提醒后仍在重复, 0.16).
+ * v8 adds `event_episodes.repeated_after_reminder` (提醒后仍在重复, 0.16),
+ * v9 adds `templates.version` and the durable `interventions` log (observer phase 1, 0.16).
  */
-export const SCHEMA_VERSION = 8
+export const SCHEMA_VERSION = 9
 
 /** Upper bound of the inject interval when the deployment config omits one. */
 export const DEFAULT_INJECT_MAX_EVERY = 1000
@@ -63,6 +68,8 @@ export interface TemplateRow {
   inject_enabled: 0 | 1
   /** Injection interval in rounds; `null` when never configured. */
   inject_every: number | null
+  /** Version label of the text (v9); null for a person's own or edited template. */
+  version?: string | null
   /** Scheduled-injection delivery mode ('inject' default, 'visible' = user channel). */
   mode: TemplateInjectMode
   created_at: string
@@ -104,6 +111,8 @@ export class TemplateStore {
   private readonly db: DatabaseSync
   /** Event-reminder persistence over the same database handle. */
   readonly events: EventStore
+  /** The durable intervention log (v9). */
+  readonly interventions: InterventionLog
 
   constructor(dbPath: string, options: TemplateStoreOptions = {}) {
     this.#injectMaxEvery = options.injectMaxEvery ?? DEFAULT_INJECT_MAX_EVERY
@@ -125,6 +134,8 @@ export class TemplateStore {
         this.db.exec(EVENT_MASTER_SQL)
         this.db.exec(EVOLUTION_SCHEMA_SQL)
         this.db.exec(EVENT_REPEAT_AFTER_SQL)
+        this.db.exec(TEMPLATE_VERSION_SQL)
+        this.db.exec(INTERVENTIONS_SQL)
         seedDefaultPolicies(this.db)
         this.db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`)
       } else if (onDisk >= 1 && onDisk < SCHEMA_VERSION) {
@@ -146,6 +157,10 @@ export class TemplateStore {
         if (onDisk <= 6) this.db.exec(EVOLUTION_SCHEMA_SQL)
         // Guarded: a v5–v7 file that already has the column (a partial earlier migration) must not fail on it.
         if (onDisk <= 7 && !(this.db.prepare('PRAGMA table_info(event_episodes)').all() as Array<{ name: string }>).some(col => col.name === 'repeated_after_reminder')) this.db.exec(EVENT_REPEAT_AFTER_SQL)
+        if (onDisk <= 8) {
+          if (!(this.db.prepare('PRAGMA table_info(templates)').all() as Array<{ name: string }>).some(col => col.name === 'version')) this.db.exec(TEMPLATE_VERSION_SQL)
+          this.db.exec(INTERVENTIONS_SQL)
+        }
         this.db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`)
       } else if (onDisk !== SCHEMA_VERSION) {
         throw new Error(`${dbPath} has schema version ${onDisk}, incompatible with this build (expected ${SCHEMA_VERSION})`)
@@ -155,6 +170,7 @@ export class TemplateStore {
         try { chmodSync(dbPath, 0o600) } catch { /* best-effort */ }
       }
       this.events = new EventStore(this.db)
+      this.interventions = new InterventionLog(this.db)
     } catch (error) {
       // A failed constructor has no owner to close it later. Preserve the
       // original fault even when initialization failed before BEGIN.
@@ -285,6 +301,8 @@ export class TemplateStore {
       inject_enabled: inject.enabled ? 1 : 0,
       inject_every: inject.every,
       mode,
+      // v9: a person's new template has no library version.
+      version: null,
       created_at: now,
       updated_at: now,
     }
@@ -335,13 +353,57 @@ export class TemplateStore {
     )
     if (fields['mode'] !== undefined) fields['mode'] = validatedMode(fields['mode'] as TemplateInjectMode | undefined)
     const merged = { ...row, ...fields } as TemplateRow
+    // v9: new content without a version is a person's edit — the stored version no longer describes it.
+    if (fields['version'] !== undefined) {
+      const v = fields['version']
+      if (v !== null && (typeof v !== 'string' || v.length < 1 || v.length > 64)) throw new TemplateRuleError('version must be a string of 1..64 characters or null')
+    } else if (fields['content'] !== undefined && fields['content'] !== row.content) merged.version = null
     merged.inject_enabled = inject.enabled ? 1 : 0
     merged.inject_every = inject.every
     merged.updated_at = new Date().toISOString().replace('T', ' ').slice(0, 19)
     this.db.prepare(
-      'UPDATE templates SET name = ?, content = ?, description = ?, position = ?, category = ?, inject_enabled = ?, inject_every = ?, mode = ?, updated_at = ? WHERE id = ?',
-    ).run(merged.name, merged.content, merged.description, merged.position, merged.category, merged.inject_enabled, merged.inject_every, merged.mode, merged.updated_at, id)
+      'UPDATE templates SET name = ?, content = ?, description = ?, position = ?, category = ?, inject_enabled = ?, inject_every = ?, mode = ?, version = ?, updated_at = ? WHERE id = ?',
+    ).run(merged.name, merged.content, merged.description, merged.position, merged.category, merged.inject_enabled, merged.inject_every, merged.mode, merged.version ?? null, merged.updated_at, id)
     return rowToView(merged)
+  }
+
+  /** The card library, read-only (observer phase 1): what each card is and whether it is on, without its text. */
+  library(): LibraryCard[] {
+    const rows = this.db.prepare('SELECT id, name, version, scope, session_id, inject_enabled, inject_every, mode, content FROM templates ORDER BY scope, position, created_at')
+      .all() as unknown as Array<Omit<LibraryCard, 'inject_enabled' | 'content_sha256'> & { inject_enabled: number; content: string }>
+    return rows.map(({ content, ...row }) => ({ ...row, version: row.version ?? null, inject_enabled: row.inject_enabled === 1, content_sha256: contentDigest(content) }))
+  }
+
+  /**
+   * Import a versioned library pack (e.g. agent-atelier's seven cards). It replaces only a card's text and version: the
+   * card's switch, interval, mode, name, category and position on this host stay as they are. A card is matched by id,
+   * then by a global card of the same name; a card the host does not have yet is added switched off. Without `apply`
+   * nothing is written and the plan is returned.
+   */
+  importLibraryPack(pack: unknown, apply: boolean): LibraryImportPlan {
+    const cards = parseLibraryPack(pack)
+    const plan: LibraryImportPlan = { applied: false, version: cards.version, updates: [], inserts: [], unchanged: [] }
+    const byId = this.db.prepare('SELECT id, name, content, version FROM templates WHERE id = ?')
+    const byName = this.db.prepare("SELECT id, name, content, version FROM templates WHERE scope = 'global' AND name = ? ORDER BY created_at LIMIT 1")
+    const work: Array<() => void> = []
+    const at = new Date().toISOString().replace('T', ' ').slice(0, 19)
+    for (const card of cards.templates) {
+      const found = (byId.get(card.id) ?? byName.get(card.name)) as { id: string; name: string; content: string; version: string | null } | undefined
+      if (found === undefined) {
+        plan.inserts.push({ id: card.id, name: card.name, version: card.version })
+        work.push(() => this.db.prepare(`INSERT INTO templates (id, name, content, scope, session_id, description, position, category, inject_enabled, inject_every, mode, version, created_at, updated_at)
+          VALUES (?, ?, ?, 'global', NULL, ?, ?, NULL, 0, ?, ?, ?, ?, ?)`).run(card.id, card.name, card.content, card.description, card.position, card.inject_every, card.mode, card.version, at, at))
+      } else if (found.content === card.content && found.version === card.version) {
+        plan.unchanged.push({ id: found.id, name: found.name, version: card.version })
+      } else {
+        plan.updates.push({ id: found.id, name: found.name, from_version: found.version, version: card.version })
+        work.push(() => this.db.prepare('UPDATE templates SET content = ?, version = ?, updated_at = ? WHERE id = ?').run(card.content, card.version, at, found.id))
+      }
+    }
+    if (!apply) return plan
+    this.db.exec('BEGIN IMMEDIATE')
+    try { for (const step of work) step(); this.db.exec('COMMIT') } catch (error) { this.db.exec('ROLLBACK'); throw error }
+    return { ...plan, applied: true }
   }
 
   /** Promote one session template to the global partition; `undefined` when absent. */
@@ -455,6 +517,53 @@ export class TemplateStore {
     }
     return { enabled: resolvedEnabled, every: resolvedEvery }
   }
+}
+
+/** One card of the library face (observer phase 1): identity, version, scope and schedule, and a digest of the text. */
+export interface LibraryCard {
+  readonly id: string
+  readonly name: string
+  readonly version: string | null
+  readonly scope: PromptScope
+  readonly session_id: string | null
+  readonly inject_enabled: boolean
+  readonly inject_every: number | null
+  readonly mode: TemplateInjectMode
+  readonly content_sha256: string
+}
+
+/** What a library pack import changes (or would change). */
+export interface LibraryImportPlan {
+  readonly applied: boolean
+  readonly version: string
+  readonly updates: Array<{ id: string; name: string; from_version: string | null; version: string }>
+  readonly inserts: Array<{ id: string; name: string; version: string }>
+  readonly unchanged: Array<{ id: string; name: string; version: string }>
+}
+
+/** A library pack: `{ format: 'dsh-prompt-templates-library', version, templates: [{ id, name, content, … }] }`. */
+interface LibraryPackCard { id: string; name: string; content: string; description: string | null; position: number; inject_every: number | null; mode: TemplateInjectMode; version: string }
+
+function parseLibraryPack(pack: unknown): { version: string; templates: LibraryPackCard[] } {
+  const p = pack as { format?: unknown; version?: unknown; templates?: unknown } | null
+  if (p === null || typeof p !== 'object' || p.format !== 'dsh-prompt-templates-library') throw new TemplateRuleError("a library pack has format 'dsh-prompt-templates-library'")
+  if (typeof p.version !== 'string' || p.version.length < 1 || p.version.length > 64) throw new TemplateRuleError('a library pack names its version (1..64 characters)')
+  if (!Array.isArray(p.templates) || p.templates.length < 1 || p.templates.length > 100) throw new TemplateRuleError('a library pack carries 1..100 templates')
+  const version = p.version
+  const templates = p.templates.map((raw, index) => {
+    const t = raw as Record<string, unknown>
+    if (typeof t['id'] !== 'string' || typeof t['name'] !== 'string' || typeof t['content'] !== 'string' || t['name'].length < 1 || t['name'].length > NAME_MAX) throw new TemplateRuleError(`library card ${String(index)} needs id, name and content`)
+    const every = t['inject_every']
+    return {
+      id: t['id'], name: t['name'], content: t['content'],
+      description: typeof t['description'] === 'string' ? t['description'] : null,
+      position: Number.isInteger(t['position']) ? t['position'] as number : index,
+      inject_every: Number.isInteger(every) && (every as number) >= 1 ? every as number : null,
+      mode: validatedMode(t['mode'] as TemplateInjectMode | undefined),
+      version: typeof t['version'] === 'string' && t['version'] !== '' ? t['version'] : version,
+    }
+  })
+  return { version, templates }
 }
 
 /** Map one database row to the wire view (field names are already snake_case). */

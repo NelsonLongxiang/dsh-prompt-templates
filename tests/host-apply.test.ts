@@ -587,7 +587,7 @@ test('listener faults stay inside the step, and dispose closes the store', async
 
     await withHost({}, { when: 'before' }, async (handle) => {
       const db = new DatabaseSync(handle.dbPath)
-      db.exec('PRAGMA user_version=9')
+      db.exec('PRAGMA user_version=10')
       db.close()
       const before = logged.length
       const decision = await preStep(handle.ctx, { sessionId: 'sess-a', turn: 1 })
@@ -601,7 +601,7 @@ test('listener faults stay inside the step, and dispose closes the store', async
       const response = await request(handle.handler(), 'GET', TEMPLATES)
       assert.equal(response.status, 500)
       assert.equal(response.body.error.code, 'store-error')
-      assert.match(response.body.error.message, /schema version 9/)
+      assert.match(response.body.error.message, /schema version 10/)
     })
   } finally {
     console.error = original
@@ -737,5 +737,89 @@ test('Atelier opt-out suppresses managed templates but leaves explicitly created
     assert.equal(result.messages?.length, 2)
     assert.deepEqual(result.messages?.[1]?.source?.templates?.map(row => row.name), ['user review'])
     assert.doesNotMatch(textOf(result.messages?.[1]), /每100个用户轮次的检查点/)
+  })
+})
+
+// ── Observer phase 1 (schema v9): durable interventions, the library face and versioned packs ──
+test('interventions: schedule, event, manual (insert, send, interject) and plugin are recorded durably without session text', async () => {
+  const dir = createTestDirectory('pt-interventions-')
+  const dbPath = join(dir, 'db.sqlite3')
+  const SECRET = 'the session said something private'
+  try {
+    let templateId = ''
+    await withHost({}, { when: 'before', dbPath }, async (handle) => {
+      const handler = handle.handler()
+      const made = await request(handler, 'POST', TEMPLATES, { name: 'every-two', content: 'scheduled body', inject_enabled: true, inject_every: 2 })
+      templateId = made.body.template.id
+      const injected = await preStep(handle.ctx, { sessionId: 'sess-i', turn: 2, step: 3, messages: [{ role: 'user', content: [{ type: 'text', text: SECRET }] }] })
+      assert.equal(injected.messages?.length, 2)
+      for (const method of ['insert', 'send', 'interject']) {
+        const manual = await request(handler, 'POST', '/plugins/dsh-prompt-templates/interventions/manual', { session_id: 'sess-i', template_id: templateId, method })
+        assert.equal(manual.status, 200)
+      }
+      assert.equal((await request(handler, 'POST', '/plugins/dsh-prompt-templates/interventions/manual', { session_id: 'sess-i', template_id: templateId, method: 'paste' })).status, 400)
+      assert.equal((await request(handler, 'POST', '/plugins/dsh-prompt-templates/interventions/manual', { session_id: 'sess-i', template_id: 'nope', method: 'send' })).status, 404)
+    })
+    // An event reminder and (phase 2's) another plugin, recorded straight on the log.
+    const { recordEventInterventions, renderEventReminder } = await import('../src/event-inject.ts')
+    const store = new TemplateStore(dbPath)
+    try {
+      recordEventInterventions(() => store.interventions, 'sess-i', 3, 1, [renderEventReminder(3, 1, 'visible', ['body'], [{ dedup_key: 'd', episode_id: 'e', rule: 'repeated-failure@1', evidence_revision: 1 }])])
+      store.interventions.record({ session_id: 'sess-i', source: 'plugin', method: 'some-plugin', template_id: templateId, template_name: 'every-two', template_version: null, content_sha256: 'x', turn: 4, step: 1 })
+    } finally { store.close() }
+    // After a restart the rows are still there, readable by session and by time.
+    await withHost({}, { when: 'before', dbPath }, async (handle) => {
+      const handler = handle.handler()
+      const read = await request(handler, 'GET', '/plugins/dsh-prompt-templates/interventions?session_id=sess-i')
+      assert.equal(read.status, 200)
+      assert.equal(read.body.schema, 9)
+      const items = read.body.items as Array<Record<string, unknown>>
+      assert.deepEqual(items.map(i => `${String(i['source'])}:${String(i['method'])}`), ['schedule:null', 'manual:insert', 'manual:send', 'manual:interject', 'event:null', 'plugin:some-plugin'])
+      assert.deepEqual([items[0]?.['turn'], items[0]?.['step'], items[0]?.['template_id']], [2, 3, templateId])
+      assert.deepEqual([items[4]?.['template_id'], items[4]?.['template_version']], ['event:repeated-failure', '1'])
+      assert.equal(items[1]?.['turn'], null)
+      assert.ok(!JSON.stringify(items).includes(SECRET), 'no session text in the log')
+      assert.ok(!JSON.stringify(items).includes('scheduled body'), 'no template text either, only its digest')
+      const manualOnly = await request(handler, 'GET', '/plugins/dsh-prompt-templates/interventions?session_id=sess-i&source=manual')
+      assert.equal(manualOnly.body.items.length, 3)
+      const future = await request(handler, 'GET', `/plugins/dsh-prompt-templates/interventions?since=${encodeURIComponent(new Date(Date.now() + 60_000).toISOString())}`)
+      assert.equal(future.body.items.length, 0)
+      assert.equal((await request(handler, 'GET', '/plugins/dsh-prompt-templates/interventions?source=other')).status, 400)
+    })
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('library: a versioned pack replaces only text and version, keeps switches and intervals, and is a dry run unless applied', async () => {
+  await withHost({}, { when: 'before' }, async (handle) => {
+    const handler = handle.handler()
+    const LIB = '/plugins/dsh-prompt-templates/library'
+    // The host already has 行动审视, switched on every 30 rounds, under its own id.
+    const mine = await request(handler, 'POST', TEMPLATES, { name: '行动审视', content: 'old words', inject_enabled: true, inject_every: 30, mode: 'inject' })
+    const { readFileSync } = await import('node:fs')
+    const pack = JSON.parse(readFileSync(new URL('../packs/atelier-5.16.1.json', import.meta.url), 'utf8'))
+    assert.equal(pack.templates.length, 7)
+    const dry = await request(handler, 'POST', `${LIB}/import`, { pack })
+    assert.equal(dry.status, 200)
+    assert.equal(dry.body.plan.applied, false)
+    assert.deepEqual(dry.body.plan.updates.map((u: { name: string }) => u.name), ['行动审视'])
+    assert.equal(dry.body.plan.inserts.length, 6)
+    assert.equal((await request(handler, 'GET', `${TEMPLATES}/${String(mine.body.template.id)}`)).body.template.content, 'old words')
+    const applied = await request(handler, 'POST', `${LIB}/import`, { pack, apply: true })
+    assert.equal(applied.body.plan.applied, true)
+    const library = (await request(handler, 'GET', LIB)).body
+    assert.equal(library.schema, 9)
+    const review = library.items.find((c: { name: string }) => c.name === '行动审视')
+    assert.deepEqual([review.id, review.version, review.inject_enabled, review.inject_every, review.mode], [mine.body.template.id, 'atelier-5.16.1', true, 30, 'inject'])
+    assert.equal(review.content, undefined, 'the library face carries a digest, not the text')
+    assert.match(review.content_sha256, /^[0-9a-f]{64}$/)
+    const added = library.items.filter((c: { version: string | null }) => c.version === 'atelier-5.16.1')
+    assert.equal(added.length, 7)
+    assert.ok(added.filter((c: { id: string }) => c.id !== mine.body.template.id).every((c: { inject_enabled: boolean }) => !c.inject_enabled), 'new cards arrive switched off')
+    const again = await request(handler, 'POST', `${LIB}/import`, { pack, apply: true })
+    assert.equal(again.body.plan.unchanged.length, 7)
+    // A person's later edit of the text clears the version.
+    const edited = await request(handler, 'PATCH', `${TEMPLATES}/${String(mine.body.template.id)}`, { content: 'my own words' })
+    assert.equal(edited.body.template.version, null)
+    assert.equal((await request(handler, 'POST', `${LIB}/import`, { pack: { format: 'other' } })).status, 400)
   })
 })

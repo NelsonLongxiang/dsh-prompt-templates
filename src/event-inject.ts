@@ -21,6 +21,7 @@
  * @module dsh-prompt-templates/event-inject
  */
 
+import { contentDigest, type InterventionLog } from './interventions.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
@@ -304,7 +305,7 @@ export function prepareEventReminders(
  * Register the observer and the pre-step consumer. Both are pass-through
  * while `config.enabled` is false; faults are contained and reported once.
  */
-export function registerEventInject(ctx: Context, config: EventInjectConfig, store: () => EventStore): void {
+export function registerEventInject(ctx: Context, config: EventInjectConfig, store: () => EventStore, interventions?: () => InterventionLog): void {
   const observeFault = faultReporter('event observer skipped a tool result')
   ctx.on('tools/result', (exec, result) => {
     try {
@@ -333,10 +334,34 @@ export function registerEventInject(ctx: Context, config: EventInjectConfig, sto
         (typeof sessionLike.snapshotEvents === 'function' ? sessionLike.snapshotEvents() : sessionLike.events) ?? []
       const reminders = prepareEventReminders(store(), config, sessionId, turn, step, events, memo)
       if (reminders.length === 0) return decision
+      if (interventions !== undefined) recordEventInterventions(interventions, sessionId, turn, step, reminders)
       return { ...decision, messages: [...decision.messages, ...reminders] }
     } catch (error) {
       injectFault(error)
       return decision
     }
   })
+}
+
+/**
+ * v9 (observer phase 1): one intervention row per reminder item handed to the step, with the digest of the message that
+ * carried it. A retried delivery of the same item is a new row: each row is one time the text went into the session.
+ * A fault here is reported and never blocks the reminder.
+ */
+export function recordEventInterventions(log: () => InterventionLog, sessionId: string, turn: number, step: number, reminders: readonly UserMessage[]): void {
+  try {
+    const at = new Date().toISOString()
+    for (const message of reminders) {
+      const probe = message as unknown as { content?: ReadonlyArray<{ type?: string; text?: string }>; source?: { items?: readonly EventReminderItem[] } }
+      const text = (probe.content ?? []).map(part => part.text ?? '').join('')
+      const digest = contentDigest(text)
+      for (const item of probe.source?.items ?? []) {
+        const [ruleId, ruleVersion] = item.rule.split('@')
+        log().record({ session_id: sessionId, source: 'event', method: null, template_id: `event:${ruleId ?? item.rule}`, template_name: ruleId ?? item.rule,
+          template_version: ruleVersion ?? null, content_sha256: digest, turn, step, at })
+      }
+    }
+  } catch (error) {
+    console.error('[dsh-prompt-templates] intervention log skipped an event reminder:', error)
+  }
 }

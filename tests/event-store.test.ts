@@ -102,7 +102,7 @@ test('v4 databases migrate to v5 in place, keeping templates and seeding disable
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
 
-test('v7 databases migrate to v8: existing episodes gain 提醒后仍在重复 = 0', () => {
+test('v7 databases migrate to the current schema: existing episodes gain 提醒后仍在重复 = 0, templates a version, and the intervention log', () => {
   const dir = createTestDirectory('pt-v7-')
   const path = join(dir, 'v7.sqlite3')
   try {
@@ -113,15 +113,19 @@ test('v7 databases migrate to v8: existing episodes gain 提醒后仍在重复 =
         evidence_refs, evidence_revision, notify_count, summary, outcome, created_at, updated_at)
       VALUES ('ep_old', 's', 'repeated-failure', 1, 'k', 'bash', 'f', 'notified', '[]', 2, 1, 'x', 'error:exit:3', '2026-11-01', '2026-11-01');
       ALTER TABLE event_episodes DROP COLUMN repeated_after_reminder;
+      ALTER TABLE templates DROP COLUMN version;
+      DROP TABLE interventions;
       PRAGMA user_version=7;`)
     old.close()
     const store = new TemplateStore(path)
     try {
       assert.equal(store.events.episode('ep_old')?.repeated_after_reminder, 0)
       assert.equal(store.events.episode('ep_old')?.notify_count, 1)
+      assert.deepEqual(store.interventions.list(), [])
+      assert.ok(store.library().every(card => card.version === null))
     } finally { store.close() }
     const check = new DatabaseSync(path)
-    assert.equal((check.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, 8)
+    assert.equal((check.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, 9)
     check.close()
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })

@@ -44,6 +44,16 @@ export async function injectionHistory(sessionId: string): Promise<readonly Inje
   return [...body.history ?? []]
 }
 
+/**
+ * Record one template a person sent from the panel (observer phase 1, schema v9). Best effort: an older host without the
+ * route, or a network fault, never gets in the way of the send itself.
+ */
+export async function recordManualIntervention(sessionId: string, templateId: string, method: 'insert' | 'send' | 'interject'): Promise<void> {
+  try {
+    await fetch(`${BASE}/interventions/manual`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ session_id: sessionId, template_id: templateId, method }) })
+  } catch { /* best effort */ }
+}
+
 /** Load every user category tab (global + all sessions'; the panel filters). */
 export async function listCategories(): Promise<CategoryView[]> {
   const response = await fetch(`${BASE}/categories`, { cache: 'no-store' })

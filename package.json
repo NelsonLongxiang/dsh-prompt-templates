@@ -30,7 +30,9 @@
     "docs/event-failure-contract.md",
     "docs/clipboard-verification.md",
     "docs/test-plan-phase-c.md",
-    "docs/evolution-default.md"
+    "docs/evolution-default.md",
+    "docs/library-packs.md",
+    "packs"
   ],
   "dsh": {
     "bundle": {
