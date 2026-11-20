@@ -11,6 +11,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { IconCopyOutlineRegular, IconDownloadOutlineRegular, IconEditOutlineRegular, IconGlobeOutlineRegular, IconPlusOutlineRegular, IconQueueOutlineRegular, IconSendOutlineRegular, IconTrashOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { CategoryView, InjectionHistoryEntry, InjectionStatusView, TemplateInjectMode, TemplateView } from '../types.ts'
 import type { EventEpisodeWire, EventPolicyWire } from './api.ts'
+import { recordManualIntervention } from './api.ts'
 import type { TemplateLibraryFace } from './slots.ts'
 import { filterTemplateRows, searchableTemplateRows } from './filter.ts'
 import { buildSharePayload, parseSharePayload, planShareImport } from './share.ts'
@@ -27,9 +28,9 @@ import css from './Panel.module.css'
  * drag-sortable within its list (HTML5 DnD; the drop handler reorders). */
 interface RowProps {
   template: TemplateView
-  onInsert: (content: string) => void
-  onSend: (content: string) => void
-  onInterject: (content: string) => void
+  onInsert: (template: TemplateView) => void
+  onSend: (template: TemplateView) => void
+  onInterject: (template: TemplateView) => void
   onEdit: (id: string) => void
   onDelete: (id: string) => void
   /** Copy the row as a one-template clipboard share payload. */
@@ -60,7 +61,7 @@ function TemplateRow({ template, onInsert, onSend, onInterject, onEdit, onDelete
       <button
         type="button"
         className={css.insert}
-        onClick={() => { onInsert(template.content) }}
+        onClick={() => { onInsert(template) }}
         title={t('panel.insert')}
       >
         <span className={css.name}>{template.name}</span>
@@ -79,7 +80,7 @@ function TemplateRow({ template, onInsert, onSend, onInterject, onEdit, onDelete
       <button
         type="button"
         className={css.interjectBtn}
-        onClick={() => { onInterject(template.content) }}
+        onClick={() => { onInterject(template) }}
         aria-label={t('panel.interject')}
         title={t('panel.interject')}
       >
@@ -88,7 +89,7 @@ function TemplateRow({ template, onInsert, onSend, onInterject, onEdit, onDelete
       <button
         type="button"
         className={css.sendBtn}
-        onClick={() => { onSend(template.content) }}
+        onClick={() => { onSend(template) }}
         aria-label={t('panel.sendNow')}
         title={t('panel.sendNow')}
       >
@@ -615,19 +616,23 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
     void loadCategories()
   }, [importText, templates, categories, sessionId, create, update, createCategory, load, loadCategories, t])
 
-  const handleInsert = useCallback((content: string) => {
+  // Observer phase 1 (v9): each hand-sent template is recorded on the host (identity and digest, never the text).
+  const handleInsert = useCallback((template: TemplateView) => {
     if (sessionId === null) return
-    insert(sessionId, content)
+    insert(sessionId, template.content)
+    void recordManualIntervention(sessionId, template.id, 'insert')
   }, [insert, sessionId])
 
-  const handleSend = useCallback((content: string) => {
+  const handleSend = useCallback((template: TemplateView) => {
     if (sessionId === null) return
-    send(sessionId, content)
+    send(sessionId, template.content)
+    void recordManualIntervention(sessionId, template.id, 'send')
   }, [send, sessionId])
 
-  const handleInterject = useCallback((content: string) => {
+  const handleInterject = useCallback((template: TemplateView) => {
     if (sessionId === null) return
-    interject(sessionId, content)
+    interject(sessionId, template.content)
+    void recordManualIntervention(sessionId, template.id, 'interject')
   }, [interject, sessionId])
 
   const handleRemove = useCallback(async (id: string) => {

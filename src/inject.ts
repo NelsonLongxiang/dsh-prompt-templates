@@ -16,6 +16,7 @@
  * @module dsh-prompt-templates/inject
  */
 
+import { contentDigest } from './interventions.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
@@ -249,7 +250,7 @@ export function registerAutoInject(ctx: Context, config: AutoInjectConfig, store
   const sessions = new Map<string, { scanned: number, injectedTurns: Set<number> }>()
   let faultReported = false
   ctx.on('agent/pre-step', async (
-    { agent, messages, turn, signal },
+    { agent, messages, turn, step, signal },
     next,
   ): Promise<PreStepDecision> => {
     const decision = await next()
@@ -273,7 +274,8 @@ export function registerAutoInject(ctx: Context, config: AutoInjectConfig, store
       const templateStore = store()
       const evolutionEnabled = config.evolutionAssessmentEnabled ?? true
       if (evolutionEnabled) templateStore.ensureEvolutionDefault(sessionId, turn)
-      const due = dueTemplates(templateStore.listScheduled(sessionId, turn, evolutionEnabled), turn)
+      const scheduled = templateStore.listScheduled(sessionId, turn, evolutionEnabled)
+      const due = dueTemplates(scheduled, turn)
       if (due.length === 0) return decision
       // Expand variable placeholders with this delivery context;
       // unresolved ones stay literal. The history surface records the
@@ -304,6 +306,17 @@ export function registerAutoInject(ctx: Context, config: AutoInjectConfig, store
       const visible = expanded.filter(template => template.mode === 'visible')
       if (silent.length > 0) injected.push(renderInjectionMessage(turn, silent))
       if (visible.length > 0) injected.push(renderVisibleInjectionMessage(turn, visible))
+      // v9 (observer phase 1): one durable intervention row per template that went out. A fault here never blocks the
+      // injection itself.
+      try {
+        const at = new Date().toISOString()
+        for (const template of expanded) {
+          templateStore.interventions.record({ session_id: sessionId, source: 'schedule', method: null, caller: null, template_id: template.id, template_name: template.name,
+            template_version: scheduled.find(row => row.id === template.id)?.version ?? null, content_sha256: contentDigest(template.content), turn, step: typeof step === 'number' ? step : null, at })
+        }
+      } catch (error) {
+        console.error('[dsh-prompt-templates] intervention log skipped a scheduled injection:', error)
+      }
       return { ...decision, messages: [...decision.messages, ...injected] }
     } catch (error) {
       if (!faultReported) {

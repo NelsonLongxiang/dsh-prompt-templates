@@ -20,6 +20,10 @@
  *   PATCH  /plugins/dsh-prompt-templates/event-policies/:rule_id    → { policy } | 404
  *   GET    /plugins/dsh-prompt-templates/event-episodes?session_id=… → { items, outbox }
  *   PATCH  /plugins/dsh-prompt-templates/event-episodes/:id         → { episode } | 404 (evidence_refs required)
+ *   GET    /plugins/dsh-prompt-templates/library[?session_id=]      → { items, schema } (read-only card library, v9; with session_id: that session's own templates)
+ *   POST   /plugins/dsh-prompt-templates/library/import             → { plan } (versioned pack; dry run unless apply: true)
+ *   GET    /plugins/dsh-prompt-templates/interventions?session_id=&since=&source=&limit= → { items, schema } (read-only, v9)
+ *   POST   /plugins/dsh-prompt-templates/interventions/manual       → { intervention } (the panel's insert/send/interject)
  *
  * @module dsh-prompt-templates
  */
@@ -37,7 +41,8 @@ import { EventRuleError } from './event-store.ts'
 import type { EventPolicyUpdate } from './event-store.ts'
 import { registerAutoInject } from './inject.ts'
 import type { InjectionStatusView } from './inject.ts'
-import { DEFAULT_INJECT_MAX_EVERY, TemplateRuleError, TemplateStore } from './store.ts'
+import { DEFAULT_INJECT_MAX_EVERY, SCHEMA_VERSION, TemplateRuleError, TemplateStore } from './store.ts'
+import { INTERVENTION_SOURCES, MANUAL_METHODS, contentDigest, type InterventionSource, type ManualMethod } from './interventions.ts'
 import type { InjectionHistoryEntry, TemplateView } from './types.ts'
 
 export type * from './types.ts'
@@ -128,7 +133,7 @@ export function apply(ctx: Context, config: Config): void {
   // Event-triggered reminders: a separate observer + pre-step consumer,
   // inert unless the deployment AND a rule policy turn them on.
   const eventInjectConfig = { ...DEFAULT_EVENT_INJECT_CONFIG, ...config.eventInject }
-  registerEventInject(ctx, eventInjectConfig, () => client().events)
+  registerEventInject(ctx, eventInjectConfig, () => client().events, () => client().interventions)
 
   let routesRegistered = false
   const registerRoutes = (): void => {
@@ -193,6 +198,55 @@ async function handle(
     }
     // Scheduled-injection status: memory-only, never rescans the log, and is
     // session-scoped — an unknown session is a plain null, not an error.
+    // Observer phase 1 (v9): the read-only library and intervention faces. `schema` lets a reader (the a2a observer) tell
+    // whether this plugin is new enough; phase 2 offers the same shapes as a service to other plugins.
+    if (resource === 'library') {
+      if (rest.length === 0 && method === 'GET') {
+        // `?session_id=` narrows to that session's own templates (scope session), e.g. its own self-check cards (#888).
+        const sessionId = url.searchParams.get('session_id')
+        const items = client().library()
+        return json(res, 200, { schema: SCHEMA_VERSION, items: sessionId === null ? items : items.filter(card => card.scope === 'session' && card.session_id === sessionId) })
+      }
+      if (rest[0] === 'import' && rest.length === 1 && method === 'POST') {
+        const body = await readJson(req)
+        try {
+          return json(res, 200, { plan: client().importLibraryPack(body['pack'], body['apply'] === true) })
+        } catch (error) {
+          if (error instanceof TemplateRuleError) return json(res, 400, errorBody('bad-request', error.message))
+          throw error
+        }
+      }
+      return json(res, 405, errorBody('method-not-allowed', `${method} ${url.pathname}`))
+    }
+    if (resource === 'interventions') {
+      if (rest.length === 0 && method === 'GET') {
+        const sessionId = url.searchParams.get('session_id') ?? undefined
+        const since = url.searchParams.get('since') ?? undefined
+        const source = url.searchParams.get('source') ?? undefined
+        const limit = url.searchParams.get('limit')
+        if (source !== undefined && !INTERVENTION_SOURCES.includes(source as InterventionSource)) return json(res, 400, errorBody('bad-request', 'source must be schedule, event, manual or plugin'))
+        if (since !== undefined && Number.isNaN(Date.parse(since))) return json(res, 400, errorBody('bad-request', 'since must be an ISO time'))
+        const items = client().interventions.list({ ...(sessionId !== undefined && sessionId !== '' ? { sessionId } : {}), ...(since !== undefined ? { since: new Date(since).toISOString() } : {}),
+          ...(source !== undefined ? { source: source as InterventionSource } : {}), ...(limit !== null ? { limit: Number(limit) } : {}) })
+        return json(res, 200, { schema: SCHEMA_VERSION, items })
+      }
+      // The panel records what a person sent by hand: the host cannot see the composer, so the panel says so. The host
+      // looks the template up and stores its identity and a digest, never the text.
+      if (rest[0] === 'manual' && rest.length === 1 && method === 'POST') {
+        const body = await readJson(req)
+        const sessionId = body['session_id'], templateId = body['template_id'], how = body['method'], sent = body['content']
+        if (typeof sessionId !== 'string' || sessionId === '' || typeof templateId !== 'string' || !MANUAL_METHODS.includes(how as ManualMethod)) {
+          return json(res, 400, errorBody('bad-request', 'session_id, template_id and method (insert, send or interject) are required'))
+        }
+        const template = client().get(templateId)
+        if (template === undefined) return json(res, 404, notFound(templateId))
+        // `content` is the expanded text the panel sent; its digest is stored, not the text. Without it, the template's own.
+        const intervention = client().interventions.record({ session_id: sessionId, source: 'manual', method: how as ManualMethod, caller: null, template_id: template.id, template_name: template.name,
+          template_version: template.version ?? null, content_sha256: contentDigest(typeof sent === 'string' ? sent : template.content), turn: null, step: null })
+        return json(res, 200, { intervention })
+      }
+      return json(res, 405, errorBody('method-not-allowed', `${method} ${url.pathname}`))
+    }
     if (resource === 'inject-status') {
       if (method !== 'GET') return json(res, 405, errorBody('method-not-allowed', `${method} ${url.pathname}`))
       const sessionId = url.searchParams.get('session_id')

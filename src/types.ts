@@ -35,6 +35,11 @@ export interface TemplateView {
   readonly inject_every: number | null
   /** Scheduled-injection delivery mode; defaults to `inject`. */
   readonly mode: TemplateInjectMode
+  /**
+   * Version label of the template's text (schema v9), e.g. `atelier-5.16.1` from a library pack; null for a template a
+   * person wrote or edited. Editing the content without naming a version clears it.
+   */
+  readonly version?: string | null
   /** ISO timestamp without timezone, as emitted by the backend. */
   readonly created_at: string
   readonly updated_at: string
@@ -72,6 +77,8 @@ export interface TemplateUpdateRequest {
   readonly inject_enabled?: boolean
   readonly inject_every?: number | null
   readonly mode?: TemplateInjectMode
+  /** Version label of new content (v9); omitted with a content change clears the stored one. */
+  readonly version?: string | null
 }
 
 /** Category create payload. */
