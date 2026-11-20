@@ -41,67 +41,30 @@ export function callerOf(ctx: Context): string | undefined {
 }
 
 /** One queued cast. */
-interface Queued { readonly templateId: string; readonly name: string; readonly version: string | null; readonly content: string; readonly caller: string; readonly reason: string }
+interface Queued { readonly templateId: string; readonly name: string; readonly version: string | null; readonly content: string; readonly caller: string; readonly reason: string; readonly at: number }
 
 /** Source of a cast message in the session log. */
 export interface CastSource { readonly kind: 'user'; readonly scheduled: 'prompt-template-cast'; readonly turn: number; readonly step: number; readonly templates: ReadonlyArray<{ id: string; name: string; caller: string }> }
 
 /** What a cast returns. */
-export type CastResult = { ok: true; queued: number } | { ok: false; code: 'disabled' | 'caller' | 'template' | 'session' | 'full' | 'reason'; error: string }
+export type CastResult = { ok: true; queued: number } | { ok: false; code: 'disabled' | 'caller' | 'template' | 'session' | 'full' | 'reason' | 'already-queued'; error: string }
 
-export class PromptTemplatesService extends Service {
-  // Plain fields: a traced call reaches the service through a proxy, which cannot read #private fields.
-  private readonly _store: () => TemplateStore
-  private readonly _enabled: () => boolean
-  private readonly _queues: Map<string, Queued[]>
+/** The service's public face: reads open to any plugin, and cast. Nothing else is reachable on it. */
+export interface PromptTemplatesService {
+  library(): LibraryCard[]
+  templates(sessionId: string): LibraryCard[]
+  interventions(filter?: { sessionId?: string; since?: string; source?: InterventionSource; limit?: number }): InterventionView[]
+  castEnabled(): boolean
+  cast(input: { sessionId: string; templateId: string; reason: string }): CastResult
+}
 
-  constructor(ctx: Context, store: () => TemplateStore, enabled: () => boolean) {
-    super(ctx, SERVICE_NAME)
-    this._store = store
-    this._enabled = enabled
-    this._queues = new Map()
-  }
+/** Casts waiting across all sessions, at most, and how long one waits before it is dropped. */
+export const CAST_QUEUE_TOTAL_MAX = 256
+export const CAST_WAIT_MS = 60 * 60_000
 
-  /** The card library (any plugin, read-only): identity, versions, scope and schedule, and digests — never text. */
-  library(): LibraryCard[] { return this._store().library() }
-
-  /** One session's own templates (any plugin, read-only). */
-  templates(sessionId: string): LibraryCard[] { return this._store().library().filter(card => card.scope === 'session' && card.session_id === sessionId) }
-
-  /** The intervention log (any plugin, read-only). */
-  interventions(filter: { sessionId?: string; since?: string; source?: InterventionSource; limit?: number } = {}): InterventionView[] { return this._store().interventions.list(filter) }
-
-  /** Whether casting is on in this deployment. */
-  castEnabled(): boolean { return this._enabled() }
-
-  /**
-   * Cast one card into a session: it goes in at the session's next step as a visible message. Only a recognized caller
-   * (PLUGIN_CALLERS) may cast, and only while `cast.enabled` is on. The card must be a global template or one of that
-   * session's own. A reason (1..500 characters) is required; it is shown with the card.
-   */
-  cast(input: { sessionId: string; templateId: string; reason: string }): CastResult {
-    if (!this._enabled()) return { ok: false, code: 'disabled', error: 'casting is off on this host (cast.enabled)' }
-    const caller = callerOf(this.ctx)
-    if (caller === undefined || !PLUGIN_CALLERS.includes(caller)) return { ok: false, code: 'caller', error: 'only a plugin this host recognizes may cast a card' }
-    const sessionId = String(input.sessionId ?? '').trim()
-    if (sessionId === '') return { ok: false, code: 'session', error: 'name the session to cast into' }
-    const reason = String(input.reason ?? '').trim()
-    if (reason === '' || reason.length > 500) return { ok: false, code: 'reason', error: 'give a reason of 1..500 characters' }
-    const template = this._store().get(String(input.templateId ?? ''))
-    if (template === undefined || (template.scope === 'session' && template.session_id !== sessionId)) return { ok: false, code: 'template', error: 'no such card for that session' }
-    const queue = this._queues.get(sessionId) ?? []
-    if (queue.length >= CAST_QUEUE_MAX) return { ok: false, code: 'full', error: `at most ${String(CAST_QUEUE_MAX)} cast cards can wait for one session` }
-    queue.push({ templateId: template.id, name: template.name, version: template.version ?? null, content: template.content, caller, reason })
-    this._queues.set(sessionId, queue)
-    return { ok: true, queued: queue.length }
-  }
-
-  /** Take the cards waiting for a session (the pre-step listener). */
-  take(sessionId: string): Queued[] {
-    const queue = this._queues.get(sessionId) ?? []
-    this._queues.delete(sessionId)
-    return queue
-  }
+/** A reason on one line: newlines and control characters become a space (no forged header lines). */
+export function oneLine(text: string): string {
+  return text.replace(/[\u0000-\u001f\u007f\u0085\u2028\u2029]+/g, ' ').replace(/ {2,}/g, ' ').trim()
 }
 
 /** The visible message a cast becomes. */
@@ -121,18 +84,58 @@ export function renderCastMessage(turn: number, step: number, cards: readonly Qu
 }
 
 /**
- * Provide the service and deliver queued casts at a session's next admitted step. Delivery is recorded as
- * `source: plugin` with the caller; a fault is reported once and never fails the step.
+ * Provide the service and deliver queued casts at a session's next admitted step. The store, the switch and the queues
+ * live in this closure only: the service object other plugins hold carries the five public methods and cordis' own
+ * `ctx`/`name`, never the store or a way to read or drain a queue (#28 review). Delivery is recorded as `source: plugin`
+ * with the caller; a fault is reported once and never fails the step. Queues are in memory: a restart drops casts that
+ * have not gone in yet (the caller can check the intervention log), and a cast waits at most an hour.
  */
 export function registerCast(ctx: Context, store: () => TemplateStore, enabled: () => boolean): PromptTemplatesService {
-  const service = new PromptTemplatesService(ctx, store, enabled)
+  const queues = new Map<string, Queued[]>()
+  const total = (): number => { let n = 0; for (const q of queues.values()) n += q.length; return n }
+  const take = (sessionId: string, now: number): Queued[] => {
+    const queue = queues.get(sessionId) ?? []
+    queues.delete(sessionId)
+    return queue.filter(card => now - card.at < CAST_WAIT_MS)
+  }
+
+  class Face extends Service {
+    constructor(c: Context) { super(c, SERVICE_NAME) }
+    library(): LibraryCard[] { return store().library() }
+    templates(sessionId: string): LibraryCard[] { return store().library().filter(card => card.scope === 'session' && card.session_id === sessionId) }
+    interventions(filter: { sessionId?: string; since?: string; source?: InterventionSource; limit?: number } = {}): InterventionView[] { return store().interventions.list(filter) }
+    castEnabled(): boolean { return enabled() }
+    /**
+     * Cast one card into a session: it goes in at the session's next step as a visible message. Only a recognized caller
+     * (PLUGIN_CALLERS) may cast, and only while `cast.enabled` is on. The card must be a global template or one of that
+     * session's own; one copy of a card waits per session. The reason is put on one line and must be 1..500 characters.
+     */
+    cast(input: { sessionId: string; templateId: string; reason: string }): CastResult {
+      if (!enabled()) return { ok: false, code: 'disabled', error: 'casting is off on this host (cast.enabled)' }
+      const caller = callerOf(this.ctx)
+      if (caller === undefined || !PLUGIN_CALLERS.includes(caller)) return { ok: false, code: 'caller', error: 'only a plugin this host recognizes may cast a card' }
+      const sessionId = String(input?.sessionId ?? '').trim()
+      if (sessionId === '') return { ok: false, code: 'session', error: 'name the session to cast into' }
+      const reason = oneLine(String(input?.reason ?? ''))
+      if (reason === '' || reason.length > 500) return { ok: false, code: 'reason', error: 'give a reason of 1..500 characters on one line' }
+      const template = store().get(String(input?.templateId ?? ''))
+      if (template === undefined || (template.scope === 'session' && template.session_id !== sessionId)) return { ok: false, code: 'template', error: 'no such card for that session' }
+      const queue = queues.get(sessionId) ?? []
+      if (queue.some(card => card.templateId === template.id)) return { ok: false, code: 'already-queued', error: 'that card already waits for this session' }
+      if (queue.length >= CAST_QUEUE_MAX || total() >= CAST_QUEUE_TOTAL_MAX) return { ok: false, code: 'full', error: `at most ${String(CAST_QUEUE_MAX)} cast cards can wait for one session` }
+      queue.push({ templateId: template.id, name: template.name, version: template.version ?? null, content: template.content, caller, reason, at: Date.now() })
+      queues.set(sessionId, queue)
+      return { ok: true, queued: queue.length }
+    }
+  }
+  const service = new Face(ctx) as unknown as PromptTemplatesService
   let faultReported = false
   ctx.on('agent/pre-step', async ({ agent, messages, turn, step }, next): Promise<PreStepDecision> => {
     const decision = await next()
     if (decision.kind === 'reject' || messages.length === 0) return decision
     try {
       const sessionId = String(agent.session.header.id)
-      const cards = service.take(sessionId)
+      const cards = take(sessionId, Date.now())
       if (cards.length === 0) return decision
       const message = renderCastMessage(turn, typeof step === 'number' ? step : 1, cards, sessionId)
       try {
