@@ -239,3 +239,23 @@ test('#29 review: selfChecks gives the a2a plugin the rows whole and any other p
     assert.deepEqual([summary.conclusion, summary.session_id, summary.evidence, summary.wake, summary.deadline, summary.ticket], ['waiting', 'sess-1', null, null, null, null])
   } finally { await h.dispose() }
 })
+
+test('#29 review (N7, N5): a done conclusion\'s evidence is masked for other plugins and for a caller with no entry', async () => {
+  const h = await harness()
+  try {
+    h.act(); await h.stop(1)
+    assert.deepEqual(await h.call('selfcheck_conclude', { conclusion: 'done', evidence: 'EVIDENCE-TEXT 测试跑过 rc=0' }), { ok: true })
+    let a2a: Context | undefined, stranger: Context | undefined, noEntry: Context | undefined
+    await h.ctx.plugin({ name: 'a', inject: ['promptTemplates'], apply: (c: Context) => { a2a = c } } as never)
+    await h.ctx.plugin({ name: 'b', inject: ['promptTemplates'], apply: (c: Context) => { stranger = c } } as never)
+    await h.ctx.plugin({ name: 'c', inject: ['promptTemplates'], apply: (c: Context) => { noEntry = c } } as never)
+    ;(a2a as unknown as { fiber: { entry?: unknown } }).fiber.entry = { options: { name: '@nelsonlongxiang/dsh-open-a2a-net' } }
+    ;(stranger as unknown as { fiber: { entry?: unknown } }).fiber.entry = { options: { name: 'some-other-plugin' } }
+    const done = (c: Context) => c.promptTemplates.selfChecks('sess-1').find(r => r.kind === 'concluded')!
+    assert.equal(done(a2a!).evidence, 'EVIDENCE-TEXT 测试跑过 rc=0')
+    assert.equal(done(stranger!).evidence, null)
+    assert.equal(done(noEntry!).evidence, null, 'no loader entry: summary only')
+    assert.equal(done(noEntry!).conclusion, 'done')
+    assert.ok(!JSON.stringify(noEntry!.promptTemplates.selfChecks('sess-1')).includes('EVIDENCE-TEXT'))
+  } finally { await h.dispose() }
+})
