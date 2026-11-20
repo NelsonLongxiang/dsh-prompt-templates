@@ -97,6 +97,12 @@ export const EVENT_MASTER_SQL = `CREATE TABLE event_master (
   updated_at TEXT NOT NULL
 )`
 
+/**
+ * v8: how many times new evidence arrived after the episode was already reminded ("提醒后仍在重复"). Unlike `signal`,
+ * which a new reminder clears, this only grows, so an observer can read it later.
+ */
+export const EVENT_REPEAT_AFTER_SQL = 'ALTER TABLE event_episodes ADD COLUMN repeated_after_reminder INTEGER NOT NULL DEFAULT 0'
+
 /** Seed the default policy rows (idempotent). */
 export function seedDefaultPolicies(db: DatabaseSync): void {
   const insert = db.prepare(`INSERT OR IGNORE INTO event_policies
@@ -160,6 +166,8 @@ export interface EpisodeView {
   readonly notify_count: number
   /** `changed` / `repeated` after a reminder; a hint, never a verdict. */
   readonly signal: 'changed' | 'repeated' | null
+  /** v8: times the pattern came back after a reminder (提醒后仍在重复); never reset. */
+  readonly repeated_after_reminder: number
   readonly summary: string
   readonly outcome: string
   readonly cooldown_until_turn: number
@@ -335,10 +343,12 @@ export class EventStore {
         .run(id, sessionId, candidate.rule_id, candidate.rule_version, candidate.key, candidate.tool_name,
           candidate.target_fingerprint, refs, candidate.summary, candidate.outcome, at, at)
     } else {
-      const signal = existing.notify_count > 0 ? 'repeated' : existing.signal
+      const after = existing.notify_count > 0
+      const signal = after ? 'repeated' : existing.signal
       this.db.prepare(`UPDATE event_episodes SET evidence_refs = ?, evidence_revision = evidence_revision + 1,
-        rule_version = ?, signal = ?, summary = ?, outcome = ?, updated_at = ? WHERE episode_id = ?`)
-        .run(refs, candidate.rule_version, signal, candidate.summary, candidate.outcome, at, id)
+        rule_version = ?, signal = ?, repeated_after_reminder = repeated_after_reminder + ?, summary = ?, outcome = ?,
+        updated_at = ? WHERE episode_id = ?`)
+        .run(refs, candidate.rule_version, signal, after ? 1 : 0, candidate.summary, candidate.outcome, at, id)
     }
     return this.episode(id) as EpisodeView
   }

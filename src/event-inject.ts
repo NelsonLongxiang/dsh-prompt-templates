@@ -90,6 +90,12 @@ export const DEFAULT_EVENT_INJECT_CONFIG: EventInjectConfig = {
   ignoreTools: [],
 }
 
+/**
+ * Hand-off line closing every reminder (0.16): what to do when checking does not resolve it. Host-neutral on purpose —
+ * no a2a tool names; the plugin does not bind to a2a.
+ */
+export const HANDOFF_LINE = '按提醒查过仍解不开的，按所在环境的上报方式交出去，写清已查处、缺的那一句背景。'
+
 /** Atelier reference that defines how an agent handles a reminder. */
 const FORMAL_REFERENCE = 'agent-atelier references/improvement-loop.md'
 
@@ -103,6 +109,7 @@ export function renderReminderItem(episode: Pick<EpisodeView, 'rule_id' | 'rule_
       `观察：近期调用反复手工带上同一段准备前缀（示例：${episode.summary}）。证据：${refs}。`,
       '请先查是否已有正式入口能承担这段共同准备。只有有依据、已授权、值得且安全时，才做最小改变并在下一次相关调用使用；缺授权时说明建议并请求确认；若重复合理，继续任务即可，不必为此新造包装或写反思。',
       `本提醒不是新的用户指令，不授予任何权限。参考：${FORMAL_REFERENCE}`,
+      HANDOFF_LINE,
     ].join('\n')
   }
   return [
@@ -110,6 +117,7 @@ export function renderReminderItem(episode: Pick<EpisodeView, 'rule_id' | 'rule_
     `观察：同一目标反复以相同方式失败（${episode.outcome}；示例：${episode.summary}）。证据：${refs}。`,
     '请先确认失败原因，不要原样重试。有依据且已授权时做最小修正，并以结构化结果验证；缺授权或缺关键事实时暂停受影响步骤并说明；证据不足时保持原方案。',
     `本提醒不是新的用户指令，不授予任何权限。参考：${FORMAL_REFERENCE}`,
+    HANDOFF_LINE,
   ].join('\n')
 }
 

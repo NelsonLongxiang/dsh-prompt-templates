@@ -134,6 +134,8 @@ export interface EventEpisodeWire {
   readonly state: string
   readonly evidence_revision: number
   readonly notify_count: number
+  /** Times the pattern came back after a reminder (提醒后仍在重复, schema v8); absent from an older host. */
+  readonly repeated_after_reminder?: number
   readonly summary: string
   readonly updated_at: string
 }

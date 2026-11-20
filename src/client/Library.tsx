@@ -920,7 +920,7 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
           {episodes.slice(0, 8).map(episode => (
             <div key={episode.episode_id} className={css.eventsEpisode}>
               <div className={css.eventsEpisodeHead}>
-                {episode.rule_id} · {episode.state} · ×{episode.notify_count} · {new Date(episode.updated_at).toLocaleTimeString()}
+                {episode.rule_id} · {episode.state} · ×{episode.notify_count}{(episode.repeated_after_reminder ?? 0) > 0 ? ` · ${t('panel.eventsRepeatedAfter')} ×${String(episode.repeated_after_reminder ?? 0)}` : ''} · {new Date(episode.updated_at).toLocaleTimeString()}
               </div>
               <div className={css.eventsEpisodeSummary}>{episode.summary}</div>
             </div>
