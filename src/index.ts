@@ -44,6 +44,7 @@ import type { InjectionStatusView } from './inject.ts'
 import { DEFAULT_INJECT_MAX_EVERY, SCHEMA_VERSION, TemplateRuleError, TemplateStore } from './store.ts'
 import { INTERVENTION_SOURCES, MANUAL_METHODS, contentDigest, type InterventionSource, type ManualMethod } from './interventions.ts'
 import { registerCast, type PromptTemplatesService } from './cast.ts'
+import { registerSelfCheck } from './self-check.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -78,6 +79,8 @@ export interface Config {
   }
   /** Observer phase 2: other plugins may cast a card into a session (only a recognized caller); off by default. */
   readonly cast?: { readonly enabled?: boolean }
+  /** Observer phase 2: the wrap-up self-check and its two tools; off by default. */
+  readonly selfCheck?: { readonly enabled?: boolean }
 }
 
 export const Config: s<Config> = s.object({
@@ -94,6 +97,7 @@ export const Config: s<Config> = s.object({
     ignoreTools: s.array(s.string()).default([]),
   }).default({}),
   cast: s.object({ enabled: s.boolean().default(false) }).default({}),
+  selfCheck: s.object({ enabled: s.boolean().default(false) }).default({}),
 })
 
 /** Structural slice of the web-server service (route registration only). */
@@ -146,7 +150,9 @@ export function apply(ctx: Context, config: Config): void {
   const eventInjectConfig = { ...DEFAULT_EVENT_INJECT_CONFIG, ...config.eventInject }
   // Observer phase 2 (PT-3): the service other plugins read (library, a session's templates, the log) and the cast,
   // which only a recognized caller may use and only while cast.enabled is on.
-  registerCast(ctx, client, () => config.cast?.enabled === true)
+  registerCast(ctx, client, () => config.cast?.enabled === true, () => config.selfCheck?.enabled === true)
+  // Observer phase 2 (PT-4): the wrap-up self-check, off unless selfCheck.enabled.
+  registerSelfCheck(ctx, client, () => config.selfCheck?.enabled === true)
   registerEventInject(ctx, eventInjectConfig, () => client().events, () => client().interventions)
 
   let routesRegistered = false
@@ -229,6 +235,15 @@ async function handle(
           if (error instanceof TemplateRuleError) return json(res, 400, errorBody('bad-request', error.message))
           throw error
         }
+      }
+      return json(res, 405, errorBody('method-not-allowed', `${method} ${url.pathname}`))
+    }
+    // PT-4: one session's wrap-up self-check log (read-only): injections, conclusions, orphans, hints.
+    if (resource === 'self-checks') {
+      if (rest.length === 0 && method === 'GET') {
+        const sessionId = url.searchParams.get('session_id')
+        if (sessionId === null || sessionId === '') return json(res, 400, errorBody('bad-request', 'missing session_id'))
+        return json(res, 200, { schema: SCHEMA_VERSION, items: client().selfChecks.list(sessionId, Number(url.searchParams.get('limit') ?? 100)) })
       }
       return json(res, 405, errorBody('method-not-allowed', `${method} ${url.pathname}`))
     }

@@ -136,3 +136,22 @@ test('#28 review: one copy of a card waits per session', async () => {
     assert.ok(CAST_QUEUE_MAX >= 1)
   } finally { await h.dispose() }
 })
+
+test('#28 follow-up: bidi controls and zero-width characters fold too', () => {
+  assert.equal(oneLine('a‮b​c⁦d﻿e\u0085f'), 'a b c d e f')
+})
+
+test('#28 follow-up: expired casts never count toward the host-wide cap', async () => {
+  const h = await harness(true)
+  const realNow = Date.now
+  try {
+    const card = h.makeCard({ name: '全局', content: 'body', scope: 'global' })
+    const a2a = await h.callerCtx(A2A)
+    let now = realNow()
+    Date.now = () => now
+    for (let i = 0; i < 256; i++) assert.equal(a2a.promptTemplates.cast({ sessionId: `ghost-${String(i)}`, templateId: card.id, reason: 'r' }).ok, true)
+    assert.equal((a2a.promptTemplates.cast({ sessionId: 'live', templateId: card.id, reason: 'r' }) as { code: string }).code, 'full')
+    now += 61 * 60_000
+    assert.deepEqual(a2a.promptTemplates.cast({ sessionId: 'live', templateId: card.id, reason: 'r' }), { ok: true, queued: 1 })
+  } finally { Date.now = realNow; await h.dispose() }
+})

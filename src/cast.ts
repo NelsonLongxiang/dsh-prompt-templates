@@ -16,6 +16,7 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { UserMessage } from '@deepseek-ai/dsh-session'
 import { PLUGIN_CALLERS, contentDigest, type InterventionSource, type InterventionView } from './interventions.ts'
 import type { LibraryCard, TemplateStore } from './store.ts'
+import type { SelfCheckRow } from './self-check.ts'
 import { expandTemplateVariables } from './variables.ts'
 
 /** The service name other plugins read: `ctx.promptTemplates`. */
@@ -55,6 +56,10 @@ export interface PromptTemplatesService {
   templates(sessionId: string): LibraryCard[]
   interventions(filter?: { sessionId?: string; since?: string; source?: InterventionSource; limit?: number }): InterventionView[]
   castEnabled(): boolean
+  /** One session's wrap-up self-check log (read-only, PT-4). */
+  selfChecks(sessionId: string): SelfCheckRow[]
+  /** Whether the wrap-up self-check is on in this deployment (a reader must not take an empty log for a missing check when it is off). */
+  selfCheckEnabled(): boolean
   cast(input: { sessionId: string; templateId: string; reason: string }): CastResult
 }
 
@@ -64,7 +69,8 @@ export const CAST_WAIT_MS = 60 * 60_000
 
 /** A reason on one line: newlines and control characters become a space (no forged header lines). */
 export function oneLine(text: string): string {
-  return text.replace(/[\u0000-\u001f\u007f\u0085\u2028\u2029]+/g, ' ').replace(/ {2,}/g, ' ').trim()
+  // Control characters, line and paragraph separators, bidi controls and zero-width characters all become a space (#28 review).
+  return text.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]+/g, ' ').replace(/ {2,}/g, ' ').trim()
 }
 
 /** The visible message a cast becomes. */
@@ -90,9 +96,17 @@ export function renderCastMessage(turn: number, step: number, cards: readonly Qu
  * with the caller; a fault is reported once and never fails the step. Queues are in memory: a restart drops casts that
  * have not gone in yet (the caller can check the intervention log), and a cast waits at most an hour.
  */
-export function registerCast(ctx: Context, store: () => TemplateStore, enabled: () => boolean): PromptTemplatesService {
+export function registerCast(ctx: Context, store: () => TemplateStore, enabled: () => boolean, selfCheckEnabled: () => boolean = () => false): PromptTemplatesService {
   const queues = new Map<string, Queued[]>()
-  const total = (): number => { let n = 0; for (const q of queues.values()) n += q.length; return n }
+  // Expired casts never count toward the host-wide cap: they are dropped first (#28 review).
+  const total = (now: number): number => {
+    let n = 0
+    for (const [sessionId, q] of [...queues]) {
+      const live = q.filter(card => now - card.at < CAST_WAIT_MS)
+      if (live.length === 0) queues.delete(sessionId); else { queues.set(sessionId, live); n += live.length }
+    }
+    return n
+  }
   const take = (sessionId: string, now: number): Queued[] => {
     const queue = queues.get(sessionId) ?? []
     queues.delete(sessionId)
@@ -105,6 +119,17 @@ export function registerCast(ctx: Context, store: () => TemplateStore, enabled: 
     templates(sessionId: string): LibraryCard[] { return store().library().filter(card => card.scope === 'session' && card.session_id === sessionId) }
     interventions(filter: { sessionId?: string; since?: string; source?: InterventionSource; limit?: number } = {}): InterventionView[] { return store().interventions.list(filter) }
     castEnabled(): boolean { return enabled() }
+    /**
+     * One session's self-check log. The a2a plugin (the observer's reader) gets the rows whole; any other plugin gets a
+     * summary only — session, time, kind and conclusion — never the evidence, wake, deadline or ticket text (#29 review).
+     */
+    selfChecks(sessionId: string): SelfCheckRow[] {
+      const rows = store().selfChecks.list(String(sessionId))
+      const caller = callerOf(this.ctx)
+      if (caller !== undefined && PLUGIN_CALLERS.includes(caller)) return rows
+      return rows.map(row => ({ ...row, evidence: null, wake: null, deadline: null, ticket: null }))
+    }
+    selfCheckEnabled(): boolean { return selfCheckEnabled() }
     /**
      * Cast one card into a session: it goes in at the session's next step as a visible message. Only a recognized caller
      * (PLUGIN_CALLERS) may cast, and only while `cast.enabled` is on. The card must be a global template or one of that
@@ -120,9 +145,10 @@ export function registerCast(ctx: Context, store: () => TemplateStore, enabled: 
       if (reason === '' || reason.length > 500) return { ok: false, code: 'reason', error: 'give a reason of 1..500 characters on one line' }
       const template = store().get(String(input?.templateId ?? ''))
       if (template === undefined || (template.scope === 'session' && template.session_id !== sessionId)) return { ok: false, code: 'template', error: 'no such card for that session' }
+      const live = total(Date.now())
       const queue = queues.get(sessionId) ?? []
       if (queue.some(card => card.templateId === template.id)) return { ok: false, code: 'already-queued', error: 'that card already waits for this session' }
-      if (queue.length >= CAST_QUEUE_MAX || total() >= CAST_QUEUE_TOTAL_MAX) return { ok: false, code: 'full', error: `at most ${String(CAST_QUEUE_MAX)} cast cards can wait for one session` }
+      if (queue.length >= CAST_QUEUE_MAX || live >= CAST_QUEUE_TOTAL_MAX) return { ok: false, code: 'full', error: `at most ${String(CAST_QUEUE_MAX)} cast cards can wait for one session` }
       queue.push({ templateId: template.id, name: template.name, version: template.version ?? null, content: template.content, caller, reason, at: Date.now() })
       queues.set(sessionId, queue)
       return { ok: true, queued: queue.length }

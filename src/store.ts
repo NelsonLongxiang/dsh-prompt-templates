@@ -24,6 +24,7 @@ import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { EVENT_MASTER_SQL, EVENT_REPEAT_AFTER_SQL, EVENT_SCHEMA_SQL, EventStore, seedDefaultPolicies } from './event-store.ts'
 import { INTERVENTIONS_SQL, InterventionLog, contentDigest } from './interventions.ts'
+import { SELF_CHECK_SQL, SelfCheckLog } from './self-check.ts'
 
 /** v9: the version label of a template's text. */
 const TEMPLATE_VERSION_SQL = 'ALTER TABLE templates ADD COLUMN version TEXT'
@@ -46,9 +47,10 @@ import type { CategoryCreateRequest, CategoryView, PromptScope, TemplateCreateRe
  * v6 the UI-owned `event_master` switch + evolution enrollment/tombstones,
  * v7 combines both migrations into one schema version,
  * v8 adds `event_episodes.repeated_after_reminder` (提醒后仍在重复, 0.16),
- * v9 adds `templates.version` and the durable `interventions` log (observer phase 1, 0.16).
+ * v9 adds `templates.version` and the durable `interventions` log (observer phase 1, 0.16),
+ * v10 adds the wrap-up `self_check_log` (observer phase 2, PT-4).
  */
-export const SCHEMA_VERSION = 9
+export const SCHEMA_VERSION = 10
 
 /** Upper bound of the inject interval when the deployment config omits one. */
 export const DEFAULT_INJECT_MAX_EVERY = 1000
@@ -124,6 +126,8 @@ export class TemplateStore {
   readonly events: EventStore
   /** The durable intervention log (v9). */
   readonly interventions: InterventionLog
+  /** The wrap-up self-check log (v10). */
+  readonly selfChecks: SelfCheckLog
 
   constructor(dbPath: string, options: TemplateStoreOptions = {}) {
     this.#injectMaxEvery = options.injectMaxEvery ?? DEFAULT_INJECT_MAX_EVERY
@@ -148,6 +152,7 @@ export class TemplateStore {
         this.db.exec(TEMPLATE_VERSION_SQL)
         this.db.exec(TEMPLATE_VERSIONS_SQL)
         this.db.exec(INTERVENTIONS_SQL)
+        this.db.exec(SELF_CHECK_SQL)
         seedDefaultPolicies(this.db)
         this.db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`)
       } else if (onDisk >= 1 && onDisk < SCHEMA_VERSION) {
@@ -174,6 +179,7 @@ export class TemplateStore {
           this.db.exec(TEMPLATE_VERSIONS_SQL)
           this.db.exec(INTERVENTIONS_SQL)
         }
+        if (onDisk <= 9) this.db.exec(SELF_CHECK_SQL)
         this.db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`)
       } else if (onDisk !== SCHEMA_VERSION) {
         throw new Error(`${dbPath} has schema version ${onDisk}, incompatible with this build (expected ${SCHEMA_VERSION})`)
@@ -184,6 +190,7 @@ export class TemplateStore {
       }
       this.events = new EventStore(this.db)
       this.interventions = new InterventionLog(this.db)
+      this.selfChecks = new SelfCheckLog(this.db)
     } catch (error) {
       // A failed constructor has no owner to close it later. Preserve the
       // original fault even when initialization failed before BEGIN.
@@ -430,6 +437,12 @@ export class TemplateStore {
     this.db.exec('BEGIN IMMEDIATE')
     try { for (const step of work) step(); this.db.exec('COMMIT') } catch (error) { this.db.exec('ROLLBACK'); throw error }
     return { ...plan, applied: true }
+  }
+
+  /** Keep one text as a stored version of a card (a self-check template's previous write). Idempotent per version. */
+  keepVersion(templateId: string, version: string, name: string, content: string, source: string): void {
+    this.db.prepare(`INSERT INTO template_versions (template_id, version, name, content, content_sha256, source, stored_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(template_id, version) DO NOTHING`).run(templateId, version, name, content, contentDigest(content), source, new Date().toISOString())
   }
 
   /** Promote one session template to the global partition; `undefined` when absent. */
