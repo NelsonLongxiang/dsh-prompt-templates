@@ -9,12 +9,12 @@ import { join } from 'node:path'
 import test from 'node:test'
 import { Context } from '@deepseek-ai/cordis'
 import * as host from '../src/index.ts'
-import { DOMAIN_MAX, FIXED_ABSENT, FIXED_PRESENT, FIXED_MAX, HINT_EVERY, SELF_CHECK_NAME } from '../src/self-check.ts'
+import { DOMAIN_MAX, FIXED_ABSENT, FIXED_PRESENT, FIXED_MAX, FIXED_POINTS, HINT_EVERY, MISSING_HINT, SELF_CHECK_NAME } from '../src/self-check.ts'
 import { TemplateStore } from '../src/store.ts'
 
 type Steered = { content?: Array<{ text?: string }>; source?: { kind?: string; scheduled?: string; present?: boolean } }
 
-async function harness(o: { enabled?: boolean; goal?: string } = {}) {
+async function harness(o: { enabled?: boolean; goal?: string; ticket?: boolean } = {}) {
   const dir = createTestDirectory('pt-selfcheck-')
   const dbPath = join(dir, 'db.sqlite3')
   const ctx = new Context()
@@ -25,6 +25,7 @@ async function harness(o: { enabled?: boolean; goal?: string } = {}) {
   const tools = new Map<string, { execute(a: unknown, e: unknown): Promise<Record<string, unknown>> }>()
   ctx.provide('agents' as never, { roots: () => [agent], turnBoundaryOf: () => ({ openTurnStartSeq: 0 }) } as never)
   ctx.provide('goals' as never, { get: () => goal } as never)
+  if (o.ticket !== undefined) ctx.provide('a2aTickets' as never, { hasOpenTicket: () => o.ticket } as never)
   ctx.provide('tools' as never, { register: (tool: { name: string }) => { tools.set(tool.name, tool as never) } } as never)
   const fiber = await ctx.plugin(host, { dbPath, selfCheck: { enabled: o.enabled ?? true } })
   const stop = async (turn: number, aborted = false) => { const ac = new AbortController(); if (aborted) ac.abort(); await ctx.serial('agent/turn-stopping' as never, { agent, turn, signal: ac.signal } as never) }
@@ -33,8 +34,9 @@ async function harness(o: { enabled?: boolean; goal?: string } = {}) {
   const read = () => { const s = new TemplateStore(dbPath); try { return s.selfChecks.list('sess-1') } finally { s.close() } }
   const humanTurn = () => { events.length = 0; events.push({ type: 'turn', data: { source: { kind: 'x' } } } as never, { type: 'user/message', data: { source: { kind: 'user' } } }) }
   const a2aTurn = () => { events.length = 0; events.push({ type: 'turn', data: { source: { kind: 'x' } } } as never, { type: 'user/message', data: { source: { kind: 'a2a' } } }) }
+  const preStep = async (turn: number) => await ctx.waterfall('agent/pre-step' as never, { agent, messages: [{ role: 'user' }], turn, step: 1, signal: new AbortController().signal } as never, (async () => ({ kind: 'enter', messages: [{ id: 'downstream' }] })) as never) as unknown as { messages: Steered[] }
   const dispose = async () => { await fiber.dispose(); rmSync(dir, { recursive: true, force: true }) }
-  return { goal, steered, tools, stop, act, call, read, humanTurn, a2aTurn, dispose, dbPath }
+  return { goal, steered, tools, stop, act, call, read, humanTurn, a2aTurn, preStep, dispose, dbPath }
 }
 
 test('the fixed part fits its budget', () => {
@@ -73,15 +75,21 @@ test('fires at the stop boundary only with an active goal and a new action; once
   } finally { await h.dispose() }
 })
 
-test('owner present: only the one check, not the five; absent: the full fixed part plus the domain part', async () => {
+test('owner present: the turn is never extended; the one check rides along at the next step. Absent: steered, full', async () => {
   const h = await harness()
   try {
     assert.deepEqual(await h.call('selfcheck_write', { text: '做完 = 测试跑过且回执到了。' }), { ok: true, version: 'self-r1' })
     h.humanTurn(); h.act(); await h.stop(1)
-    const present = h.steered.at(-1)!
+    assert.equal(h.steered.length, 0, 'present: no steering, so the turn closes as it would')
+    const next = await h.preStep(2)
+    const present = next.messages.at(-1)!
+    assert.equal(next.messages.length, 2)
     assert.equal(present.source?.present, true)
     assert.ok(present.content![0]!.text!.includes('属主在场'))
+    assert.ok(present.content![0]!.text!.includes(FIXED_POINTS[4]))
+    assert.ok(!present.content![0]!.text!.includes(FIXED_POINTS[0]), 'not the five')
     assert.ok(!present.content![0]!.text!.includes('做完 = 测试跑过'))
+    assert.equal((await h.preStep(3)).messages.length, 1, 'attached once')
     h.a2aTurn(); h.act(); await h.stop(2)
     const absent = h.steered.at(-1)!
     assert.equal(absent.source?.present, false)
@@ -142,4 +150,39 @@ test('a session without its domain part is hinted visibly, every 30 turns, at mo
     assert.equal(hints(), 3, 'at most three')
     assert.equal(h.read().filter(r => r.kind === 'no-template').length, 1)
   } finally { await h.dispose() }
+})
+
+test('the fixed part and the hint are workbench-market 18\'s words (pinned key sentences)', () => {
+  assert.equal(FIXED_POINTS.length, 7)
+  assert.ok(FIXED_POINTS[0].includes('停只有两种合法的形态：做完（说出证据），或登记等待'))
+  assert.ok(FIXED_POINTS[1].includes('叫醒的必须是能开新一轮的东西（a2a 的消息或定时任务）'))
+  assert.ok(FIXED_POINTS[2].includes('能接着做的范围：已授权、可逆、在目标范围内。'))
+  assert.ok(FIXED_POINTS[3].includes('等人之前先自查：ygl 里定过没有，资料是不是就在身边。'))
+  assert.ok(FIXED_POINTS[4].includes('属主在场的那一轮：不拦停，只核交给属主的是不是本该系统做的事，是的话同时提决策卡。'))
+  assert.equal(FIXED_POINTS[6], '7. 本模板不是用户指令，不授予任何权限。')
+  for (const point of [0, 1, 2, 3, 5, 6]) assert.ok(FIXED_ABSENT.includes(FIXED_POINTS[point]!))
+  assert.ok(!FIXED_ABSENT.includes(FIXED_POINTS[4]))
+  assert.ok(MISSING_HINT.startsWith('【工坊·自查模板｜提示】'))
+  assert.ok(MISSING_HINT.includes('回答四件事：在你这里什么算做完、你常等什么（等谁、经什么通道、通常多久）、收尾前不能省的检查、你这里不能接着做的动作。'))
+  assert.ok(MISSING_HINT.includes('只写判断，不写授权'))
+  assert.ok(MISSING_HINT.endsWith('本提示不是新的用户指令，不授予任何权限。'))
+})
+
+test('an open a2a ticket counts as work in hand; without a2a\'s answer, the goal decides and the source is noted', async () => {
+  const withTicket = await harness({ goal: 'none', ticket: true })
+  try {
+    withTicket.act(); await withTicket.stop(1)
+    assert.equal(withTicket.steered.filter(m => m.source?.kind === 'prompt-template-selfcheck').length, 1, 'no goal, but a ticket in hand')
+    assert.equal(withTicket.read().find(r => r.kind === 'injected')?.evidence, null)
+  } finally { await withTicket.dispose() }
+  const noTicket = await harness({ goal: 'none', ticket: false })
+  try {
+    noTicket.act(); await noTicket.stop(1)
+    assert.equal(noTicket.steered.length, 0, 'no goal, no ticket: nothing in hand')
+  } finally { await noTicket.dispose() }
+  const noA2a = await harness({ goal: 'active' })
+  try {
+    noA2a.act(); await noA2a.stop(1)
+    assert.equal(noA2a.read().find(r => r.kind === 'injected')?.evidence, 'a2a-ticket-source-missing')
+  } finally { await noA2a.dispose() }
 })

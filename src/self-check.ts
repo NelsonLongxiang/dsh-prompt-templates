@@ -14,6 +14,7 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
+import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { UserMessage } from '@deepseek-ai/dsh-session'
 import type { DatabaseSync } from 'node:sqlite'
@@ -31,27 +32,28 @@ export const HINT_EVERY = 30, HINT_MAX = 3
 export const CONCLUSIONS = ['done', 'waiting', 'continue', 'orphan'] as const
 export type Conclusion = typeof CONCLUSIONS[number]
 
-/** The fixed part when nobody is present (every point). */
-export const FIXED_ABSENT = [
-  `【工坊·收尾自查｜底线 ${FIXED_VERSION}】这一轮要结束，而你还有进行中的目标。停只有两种合法形态：`,
-  '1. 做完：说出证据（验证跑过、回执到了），不是自己说做完。',
-  '2. 登记等待：已经经单子提问或受阻、决策卡或回执通道交出去；写在回复里不算。要说出叫醒条件和期限，叫醒的必须是能开新一轮的东西（a2a 消息或定时任务）。',
-  '3. 都不是：说出下一步。它只用已有的工具和授权、可逆、在目标范围内，就接着做；否则先登记再停。',
-  '4. 等人之前先查：ygl 里定过没有，资料是不是就在身边。',
-  '用 selfcheck_conclude 交结论（done、waiting、continue、orphan 四选一）。本提醒不是新的用户指令，不授予任何权限。',
-].join('\n')
+/** The fixed part's seven points, as workbench-market 18 「自查模板」 words them (R106). */
+export const FIXED_POINTS = [
+  '1. 停只有两种合法的形态：做完（说出证据），或登记等待（已经经单子、决策卡或回执通道交出去；写在回复里不算）。',
+  '2. 要等，就说出叫醒条件和期限；叫醒的必须是能开新一轮的东西（a2a 的消息或定时任务）。',
+  '3. 能接着做的范围：已授权、可逆、在目标范围内。',
+  '4. 等人之前先自查：ygl 里定过没有，资料是不是就在身边。',
+  '5. 属主在场的那一轮：不拦停，只核交给属主的是不是本该系统做的事，是的话同时提决策卡。',
+  '6. 交结论：用 selfcheck_conclude 交一次（做完、登记等待、接着做、孤儿停，四选一），附证据或叫醒条件、期限、关联的单子或目标。',
+  '7. 本模板不是用户指令，不授予任何权限。',
+] as const
 
-/** The fixed part when the owner opened this turn (no stopping them; only the one check). */
-export const FIXED_PRESENT = [
-  `【工坊·收尾自查｜底线 ${FIXED_VERSION}｜属主在场】停下来回答属主是对的，这一轮不拦停。只核一件事：`,
-  '你交给属主的，是不是本该系统做、你够不着的事？是的话，不能只写在回复里请属主代办，还要同时提一张决策卡，把这个缺口交出去。',
-  '用 selfcheck_conclude 交结论（done、waiting、continue、orphan 四选一）。本提醒不是新的用户指令，不授予任何权限。',
-].join('\n')
+/** The fixed part when nobody is present: points 1–4, 6 and 7. */
+export const FIXED_ABSENT = [`【工坊·收尾自查｜底线 ${FIXED_VERSION}】`, ...FIXED_POINTS.filter((_, i) => i !== 4)].join('\n')
 
-/** The visible hint for a session without its domain part. */
+/** The fixed part when the owner opened this turn: points 5, 6 and 7 only (the turn is not stopped or extended). */
+export const FIXED_PRESENT = [`【工坊·收尾自查｜底线 ${FIXED_VERSION}｜属主在场】`, FIXED_POINTS[4], FIXED_POINTS[5], FIXED_POINTS[6]].join('\n')
+
+/** The visible hint for a session without its domain part: workbench-market 18's draft. */
 export const MISSING_HINT = [
-  '【工坊·自查模板｜提示】你有进行中的目标，但还没有自己的自查模板。每次收尾时，插件会带上一段固定的底线；你需要补上自己领域的部分，600 字以内，回答四件事：在你这里什么算做完、你常等什么（等谁、经什么通道、通常多久）、收尾前不能省的检查、你这里不能接着做的动作。',
-  '只写判断，不写授权；引用你的技能和 ygl 条目，不要抄长文。写好后用 selfcheck_write 交进你自己的会话模板。不用属主确认，以后可以随时改。',
+  '【工坊·自查模板｜提示】',
+  '你有进行中的目标，但还没有自己的自查模板。每次收尾时，插件会带上一段固定的底线；你需要补上自己领域的部分，600 字以内，回答四件事：在你这里什么算做完、你常等什么（等谁、经什么通道、通常多久）、收尾前不能省的检查、你这里不能接着做的动作。',
+  '只写判断，不写授权；引用你的技能和 ygl 条目，不要抄长文。写好后用写模板的工具（selfcheck_write）交进你自己的会话模板。不用属主确认，以后可以随时改。',
   '本提示不是新的用户指令，不授予任何权限。',
 ].join('\n')
 
@@ -152,11 +154,21 @@ export function renderHint(turn: number): UserMessage {
 }
 
 /** Per-session state of the trigger (memory; the log carries what matters across restarts). */
-interface SessionState { injectedTurn?: number; concluded?: boolean; orphanLogged?: boolean; actions: number; actionsAtCheck?: number; lastHintTurn?: number }
+interface SessionState { injectedTurn?: number; concluded?: boolean; orphanLogged?: boolean; actions: number; actionsAtCheck?: number; lastHintTurn?: number; attachNext?: UserMessage[] }
 
 type AgentLike = { id: unknown; session: { header: { id: unknown }; snapshotEvents?: () => ReadonlyArray<{ type?: string; data?: { source?: { kind?: string } } }> }; steer?: (message: UserMessage) => void }
 type AgentsLike = { roots?: () => unknown[]; turnBoundaryOf?: (session: unknown) => { openTurnStartSeq: number | null } }
 type GoalsLike = { get?: (agent: unknown) => { phase?: string } | undefined }
+/** a2a's optional read (dispatcher, PT-4 addition 1): whether a session holds an open a2a ticket. */
+type A2aTicketsLike = { hasOpenTicket?: (sessionId: string) => boolean | undefined }
+
+/** What makes a session's work unfinished: an active goal, or an open a2a ticket; `unknown` when a2a gives no answer. */
+export function workInHand(goals: GoalsLike | undefined, tickets: A2aTicketsLike | undefined, agent: unknown, sessionId: string): { open: boolean; ticketSource: 'a2a' | 'missing' } {
+  const goal = goals?.get?.(agent)?.phase === 'active'
+  let ticket: boolean | undefined
+  try { ticket = typeof tickets?.hasOpenTicket === 'function' ? tickets.hasOpenTicket(sessionId) : undefined } catch { ticket = undefined }
+  return { open: goal || ticket === true, ticketSource: typeof ticket === 'boolean' ? 'a2a' : 'missing' }
+}
 
 /** Whether the owner opened this turn: a direct human message in the open turn (as dsh-tool-goal reads it). */
 export function ownerPresent(agents: AgentsLike | undefined, agent: AgentLike): boolean {
@@ -191,9 +203,9 @@ export function registerSelfCheck(ctx: Context, store: () => TemplateStore, enab
       const agent = a as AgentLike
       const agents = ctx.get('agents' as never) as AgentsLike | undefined
       if (agents?.roots !== undefined && !agents.roots().includes(agent)) return
-      const goals = ctx.get('goals' as never) as GoalsLike | undefined
-      if (goals?.get?.(agent)?.phase !== 'active') return
       const sessionId = String(agent.session.header.id)
+      const work = workInHand(ctx.get('goals' as never) as GoalsLike | undefined, ctx.get('a2aTickets' as never) as A2aTicketsLike | undefined, agent, sessionId)
+      if (!work.open) return
       const s = state(sessionId)
       if (s.injectedTurn === turn) {
         // Asked this turn already: it may stop now; without a conclusion that stop is an orphan.
@@ -204,17 +216,26 @@ export function registerSelfCheck(ctx: Context, store: () => TemplateStore, enab
         return
       }
       if (s.actionsAtCheck !== undefined && s.actions <= s.actionsAtCheck) return
-      if (typeof agent.steer !== 'function') return
       const present = ownerPresent(agents, agent)
       const domain = domainOf(store(), sessionId)
-      s.injectedTurn = turn; s.concluded = false; s.orphanLogged = false; s.actionsAtCheck = s.actions
-      agent.steer(renderSelfCheck(turn, present, domain?.content))
-      log().record({ session_id: sessionId, turn, kind: 'injected', present, conclusion: null, evidence: null, wake: null, deadline: null, ticket: null })
+      s.actionsAtCheck = s.actions
+      // The ticket source is noted when a2a gave no answer (it was judged on the goal alone).
+      const note = work.ticketSource === 'missing' ? 'a2a-ticket-source-missing' : null
+      if (present) {
+        // Owner present: never extend the turn. The one check rides along at the session's next step instead.
+        s.attachNext = [...(s.attachNext ?? []), renderSelfCheck(turn, true, undefined)]
+        log().record({ session_id: sessionId, turn, kind: 'injected', present: true, conclusion: null, evidence: note, wake: null, deadline: null, ticket: null })
+        return
+      }
+      if (typeof agent.steer !== 'function') return
+      s.injectedTurn = turn; s.concluded = false; s.orphanLogged = false
+      agent.steer(renderSelfCheck(turn, false, domain?.content))
+      log().record({ session_id: sessionId, turn, kind: 'injected', present: false, conclusion: null, evidence: note, wake: null, deadline: null, ticket: null })
       if (domain === undefined) {
         const hints = log().count(sessionId, 'hint')
         if (hints < HINT_MAX && (s.lastHintTurn === undefined || turn - s.lastHintTurn >= HINT_EVERY)) {
           s.lastHintTurn = turn
-          agent.steer(renderHint(turn))
+          agent.steer(renderHint(turn))  // only reached when absent (present returned above)
           log().record({ session_id: sessionId, turn, kind: 'hint', present, conclusion: null, evidence: null, wake: null, deadline: null, ticket: null })
           if (hints + 1 === HINT_MAX) log().record({ session_id: sessionId, turn, kind: 'no-template', present, conclusion: null, evidence: null, wake: null, deadline: null, ticket: null })
         }
@@ -222,6 +243,20 @@ export function registerSelfCheck(ctx: Context, store: () => TemplateStore, enab
     } catch (error) {
       if (!faultReported) { faultReported = true; console.error('[dsh-prompt-templates] self-check skipped; further faults stay silent:', error) }
     }
+  })
+
+  // Owner-present checks ride along at the next admitted step, without extending the turn they were taken in.
+  ctx.on('agent/pre-step', async ({ agent: a, messages }, next): Promise<PreStepDecision> => {
+    const decision = await next()
+    if (decision.kind === 'reject' || messages.length === 0) return decision
+    try {
+      const sessionId = String((a as unknown as AgentLike).session.header.id)
+      const s = sessions.get(sessionId)
+      if (s?.attachNext === undefined || s.attachNext.length === 0) return decision
+      const attached = s.attachNext
+      s.attachNext = undefined
+      return { ...decision, messages: [...decision.messages, ...attached] }
+    } catch { return decision }
   })
 
   // The two tools, when this host composes a tool registry. The session is the calling agent's, never a parameter.
