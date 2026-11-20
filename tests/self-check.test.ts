@@ -155,6 +155,7 @@ test('a session without its domain part is hinted visibly, every 30 turns, at mo
 test('the fixed part and the hint are workbench-market 18\'s words (pinned key sentences)', () => {
   assert.equal(FIXED_POINTS.length, 7)
   assert.ok(FIXED_POINTS[0].includes('停只有两种合法的形态：做完（说出证据），或登记等待'))
+  assert.ok(FIXED_POINTS[0].includes('写在回复里不算'), 'a question written in the reply is not registered')
   assert.ok(FIXED_POINTS[1].includes('叫醒的必须是能开新一轮的东西（a2a 的消息或定时任务）'))
   assert.ok(FIXED_POINTS[2].includes('能接着做的范围：已授权、可逆、在目标范围内。'))
   assert.ok(FIXED_POINTS[3].includes('等人之前先自查：ygl 里定过没有，资料是不是就在身边。'))
@@ -195,4 +196,46 @@ test('the service tells readers whether the self-check is on', async () => {
       assert.deepEqual(h.ctx.promptTemplates.selfChecks('sess-1'), [])
     } finally { await h.dispose() }
   }
+})
+
+test('#29 review: the plugin\'s own visible messages never count as the owner being present', async () => {
+  const { isHumanSource, ownerPresent } = await import('../src/self-check.ts')
+  const { renderVisibleInjectionMessage } = await import('../src/inject.ts')
+  const { renderEventReminder } = await import('../src/event-inject.ts')
+  const { renderCastMessage } = await import('../src/cast.ts')
+  const { renderHint } = await import('../src/self-check.ts')
+  const sources: Record<string, unknown> = {
+    scheduled: (renderVisibleInjectionMessage(2, [{ id: 't', name: 'n', content: 'c', every: 2, mode: 'visible' }]) as unknown as { source: unknown }).source,
+    event: (renderEventReminder(2, 1, 'visible', ['b'], [{ dedup_key: 'd', episode_id: 'e', rule: 'repeated-failure@1', evidence_revision: 1 }]) as unknown as { source: unknown }).source,
+    cast: (renderCastMessage(2, 1, [{ templateId: 't', name: 'n', version: null, content: 'c', caller: 'x', reason: 'r', at: 0 }] as never, 's') as unknown as { source: unknown }).source,
+    hint: (renderHint(2) as unknown as { source: unknown }).source,
+  }
+  for (const [name, source] of Object.entries(sources)) {
+    assert.equal((source as { kind?: string }).kind, 'user', `${name} renders as a user message`)
+    assert.equal(isHumanSource(source), false, `${name} is not a person`)
+    const agent = { id: 'a', session: { header: { id: 's' }, snapshotEvents: () => [{ type: 'turn' }, { type: 'user/message', data: { source } }] } }
+    assert.equal(ownerPresent({ turnBoundaryOf: () => ({ openTurnStartSeq: 0 }) } as never, agent as never), false, name)
+  }
+  assert.equal(isHumanSource({ kind: 'user' }), true)
+  assert.equal(isHumanSource({ kind: 'a2a' }), false)
+  assert.equal(isHumanSource(undefined), false)
+  // In doubt (a broken registry), absent.
+  assert.equal(ownerPresent({ turnBoundaryOf: () => { throw new Error('x') } } as never, { id: 'a', session: { header: { id: 's' } } } as never), false)
+})
+
+test('#29 review: selfChecks gives the a2a plugin the rows whole and any other plugin a summary only', async () => {
+  const h = await harness()
+  try {
+    h.act(); await h.stop(1)
+    await h.call('selfcheck_conclude', { conclusion: 'waiting', wake: '回执', deadline: '2026-11-20T09:00:00Z', ticket: 'tk-1' })
+    let a2a: Context | undefined, stranger: Context | undefined
+    await h.ctx.plugin({ name: 'a', inject: ['promptTemplates'], apply: (c: Context) => { a2a = c } } as never)
+    await h.ctx.plugin({ name: 'b', inject: ['promptTemplates'], apply: (c: Context) => { stranger = c } } as never)
+    ;(a2a as unknown as { fiber: { entry?: unknown } }).fiber.entry = { options: { name: '@nelsonlongxiang/dsh-open-a2a-net' } }
+    ;(stranger as unknown as { fiber: { entry?: unknown } }).fiber.entry = { options: { name: 'some-other-plugin' } }
+    const full = a2a!.promptTemplates.selfChecks('sess-1').find(r => r.kind === 'concluded')!
+    assert.deepEqual([full.wake, full.deadline, full.ticket], ['回执', '2026-11-20T09:00:00Z', 'tk-1'])
+    const summary = stranger!.promptTemplates.selfChecks('sess-1').find(r => r.kind === 'concluded')!
+    assert.deepEqual([summary.conclusion, summary.session_id, summary.evidence, summary.wake, summary.deadline, summary.ticket], ['waiting', 'sess-1', null, null, null, null])
+  } finally { await h.dispose() }
 })

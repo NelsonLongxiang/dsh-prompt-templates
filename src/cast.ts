@@ -119,7 +119,16 @@ export function registerCast(ctx: Context, store: () => TemplateStore, enabled: 
     templates(sessionId: string): LibraryCard[] { return store().library().filter(card => card.scope === 'session' && card.session_id === sessionId) }
     interventions(filter: { sessionId?: string; since?: string; source?: InterventionSource; limit?: number } = {}): InterventionView[] { return store().interventions.list(filter) }
     castEnabled(): boolean { return enabled() }
-    selfChecks(sessionId: string): SelfCheckRow[] { return store().selfChecks.list(String(sessionId)) }
+    /**
+     * One session's self-check log. The a2a plugin (the observer's reader) gets the rows whole; any other plugin gets a
+     * summary only — session, time, kind and conclusion — never the evidence, wake, deadline or ticket text (#29 review).
+     */
+    selfChecks(sessionId: string): SelfCheckRow[] {
+      const rows = store().selfChecks.list(String(sessionId))
+      const caller = callerOf(this.ctx)
+      if (caller !== undefined && PLUGIN_CALLERS.includes(caller)) return rows
+      return rows.map(row => ({ ...row, evidence: null, wake: null, deadline: null, ticket: null }))
+    }
     selfCheckEnabled(): boolean { return selfCheckEnabled() }
     /**
      * Cast one card into a session: it goes in at the session's next step as a visible message. Only a recognized caller

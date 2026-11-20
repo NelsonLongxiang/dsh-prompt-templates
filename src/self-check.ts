@@ -172,12 +172,29 @@ export function workInHand(goals: GoalsLike | undefined, tickets: A2aTicketsLike
 
 /** Whether the owner opened this turn: a direct human message in the open turn (as dsh-tool-goal reads it). */
 export function ownerPresent(agents: AgentsLike | undefined, agent: AgentLike): boolean {
-  const boundary = agents?.turnBoundaryOf?.(agent.session)
-  const start = boundary?.openTurnStartSeq
-  if (start === null || start === undefined) return false
-  const events = agent.session.snapshotEvents?.() ?? []
-  for (let seq = start + 1; seq < events.length; seq++) if (events[seq]?.type === 'user/message' && events[seq]?.data?.source?.kind === 'user') return true
-  return false
+  try {
+    const boundary = agents?.turnBoundaryOf?.(agent.session)
+    const start = boundary?.openTurnStartSeq
+    if (start === null || start === undefined) return false
+    const events = agent.session.snapshotEvents?.() ?? []
+    for (let seq = start + 1; seq < events.length; seq++) if (events[seq]?.type === 'user/message' && isHumanSource(events[seq]?.data?.source)) return true
+    return false
+  } catch {
+    // When in doubt, absent: better to run every point than to skip them (#29 review).
+    return false
+  }
+}
+
+/**
+ * A direct human message: source kind `user` and none of this plugin's own markers (#29 review). The plugin's visible
+ * messages — scheduled templates, event reminders, casts, the missing-template hint — also carry kind `user` (so the
+ * chat renders them), but each carries `scheduled`; anything carrying it, or any other marker field, is not a person.
+ */
+export function isHumanSource(source: unknown): boolean {
+  if (source === null || typeof source !== 'object') return false
+  const s = source as Record<string, unknown>
+  if (s['kind'] !== 'user') return false
+  return !('scheduled' in s) && !('turn' in s) && !('items' in s) && !('templates' in s)
 }
 
 /**
