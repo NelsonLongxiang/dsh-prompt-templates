@@ -102,6 +102,30 @@ test('v4 databases migrate to v5 in place, keeping templates and seeding disable
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
 
+test('v7 databases migrate to v8: existing episodes gain 提醒后仍在重复 = 0', () => {
+  const dir = createTestDirectory('pt-v7-')
+  const path = join(dir, 'v7.sqlite3')
+  try {
+    // Build a real v7 file: a current store, then the v8 column removed and the version set back.
+    new TemplateStore(path).close()
+    const old = new DatabaseSync(path)
+    old.exec(`INSERT INTO event_episodes (episode_id, session_id, rule_id, rule_version, key, tool_name, target_fingerprint, state,
+        evidence_refs, evidence_revision, notify_count, summary, outcome, created_at, updated_at)
+      VALUES ('ep_old', 's', 'repeated-failure', 1, 'k', 'bash', 'f', 'notified', '[]', 2, 1, 'x', 'error:exit:3', '2026-11-01', '2026-11-01');
+      ALTER TABLE event_episodes DROP COLUMN repeated_after_reminder;
+      PRAGMA user_version=7;`)
+    old.close()
+    const store = new TemplateStore(path)
+    try {
+      assert.equal(store.events.episode('ep_old')?.repeated_after_reminder, 0)
+      assert.equal(store.events.episode('ep_old')?.notify_count, 1)
+    } finally { store.close() }
+    const check = new DatabaseSync(path)
+    assert.equal((check.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, 8)
+    check.close()
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
 test('policy updates validate their fields; unknown rules are undefined', () => {
   const store = new TemplateStore(':memory:')
   try {
@@ -144,6 +168,10 @@ test('M04: a reminder is sent once per evidence revision, then cooldown and per-
     assert.ok(text.includes('repeated-preparation@1'))
     assert.ok(!text.includes('abc'), 'assignment values never reach the prompt')
     assert.ok(text.includes('不授予任何权限'))
+    // 0.16: every reminder ends with the host-neutral hand-off line, naming no a2a tool.
+    assert.ok(text.trimEnd().endsWith('按提醒查过仍解不开的，按所在环境的上报方式交出去，写清已查处、缺的那一句背景。'))
+    assert.ok(!/a2a_/.test(text), 'the plugin does not bind to a2a')
+    assert.equal(h.store.events.episode(item?.episode_id ?? '')?.repeated_after_reminder, 0)
     h.commit(first)
     // Same evidence replayed: nothing new.
     assert.deepEqual(h.step(1, 3), [])
@@ -154,9 +182,14 @@ test('M04: a reminder is sent once per evidence revision, then cooldown and per-
     const episode = h.store.events.episode(item?.episode_id ?? '')
     assert.equal(episode?.signal, 'repeated')
     assert.equal(episode?.evidence_revision, 2)
+    assert.equal(episode?.repeated_after_reminder, 1)
     assert.deepEqual(h.step(3, 1), [])
     const second = h.step(4, 1)
     assert.equal(items(second)[0]?.evidence_revision, 2)
+    // A new reminder clears `signal`, but 提醒后仍在重复 stays for a later reader (0.16, schema v8).
+    const reminded = h.store.events.episode(item?.episode_id ?? '')
+    assert.equal(reminded?.signal, null)
+    assert.equal(reminded?.repeated_after_reminder, 1)
     assert.notEqual(items(second)[0]?.dedup_key, item?.dedup_key)
     h.commit(second)
     // max_per_episode = 2: more evidence no longer reminds.

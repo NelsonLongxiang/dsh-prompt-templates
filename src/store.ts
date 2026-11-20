@@ -22,16 +22,17 @@ import { randomUUID } from 'node:crypto'
 import { mkdirSync, chmodSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { EVENT_MASTER_SQL, EVENT_SCHEMA_SQL, EventStore, seedDefaultPolicies } from './event-store.ts'
+import { EVENT_MASTER_SQL, EVENT_REPEAT_AFTER_SQL, EVENT_SCHEMA_SQL, EventStore, seedDefaultPolicies } from './event-store.ts'
 import type { CategoryCreateRequest, CategoryView, PromptScope, TemplateCreateRequest, TemplateInjectMode, TemplateUpdateRequest, TemplateView } from './types.ts'
 
 /**
  * Schema version gate; v4 adds `templates.mode` (inject|visible), v5 adds
  * the event-reminder tables (policies, observations, episodes, outbox),
  * v6 the UI-owned `event_master` switch + evolution enrollment/tombstones,
- * v7 combines both migrations into one schema version.
+ * v7 combines both migrations into one schema version,
+ * v8 adds `event_episodes.repeated_after_reminder` (提醒后仍在重复, 0.16).
  */
-export const SCHEMA_VERSION = 7
+export const SCHEMA_VERSION = 8
 
 /** Upper bound of the inject interval when the deployment config omits one. */
 export const DEFAULT_INJECT_MAX_EVERY = 1000
@@ -123,6 +124,7 @@ export class TemplateStore {
         this.db.exec(EVENT_SCHEMA_SQL)
         this.db.exec(EVENT_MASTER_SQL)
         this.db.exec(EVOLUTION_SCHEMA_SQL)
+        this.db.exec(EVENT_REPEAT_AFTER_SQL)
         seedDefaultPolicies(this.db)
         this.db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`)
       } else if (onDisk >= 1 && onDisk < SCHEMA_VERSION) {
@@ -142,6 +144,8 @@ export class TemplateStore {
         }
         if (onDisk <= 5) this.db.exec(EVENT_MASTER_SQL)
         if (onDisk <= 6) this.db.exec(EVOLUTION_SCHEMA_SQL)
+        // Guarded: a v5–v7 file that already has the column (a partial earlier migration) must not fail on it.
+        if (onDisk <= 7 && !(this.db.prepare('PRAGMA table_info(event_episodes)').all() as Array<{ name: string }>).some(col => col.name === 'repeated_after_reminder')) this.db.exec(EVENT_REPEAT_AFTER_SQL)
         this.db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`)
       } else if (onDisk !== SCHEMA_VERSION) {
         throw new Error(`${dbPath} has schema version ${onDisk}, incompatible with this build (expected ${SCHEMA_VERSION})`)

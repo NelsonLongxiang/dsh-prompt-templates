@@ -139,6 +139,7 @@ src/
 - 插件自己只推进到 `notified`，并给出两个**信号**，不自己改终态：
   - 提醒之后，下一次相关调用的稳定指纹变了 → `signal: changed`
   - 提醒之后同一模式又出现 → `signal: repeated`，修订号加 1
+  - 0.16（schema v8）：同时 `repeated_after_reminder` 加 1，即「提醒后仍在重复」的次数。`signal` 在下一次提醒时清空，这个计数不清空，留给以后的观察者读；在 `GET …/event-episodes` 和面板的问题台账里都能看到。
 - `applied` / `verified` / `ineffective` / `reverted` / `rejected` / `deferred` / `awaiting_authorization` 只通过审计接口设置，并且必须附证据引用（call id 或会话事件序号）。Agent 的口头自述不是证据。
 - 宿主不能证明模型“读到”了提醒，所以不设 `consumed`；需要时在报告里写 UNKNOWN。
 
@@ -170,7 +171,7 @@ interface TemplateEventSource {
 }
 ```
 
-正文按 Atelier 模板契约渲染：规则与版本、脱敏观察、证据引用、要判断的问题、授权边界、无问题时继续、验证标准、正式参考。默认 `visible`（对话流可见，便于用户看到为什么被提醒），可按策略改为静默；两种模式都是 user-role，不赋予 system 权限。
+正文按 Atelier 模板契约渲染：规则与版本、脱敏观察、证据引用、要判断的问题、授权边界、无问题时继续、验证标准、正式参考。0.16 起每条正文末尾加一句通用交接话：「按提醒查过仍解不开的，按所在环境的上报方式交出去，写清已查处、缺的那一句背景。」这句不写任何 a2a 工具名，插件不绑定 a2a。默认 `visible`（对话流可见，便于用户看到为什么被提醒），可按策略改为静默；两种模式都是 user-role，不赋予 system 权限。
 
 **交付语义**：不承诺恰好一次，采用“可恢复的至少一次 + 幂等去重”。崩溃窗口如下：
 
@@ -191,7 +192,7 @@ interface TemplateEventSource {
 |---|---|---|
 | `event_policies` | `rule_id` PK、`rule_version`、`enabled`、`threshold`、`window`、`cooldown_turns`、`max_per_episode`、`mode` | 与 `inject_every` 无关的独立策略实体；默认全部 `enabled=0`。 |
 | `event_observations` | `session_id`、`seq`、`call_id`、`root_call_id`、`tool_name`、`is_ptc_subcall`、`stable_fingerprint`、`target_fingerprint`、`outcome`、`redacted_summary`、`created_at` | 每会话按窗口截断。 |
-| `event_episodes` | `episode_id` PK、`session_id`、`rule_id`、`rule_version`、`fingerprint`、`state`、`evidence_refs`（JSON）、`evidence_revision`、`signal`、`cooldown_until_turn`、`created_at`、`updated_at` | 问题状态机。 |
+| `event_episodes` | `episode_id` PK、`session_id`、`rule_id`、`rule_version`、`fingerprint`、`state`、`evidence_refs`（JSON）、`evidence_revision`、`signal`、`repeated_after_reminder`（v8）、`cooldown_until_turn`、`created_at`、`updated_at` | 问题状态机。 |
 | `event_outbox` | `dedup_key` PK、`episode_id`、`state`、`attempts`、`turn`、`step`、`created_at`、`updated_at` | 交付状态。 |
 
 旧版本插件遇到 v5 库会按现有逻辑拒绝打开（`store.ts` 遇到更新的 `user_version` 抛错），不会降级运行。
