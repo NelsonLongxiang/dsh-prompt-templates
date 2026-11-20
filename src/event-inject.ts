@@ -357,7 +357,7 @@ export function recordEventInterventions(log: () => InterventionLog, sessionId: 
       const digest = contentDigest(text)
       for (const item of probe.source?.items ?? []) {
         const [ruleId, ruleVersion] = item.rule.split('@')
-        log().record({ session_id: sessionId, source: 'event', method: null, template_id: `event:${ruleId ?? item.rule}`, template_name: ruleId ?? item.rule,
+        log().record({ session_id: sessionId, source: 'event', method: null, caller: null, template_id: `event:${ruleId ?? item.rule}`, template_name: ruleId ?? item.rule,
           template_version: ruleVersion ?? null, content_sha256: digest, turn, step, at })
       }
     }

@@ -765,7 +765,9 @@ test('interventions: schedule, event, manual (insert, send, interject) and plugi
     const store = new TemplateStore(dbPath)
     try {
       recordEventInterventions(() => store.interventions, 'sess-i', 3, 1, [renderEventReminder(3, 1, 'visible', ['body'], [{ dedup_key: 'd', episode_id: 'e', rule: 'repeated-failure@1', evidence_revision: 1 }])])
-      store.interventions.record({ session_id: 'sess-i', source: 'plugin', method: 'some-plugin', template_id: templateId, template_name: 'every-two', template_version: null, content_sha256: 'x', turn: 4, step: 1 })
+      // Phase 2 takes only the a2a plugin as a caller; one it cannot identify is refused.
+      assert.throws(() => store.interventions.record({ session_id: 'sess-i', source: 'plugin', method: null, caller: 'some-other-plugin', template_id: templateId, template_name: 'every-two', template_version: null, content_sha256: 'x', turn: 4, step: 1 }))
+      store.interventions.record({ session_id: 'sess-i', source: 'plugin', method: null, caller: '@nelsonlongxiang/dsh-open-a2a-net', template_id: templateId, template_name: 'every-two', template_version: null, content_sha256: 'x', turn: 4, step: 1 })
     } finally { store.close() }
     // After a restart the rows are still there, readable by session and by time.
     await withHost({}, { when: 'before', dbPath }, async (handle) => {
@@ -774,7 +776,7 @@ test('interventions: schedule, event, manual (insert, send, interject) and plugi
       assert.equal(read.status, 200)
       assert.equal(read.body.schema, 9)
       const items = read.body.items as Array<Record<string, unknown>>
-      assert.deepEqual(items.map(i => `${String(i['source'])}:${String(i['method'])}`), ['schedule:null', 'manual:insert', 'manual:send', 'manual:interject', 'event:null', 'plugin:some-plugin'])
+      assert.deepEqual(items.map(i => `${String(i['source'])}:${String(i['method'])}:${String(i['caller'])}`), ['schedule:null:null', 'manual:insert:null', 'manual:send:null', 'manual:interject:null', 'event:null:null', 'plugin:null:@nelsonlongxiang/dsh-open-a2a-net'])
       assert.deepEqual([items[0]?.['turn'], items[0]?.['step'], items[0]?.['template_id']], [2, 3, templateId])
       assert.deepEqual([items[4]?.['template_id'], items[4]?.['template_version']], ['event:repeated-failure', '1'])
       assert.equal(items[1]?.['turn'], null)
@@ -789,37 +791,53 @@ test('interventions: schedule, event, manual (insert, send, interject) and plugi
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
 
-test('library: a versioned pack replaces only text and version, keeps switches and intervals, and is a dry run unless applied', async () => {
+test('library: a versioned pack is stored beside the active text and never switches it; the schedule keeps injecting the old text', async () => {
   await withHost({}, { when: 'before' }, async (handle) => {
     const handler = handle.handler()
     const LIB = '/plugins/dsh-prompt-templates/library'
-    // The host already has 行动审视, switched on every 30 rounds, under its own id.
-    const mine = await request(handler, 'POST', TEMPLATES, { name: '行动审视', content: 'old words', inject_enabled: true, inject_every: 30, mode: 'inject' })
+    // The host already has 行动审视, switched on every 2 rounds, with its own words.
+    const mine = await request(handler, 'POST', TEMPLATES, { name: '行动审视', content: 'old words', inject_enabled: true, inject_every: 2, mode: 'inject' })
+    const id = String(mine.body.template.id)
     const { readFileSync } = await import('node:fs')
+    const { contentDigest } = await import('../src/interventions.ts')
     const pack = JSON.parse(readFileSync(new URL('../packs/atelier-5.16.1.json', import.meta.url), 'utf8'))
     assert.equal(pack.templates.length, 7)
     const dry = await request(handler, 'POST', `${LIB}/import`, { pack })
     assert.equal(dry.status, 200)
     assert.equal(dry.body.plan.applied, false)
-    assert.deepEqual(dry.body.plan.updates.map((u: { name: string }) => u.name), ['行动审视'])
-    assert.equal(dry.body.plan.inserts.length, 6)
-    assert.equal((await request(handler, 'GET', `${TEMPLATES}/${String(mine.body.template.id)}`)).body.template.content, 'old words')
+    assert.equal(dry.body.plan.stored.length, 7)
+    const review = dry.body.plan.stored.find((r: { name: string }) => r.name === '行动审视')
+    assert.deepEqual([review.template_id, review.active_version, review.new_card], [id, null, false])
+    assert.equal((await request(handler, 'GET', LIB)).body.items.length, 1, 'a dry run writes nothing')
     const applied = await request(handler, 'POST', `${LIB}/import`, { pack, apply: true })
     assert.equal(applied.body.plan.applied, true)
+    // The active card is untouched: same text, same switch and interval, no active version.
+    const card = (await request(handler, 'GET', `${TEMPLATES}/${id}`)).body.template
+    assert.deepEqual([card.content, card.version, card.inject_enabled, card.inject_every, card.mode], ['old words', null, true, 2, 'inject'])
     const library = (await request(handler, 'GET', LIB)).body
     assert.equal(library.schema, 9)
-    const review = library.items.find((c: { name: string }) => c.name === '行动审视')
-    assert.deepEqual([review.id, review.version, review.inject_enabled, review.inject_every, review.mode], [mine.body.template.id, 'atelier-5.16.1', true, 30, 'inject'])
-    assert.equal(review.content, undefined, 'the library face carries a digest, not the text')
-    assert.match(review.content_sha256, /^[0-9a-f]{64}$/)
-    const added = library.items.filter((c: { version: string | null }) => c.version === 'atelier-5.16.1')
-    assert.equal(added.length, 7)
-    assert.ok(added.filter((c: { id: string }) => c.id !== mine.body.template.id).every((c: { inject_enabled: boolean }) => !c.inject_enabled), 'new cards arrive switched off')
+    const active = library.items.find((c: { id: string }) => c.id === id)
+    assert.equal(active.active_version, null)
+    assert.equal(active.content_sha256, contentDigest('old words'))
+    assert.deepEqual(active.stored_versions.map((v: { version: string }) => v.version), ['atelier-5.16.1'])
+    assert.equal(active.content, undefined, 'the library face carries digests, not text')
+    const storedOnly = library.items.filter((c: { stored_only: boolean }) => c.stored_only)
+    assert.equal(storedOnly.length, 6, 'cards this host lacks are stored, not created')
+    assert.ok(storedOnly.every((c: { active_version: null; content_sha256: null; inject_enabled: boolean }) => c.active_version === null && c.content_sha256 === null && !c.inject_enabled))
+    assert.equal((await request(handler, 'GET', TEMPLATES)).body.items.length, 1, 'no new template the panel or the schedule could send')
+    // The schedule still injects the old text.
+    const injected = await preStep(handle.ctx, { sessionId: 'sess-lib', turn: 2 })
+    assert.ok(textOf(injected.messages?.[1]).includes('old words'))
+    const log = (await request(handler, 'GET', '/plugins/dsh-prompt-templates/interventions?session_id=sess-lib')).body.items
+    assert.deepEqual(log.map((r: { content_sha256: string; template_version: string | null }) => [r.content_sha256, r.template_version]), [[contentDigest('old words'), null]])
+    // Importing again stores nothing new.
     const again = await request(handler, 'POST', `${LIB}/import`, { pack, apply: true })
-    assert.equal(again.body.plan.unchanged.length, 7)
-    // A person's later edit of the text clears the version.
-    const edited = await request(handler, 'PATCH', `${TEMPLATES}/${String(mine.body.template.id)}`, { content: 'my own words' })
-    assert.equal(edited.body.template.version, null)
+    assert.deepEqual([again.body.plan.stored.length, again.body.plan.unchanged.length], [0, 7])
+    // A person's edit of the active text clears its version pointer.
+    const edited = await request(handler, 'PATCH', `${TEMPLATES}/${id}`, { content: 'my own words', version: 'mine-1' })
+    assert.equal(edited.body.template.version, 'mine-1')
+    const editedAgain = await request(handler, 'PATCH', `${TEMPLATES}/${id}`, { content: 'more words' })
+    assert.equal(editedAgain.body.template.version, null)
     assert.equal((await request(handler, 'POST', `${LIB}/import`, { pack: { format: 'other' } })).status, 400)
   })
 })

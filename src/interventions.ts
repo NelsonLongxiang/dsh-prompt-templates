@@ -25,6 +25,7 @@ export const INTERVENTIONS_SQL = `CREATE TABLE IF NOT EXISTS interventions (
   session_id TEXT NOT NULL,
   source TEXT NOT NULL CHECK (source IN ('schedule', 'event', 'manual', 'plugin')),
   method TEXT,
+  caller TEXT,
   template_id TEXT,
   template_name TEXT NOT NULL,
   template_version TEXT,
@@ -41,8 +42,13 @@ export interface InterventionView {
   readonly seq: number
   readonly session_id: string
   readonly source: InterventionSource
-  /** `insert` / `send` / `interject` for a manual one; the asking plugin's id for a plugin one; otherwise null. */
+  /** `insert` / `send` / `interject` for a manual one; otherwise null. */
   readonly method: string | null
+  /**
+   * Who asked, for a `plugin` one: the calling plugin's package name (phase 2's card service takes only
+   * PLUGIN_CALLERS). Null for schedule, event and manual.
+   */
+  readonly caller: string | null
   /** The template's id; for an event reminder `event:<rule_id>`. Null when the template is gone. */
   readonly template_id: string | null
   readonly template_name: string
@@ -60,6 +66,12 @@ export interface InterventionView {
 /** What a caller records; `seq` and `at` are the log's. */
 export type InterventionInput = Omit<InterventionView, 'seq' | 'at'> & { readonly at?: string }
 
+/**
+ * The only callers phase 2's card service will take (workbench-market #883: the a2a plugin alone; a caller it cannot
+ * identify is refused). Reading the library and the log stays open to other plugins, read-only.
+ */
+export const PLUGIN_CALLERS: readonly string[] = ['@nelsonlongxiang/dsh-open-a2a-net']
+
 /** SHA-256 hex of a text. */
 export const contentDigest = (text: string): string => createHash('sha256').update(text, 'utf8').digest('hex')
 
@@ -75,11 +87,13 @@ export class InterventionLog {
   record(input: InterventionInput): InterventionView {
     if (!INTERVENTION_SOURCES.includes(input.source)) throw new Error(`unknown intervention source ${String(input.source)}`)
     if (input.source === 'manual' && !MANUAL_METHODS.includes(input.method as ManualMethod)) throw new Error('a manual intervention needs method insert, send or interject')
+    if (input.source === 'plugin' && !PLUGIN_CALLERS.includes(input.caller ?? '')) throw new Error('a plugin intervention needs a caller this plugin recognizes')
+    if (input.source !== 'plugin' && input.caller !== null) throw new Error('only a plugin intervention has a caller')
     const at = input.at ?? new Date().toISOString()
     const result = this.#db.prepare(`INSERT INTO interventions
-      (session_id, source, method, template_id, template_name, template_version, content_sha256, turn, step, at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(input.session_id, input.source, input.method, input.template_id, input.template_name, input.template_version, input.content_sha256, input.turn, input.step, at)
+      (session_id, source, method, caller, template_id, template_name, template_version, content_sha256, turn, step, at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(input.session_id, input.source, input.method, input.caller, input.template_id, input.template_name, input.template_version, input.content_sha256, input.turn, input.step, at)
     return { ...input, seq: Number(result.lastInsertRowid), at }
   }
 

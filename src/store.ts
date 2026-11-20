@@ -27,6 +27,17 @@ import { INTERVENTIONS_SQL, InterventionLog, contentDigest } from './interventio
 
 /** v9: the version label of a template's text. */
 const TEMPLATE_VERSION_SQL = 'ALTER TABLE templates ADD COLUMN version TEXT'
+/** v9: versions stored beside a card's active text (library packs); the active pointer is `templates.version`. */
+const TEMPLATE_VERSIONS_SQL = `CREATE TABLE IF NOT EXISTS template_versions (
+  template_id TEXT NOT NULL,
+  version TEXT NOT NULL,
+  name TEXT NOT NULL,
+  content TEXT NOT NULL,
+  content_sha256 TEXT NOT NULL,
+  source TEXT,
+  stored_at TEXT NOT NULL,
+  PRIMARY KEY (template_id, version)
+)`
 import type { CategoryCreateRequest, CategoryView, PromptScope, TemplateCreateRequest, TemplateInjectMode, TemplateUpdateRequest, TemplateView } from './types.ts'
 
 /**
@@ -135,6 +146,7 @@ export class TemplateStore {
         this.db.exec(EVOLUTION_SCHEMA_SQL)
         this.db.exec(EVENT_REPEAT_AFTER_SQL)
         this.db.exec(TEMPLATE_VERSION_SQL)
+        this.db.exec(TEMPLATE_VERSIONS_SQL)
         this.db.exec(INTERVENTIONS_SQL)
         seedDefaultPolicies(this.db)
         this.db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`)
@@ -159,6 +171,7 @@ export class TemplateStore {
         if (onDisk <= 7 && !(this.db.prepare('PRAGMA table_info(event_episodes)').all() as Array<{ name: string }>).some(col => col.name === 'repeated_after_reminder')) this.db.exec(EVENT_REPEAT_AFTER_SQL)
         if (onDisk <= 8) {
           if (!(this.db.prepare('PRAGMA table_info(templates)').all() as Array<{ name: string }>).some(col => col.name === 'version')) this.db.exec(TEMPLATE_VERSION_SQL)
+          this.db.exec(TEMPLATE_VERSIONS_SQL)
           this.db.exec(INTERVENTIONS_SQL)
         }
         this.db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`)
@@ -370,35 +383,48 @@ export class TemplateStore {
   /** The card library, read-only (observer phase 1): what each card is and whether it is on, without its text. */
   library(): LibraryCard[] {
     const rows = this.db.prepare('SELECT id, name, version, scope, session_id, inject_enabled, inject_every, mode, content FROM templates ORDER BY scope, position, created_at')
-      .all() as unknown as Array<Omit<LibraryCard, 'inject_enabled' | 'content_sha256'> & { inject_enabled: number; content: string }>
-    return rows.map(({ content, ...row }) => ({ ...row, version: row.version ?? null, inject_enabled: row.inject_enabled === 1, content_sha256: contentDigest(content) }))
+      .all() as unknown as Array<{ id: string; name: string; version: string | null; scope: PromptScope; session_id: string | null; inject_enabled: number; inject_every: number | null; mode: TemplateInjectMode; content: string }>
+    const versions = this.db.prepare('SELECT template_id, version, name, content_sha256, source, stored_at FROM template_versions ORDER BY stored_at, version')
+      .all() as unknown as Array<{ template_id: string; version: string; name: string; content_sha256: string; source: string | null; stored_at: string }>
+    const of = (id: string): StoredVersion[] => versions.filter(v => v.template_id === id).map(({ template_id: _t, name: _n, ...v }) => v)
+    const cards: LibraryCard[] = rows.map(({ content, ...row }) => ({ ...row, active_version: row.version ?? null, inject_enabled: row.inject_enabled === 1, content_sha256: contentDigest(content), stored_versions: of(row.id), stored_only: false }))
+    // A pack card the host does not have: listed with its stored versions, with no active text (nothing can send it).
+    const known = new Set(rows.map(row => row.id))
+    for (const id of [...new Set(versions.map(v => v.template_id))].filter(id => !known.has(id))) {
+      const first = versions.find(v => v.template_id === id)!
+      cards.push({ id, name: first.name, active_version: null, scope: 'global', session_id: null, inject_enabled: false, inject_every: null, mode: 'visible', content_sha256: null, stored_versions: of(id), stored_only: true })
+    }
+    return cards
   }
 
   /**
-   * Import a versioned library pack (e.g. agent-atelier's seven cards). It replaces only a card's text and version: the
-   * card's switch, interval, mode, name, category and position on this host stay as they are. A card is matched by id,
-   * then by a global card of the same name; a card the host does not have yet is added switched off. Without `apply`
-   * nothing is written and the plan is returned.
+   * Import a versioned library pack (e.g. agent-atelier's seven cards) as a NEW stored version of each card, beside the
+   * text the host uses now (workbench-market #883, observer phase 1: no behavior changes). The card's active version —
+   * `templates.content` and its `version` pointer — is never touched, so whatever the schedule injects keeps injecting
+   * the same text; switching a card to a stored version is phase 3's, on an owner decision card. A card is matched by id,
+   * then by a global card of the same name; a card the host does not have is stored as a version only, with no template
+   * row, so it shows in the library but nothing can send it. Without `apply` nothing is written.
    */
   importLibraryPack(pack: unknown, apply: boolean): LibraryImportPlan {
     const cards = parseLibraryPack(pack)
-    const plan: LibraryImportPlan = { applied: false, version: cards.version, updates: [], inserts: [], unchanged: [] }
-    const byId = this.db.prepare('SELECT id, name, content, version FROM templates WHERE id = ?')
-    const byName = this.db.prepare("SELECT id, name, content, version FROM templates WHERE scope = 'global' AND name = ? ORDER BY created_at LIMIT 1")
+    const plan: LibraryImportPlan = { applied: false, version: cards.version, stored: [], unchanged: [] }
+    const byId = this.db.prepare('SELECT id, name, version FROM templates WHERE id = ?')
+    const byName = this.db.prepare("SELECT id, name, version FROM templates WHERE scope = 'global' AND name = ? ORDER BY created_at LIMIT 1")
+    const existing = this.db.prepare('SELECT content_sha256 FROM template_versions WHERE template_id = ? AND version = ?')
+    const insert = this.db.prepare(`INSERT INTO template_versions (template_id, version, name, content, content_sha256, source, stored_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(template_id, version) DO UPDATE SET name = excluded.name, content = excluded.content,
+      content_sha256 = excluded.content_sha256, source = excluded.source, stored_at = excluded.stored_at`)
     const work: Array<() => void> = []
-    const at = new Date().toISOString().replace('T', ' ').slice(0, 19)
+    const at = new Date().toISOString()
     for (const card of cards.templates) {
-      const found = (byId.get(card.id) ?? byName.get(card.name)) as { id: string; name: string; content: string; version: string | null } | undefined
-      if (found === undefined) {
-        plan.inserts.push({ id: card.id, name: card.name, version: card.version })
-        work.push(() => this.db.prepare(`INSERT INTO templates (id, name, content, scope, session_id, description, position, category, inject_enabled, inject_every, mode, version, created_at, updated_at)
-          VALUES (?, ?, ?, 'global', NULL, ?, ?, NULL, 0, ?, ?, ?, ?, ?)`).run(card.id, card.name, card.content, card.description, card.position, card.inject_every, card.mode, card.version, at, at))
-      } else if (found.content === card.content && found.version === card.version) {
-        plan.unchanged.push({ id: found.id, name: found.name, version: card.version })
-      } else {
-        plan.updates.push({ id: found.id, name: found.name, from_version: found.version, version: card.version })
-        work.push(() => this.db.prepare('UPDATE templates SET content = ?, version = ?, updated_at = ? WHERE id = ?').run(card.content, card.version, at, found.id))
-      }
+      const found = (byId.get(card.id) ?? byName.get(card.name)) as { id: string; name: string; version: string | null } | undefined
+      const templateId = found?.id ?? card.id
+      const digest = contentDigest(card.content)
+      const stored = existing.get(templateId, card.version) as { content_sha256: string } | undefined
+      const row = { template_id: templateId, name: found?.name ?? card.name, version: card.version, active_version: found === undefined ? null : found.version ?? null, new_card: found === undefined }
+      if (stored?.content_sha256 === digest) { plan.unchanged.push(row); continue }
+      plan.stored.push(row)
+      work.push(() => insert.run(templateId, card.version, card.name, card.content, digest, cards.source, at))
     }
     if (!apply) return plan
     this.db.exec('BEGIN IMMEDIATE')
@@ -523,28 +549,36 @@ export class TemplateStore {
 export interface LibraryCard {
   readonly id: string
   readonly name: string
-  readonly version: string | null
+  /** The version the host uses now (the active pointer); null for a person's own text or a stored-only card. */
+  readonly active_version: string | null
   readonly scope: PromptScope
   readonly session_id: string | null
   readonly inject_enabled: boolean
   readonly inject_every: number | null
   readonly mode: TemplateInjectMode
-  readonly content_sha256: string
+  /** Digest of the active text; null for a stored-only card. */
+  readonly content_sha256: string | null
+  /** Versions stored beside the active text (library packs); switching to one is phase 3's. */
+  readonly stored_versions: readonly StoredVersion[]
+  /** A pack card this host has no template for: stored, never sent. */
+  readonly stored_only: boolean
 }
 
-/** What a library pack import changes (or would change). */
+/** One stored version of a card. */
+export interface StoredVersion { readonly version: string; readonly content_sha256: string; readonly source: string | null; readonly stored_at: string }
+
+/** What a library pack import stores (or would store); it never changes an active version. */
 export interface LibraryImportPlan {
   readonly applied: boolean
   readonly version: string
-  readonly updates: Array<{ id: string; name: string; from_version: string | null; version: string }>
-  readonly inserts: Array<{ id: string; name: string; version: string }>
-  readonly unchanged: Array<{ id: string; name: string; version: string }>
+  readonly stored: Array<{ template_id: string; name: string; version: string; active_version: string | null; new_card: boolean }>
+  readonly unchanged: Array<{ template_id: string; name: string; version: string; active_version: string | null; new_card: boolean }>
 }
 
 /** A library pack: `{ format: 'dsh-prompt-templates-library', version, templates: [{ id, name, content, … }] }`. */
 interface LibraryPackCard { id: string; name: string; content: string; description: string | null; position: number; inject_every: number | null; mode: TemplateInjectMode; version: string }
 
-function parseLibraryPack(pack: unknown): { version: string; templates: LibraryPackCard[] } {
+function parseLibraryPack(pack: unknown): { version: string; source: string | null; templates: LibraryPackCard[] } {
   const p = pack as { format?: unknown; version?: unknown; templates?: unknown } | null
   if (p === null || typeof p !== 'object' || p.format !== 'dsh-prompt-templates-library') throw new TemplateRuleError("a library pack has format 'dsh-prompt-templates-library'")
   if (typeof p.version !== 'string' || p.version.length < 1 || p.version.length > 64) throw new TemplateRuleError('a library pack names its version (1..64 characters)')
@@ -563,7 +597,9 @@ function parseLibraryPack(pack: unknown): { version: string; templates: LibraryP
       version: typeof t['version'] === 'string' && t['version'] !== '' ? t['version'] : version,
     }
   })
-  return { version, templates }
+  const src = (p as { source?: { package?: unknown; version?: unknown; commit?: unknown } }).source
+  const source = src !== undefined && typeof src.package === 'string' ? `${src.package}@${String(src.version ?? '')}${typeof src.commit === 'string' ? `#${src.commit.slice(0, 12)}` : ''}` : null
+  return { version, source, templates }
 }
 
 /** Map one database row to the wire view (field names are already snake_case). */

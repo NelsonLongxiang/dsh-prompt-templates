@@ -236,7 +236,7 @@ async function handle(
         const template = client().get(templateId)
         if (template === undefined) return json(res, 404, notFound(templateId))
         // `content` is the expanded text the panel sent; its digest is stored, not the text. Without it, the template's own.
-        const intervention = client().interventions.record({ session_id: sessionId, source: 'manual', method: how as ManualMethod, template_id: template.id, template_name: template.name,
+        const intervention = client().interventions.record({ session_id: sessionId, source: 'manual', method: how as ManualMethod, caller: null, template_id: template.id, template_name: template.name,
           template_version: template.version ?? null, content_sha256: contentDigest(typeof sent === 'string' ? sent : template.content), turn: null, step: null })
         return json(res, 200, { intervention })
       }

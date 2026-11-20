@@ -311,7 +311,7 @@ export function registerAutoInject(ctx: Context, config: AutoInjectConfig, store
       try {
         const at = new Date().toISOString()
         for (const template of expanded) {
-          templateStore.interventions.record({ session_id: sessionId, source: 'schedule', method: null, template_id: template.id, template_name: template.name,
+          templateStore.interventions.record({ session_id: sessionId, source: 'schedule', method: null, caller: null, template_id: template.id, template_name: template.name,
             template_version: scheduled.find(row => row.id === template.id)?.version ?? null, content_sha256: contentDigest(template.content), turn, step: typeof step === 'number' ? step : null, at })
         }
       } catch (error) {

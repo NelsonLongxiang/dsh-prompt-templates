@@ -12,13 +12,14 @@
 
 每张卡也可以带自己的 `version`；不带的用包的 `version`。
 
-## 导入只换正文和版本
+## 导入只存新版本，不切换（第 1 期，workbench-market #883）
 
-- 先按 `id` 找卡；找不到时，再找同名的全局卡。
-- 找到的卡只替换 `content` 和 `version`。这台宿主上原有的开关、间隔、模式、名称、分类和排序都不动。
-- 找不到的卡新建成全局卡，开关关闭，间隔和模式取包里的值。开不开由人决定。
-- 正文和版本都没变的卡不写，记为 `unchanged`。
-- 人后来改了正文（没有同时指定版本）的卡，版本会被清空，表示它已经不是包里的那个版本。
+- 每张卡在宿主上有一份**生效正文**（`templates.content`），以及指向它版本的**生效版本指针**（`templates.version`）。节律注入和面板手动发用的都是生效正文。
+- 导入把包里的每张卡存成卡库里的**一个新版本**（`template_versions` 表），和旧版并存。**导入从不改生效正文和生效版本指针**，`apply: true` 也一样，所以节律注入的照旧是旧版正文。
+- 卡按 `id` 匹配；找不到时，再找同名的全局卡。这台宿主没有的卡，只存版本，不建模板：它出现在卡库里（`stored_only: true`），但面板和节律都发不出去。
+- 同一版本、正文没变的不重写，记为 `unchanged`。
+- 把某张卡切到已存的新版本，是第 3 期的事，要走决策卡，由属主同意；第 1 期没有切换入口。
+- 人改了生效正文却没同时指定 `version`，生效版本指针会被清空，表示它已经不是任何包里的版本。
 
 ## 导入步骤
 
@@ -29,14 +30,14 @@
    jq -n --slurpfile p packs/atelier-5.16.1.json '{pack: $p[0]}' | curl -s -X POST http://127.0.0.1:<端口>/plugins/dsh-prompt-templates/library/import -H 'content-type: application/json' -d @-
    ```
 
-   看返回的 `plan`：`updates`（每张写明原版本和新版本）、`inserts`、`unchanged`。
+   看返回的 `plan`：`stored`（这次会存的新版本，每条带 `active_version` 当前生效版本和 `new_card`）、`unchanged`。
 3. 确认无误后正式导入：同一条命令，把 `{pack: $p[0]}` 改成 `{pack: $p[0], apply: true}`。返回 `plan.applied: true`。
-4. 用 `GET /plugins/dsh-prompt-templates/library` 读回：每张卡的 `version` 是新版本，`inject_enabled` 和 `inject_every` 与导入前一致。
+4. 用 `GET /plugins/dsh-prompt-templates/library` 读回：每张卡的 `stored_versions` 里有 `atelier-5.16.1`，而 `active_version`、`content_sha256`、`inject_enabled`、`inject_every` 都和导入前一样。
 
 ## 读取面（只读）
 
-- `GET /plugins/dsh-prompt-templates/library`：卡库，返回名称、版本、范围、开关、间隔、模式和正文摘要（`content_sha256`），不含正文。
+- `GET /plugins/dsh-prompt-templates/library`：卡库，返回名称、生效版本、范围、开关、间隔、模式、生效正文摘要（`content_sha256`）和已存的版本列表，不含正文。
 - `GET /plugins/dsh-prompt-templates/interventions?session_id=&since=&source=&limit=`：介入记录，按时间从旧到新。
-  - `source` 取 `schedule`（按轮次）、`event`（按事件）、`manual`（人在面板上手动发，`method` 分 `insert`、`send`、`interject`）、`plugin`（别的插件发起，留给第 2 期）。
+  - `source` 取 `schedule`（按轮次）、`event`（按事件）、`manual`（人在面板上手动发，`method` 分 `insert`、`send`、`interject`）、`plugin`（别的插件发起，留给第 2 期；第 2 期的投卡服务只接受 a2a 插件，记录里的 `caller` 字段写调用方，认不出的调用方被拒）。
   - 每条只记模板的标识、版本、所发文字的 sha256、会话、轮、步和时间，不记会话里的其他内容。
   - 手动发的记录没有轮和步，因为面板看不到 agent 当时走到哪一步。

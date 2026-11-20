@@ -115,6 +115,7 @@ test('v7 databases migrate to the current schema: existing episodes gain 提醒�
       ALTER TABLE event_episodes DROP COLUMN repeated_after_reminder;
       ALTER TABLE templates DROP COLUMN version;
       DROP TABLE interventions;
+      DROP TABLE template_versions;
       PRAGMA user_version=7;`)
     old.close()
     const store = new TemplateStore(path)
@@ -122,7 +123,7 @@ test('v7 databases migrate to the current schema: existing episodes gain 提醒�
       assert.equal(store.events.episode('ep_old')?.repeated_after_reminder, 0)
       assert.equal(store.events.episode('ep_old')?.notify_count, 1)
       assert.deepEqual(store.interventions.list(), [])
-      assert.ok(store.library().every(card => card.version === null))
+      assert.ok(store.library().every(card => card.active_version === null && card.stored_versions.length === 0))
     } finally { store.close() }
     const check = new DatabaseSync(path)
     assert.equal((check.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, 9)
