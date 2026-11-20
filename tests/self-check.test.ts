@@ -36,7 +36,7 @@ async function harness(o: { enabled?: boolean; goal?: string; ticket?: boolean }
   const a2aTurn = () => { events.length = 0; events.push({ type: 'turn', data: { source: { kind: 'x' } } } as never, { type: 'user/message', data: { source: { kind: 'a2a' } } }) }
   const preStep = async (turn: number) => await ctx.waterfall('agent/pre-step' as never, { agent, messages: [{ role: 'user' }], turn, step: 1, signal: new AbortController().signal } as never, (async () => ({ kind: 'enter', messages: [{ id: 'downstream' }] })) as never) as unknown as { messages: Steered[] }
   const dispose = async () => { await fiber.dispose(); rmSync(dir, { recursive: true, force: true }) }
-  return { goal, steered, tools, stop, act, call, read, humanTurn, a2aTurn, preStep, dispose, dbPath }
+  return { ctx, goal, steered, tools, stop, act, call, read, humanTurn, a2aTurn, preStep, dispose, dbPath }
 }
 
 test('the fixed part fits its budget', () => {
@@ -185,4 +185,14 @@ test('an open a2a ticket counts as work in hand; without a2a\'s answer, the goal
     noA2a.act(); await noA2a.stop(1)
     assert.equal(noA2a.read().find(r => r.kind === 'injected')?.evidence, 'a2a-ticket-source-missing')
   } finally { await noA2a.dispose() }
+})
+
+test('the service tells readers whether the self-check is on', async () => {
+  for (const enabled of [false, true]) {
+    const h = await harness({ enabled })
+    try {
+      assert.equal(h.ctx.promptTemplates.selfCheckEnabled(), enabled)
+      assert.deepEqual(h.ctx.promptTemplates.selfChecks('sess-1'), [])
+    } finally { await h.dispose() }
+  }
 })

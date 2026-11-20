@@ -150,7 +150,7 @@ export function apply(ctx: Context, config: Config): void {
   const eventInjectConfig = { ...DEFAULT_EVENT_INJECT_CONFIG, ...config.eventInject }
   // Observer phase 2 (PT-3): the service other plugins read (library, a session's templates, the log) and the cast,
   // which only a recognized caller may use and only while cast.enabled is on.
-  registerCast(ctx, client, () => config.cast?.enabled === true)
+  registerCast(ctx, client, () => config.cast?.enabled === true, () => config.selfCheck?.enabled === true)
   // Observer phase 2 (PT-4): the wrap-up self-check, off unless selfCheck.enabled.
   registerSelfCheck(ctx, client, () => config.selfCheck?.enabled === true)
   registerEventInject(ctx, eventInjectConfig, () => client().events, () => client().interventions)

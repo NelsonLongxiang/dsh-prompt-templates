@@ -58,6 +58,8 @@ export interface PromptTemplatesService {
   castEnabled(): boolean
   /** One session's wrap-up self-check log (read-only, PT-4). */
   selfChecks(sessionId: string): SelfCheckRow[]
+  /** Whether the wrap-up self-check is on in this deployment (a reader must not take an empty log for a missing check when it is off). */
+  selfCheckEnabled(): boolean
   cast(input: { sessionId: string; templateId: string; reason: string }): CastResult
 }
 
@@ -94,7 +96,7 @@ export function renderCastMessage(turn: number, step: number, cards: readonly Qu
  * with the caller; a fault is reported once and never fails the step. Queues are in memory: a restart drops casts that
  * have not gone in yet (the caller can check the intervention log), and a cast waits at most an hour.
  */
-export function registerCast(ctx: Context, store: () => TemplateStore, enabled: () => boolean): PromptTemplatesService {
+export function registerCast(ctx: Context, store: () => TemplateStore, enabled: () => boolean, selfCheckEnabled: () => boolean = () => false): PromptTemplatesService {
   const queues = new Map<string, Queued[]>()
   // Expired casts never count toward the host-wide cap: they are dropped first (#28 review).
   const total = (now: number): number => {
@@ -118,6 +120,7 @@ export function registerCast(ctx: Context, store: () => TemplateStore, enabled: 
     interventions(filter: { sessionId?: string; since?: string; source?: InterventionSource; limit?: number } = {}): InterventionView[] { return store().interventions.list(filter) }
     castEnabled(): boolean { return enabled() }
     selfChecks(sessionId: string): SelfCheckRow[] { return store().selfChecks.list(String(sessionId)) }
+    selfCheckEnabled(): boolean { return selfCheckEnabled() }
     /**
      * Cast one card into a session: it goes in at the session's next step as a visible message. Only a recognized caller
      * (PLUGIN_CALLERS) may cast, and only while `cast.enabled` is on. The card must be a global template or one of that
