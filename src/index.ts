@@ -43,6 +43,14 @@ import { registerAutoInject } from './inject.ts'
 import type { InjectionStatusView } from './inject.ts'
 import { DEFAULT_INJECT_MAX_EVERY, SCHEMA_VERSION, TemplateRuleError, TemplateStore } from './store.ts'
 import { INTERVENTION_SOURCES, MANUAL_METHODS, contentDigest, type InterventionSource, type ManualMethod } from './interventions.ts'
+import { registerCast, type PromptTemplatesService } from './cast.ts'
+
+declare module '@deepseek-ai/cordis' {
+  interface Context {
+    /** dsh-prompt-templates' service for other plugins (observer phase 2). */
+    promptTemplates: PromptTemplatesService
+  }
+}
 import type { InjectionHistoryEntry, TemplateView } from './types.ts'
 
 export type * from './types.ts'
@@ -68,6 +76,8 @@ export interface Config {
     readonly observationWindow?: number
     readonly ignoreTools?: string[]
   }
+  /** Observer phase 2: other plugins may cast a card into a session (only a recognized caller); off by default. */
+  readonly cast?: { readonly enabled?: boolean }
 }
 
 export const Config: s<Config> = s.object({
@@ -83,6 +93,7 @@ export const Config: s<Config> = s.object({
     observationWindow: s.natural().min(10).default(DEFAULT_EVENT_INJECT_CONFIG.observationWindow),
     ignoreTools: s.array(s.string()).default([]),
   }).default({}),
+  cast: s.object({ enabled: s.boolean().default(false) }).default({}),
 })
 
 /** Structural slice of the web-server service (route registration only). */
@@ -133,6 +144,9 @@ export function apply(ctx: Context, config: Config): void {
   // Event-triggered reminders: a separate observer + pre-step consumer,
   // inert unless the deployment AND a rule policy turn them on.
   const eventInjectConfig = { ...DEFAULT_EVENT_INJECT_CONFIG, ...config.eventInject }
+  // Observer phase 2 (PT-3): the service other plugins read (library, a session's templates, the log) and the cast,
+  // which only a recognized caller may use and only while cast.enabled is on.
+  registerCast(ctx, client, () => config.cast?.enabled === true)
   registerEventInject(ctx, eventInjectConfig, () => client().events, () => client().interventions)
 
   let routesRegistered = false

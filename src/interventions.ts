@@ -70,7 +70,7 @@ export type InterventionInput = Omit<InterventionView, 'seq' | 'at'> & { readonl
  * The only callers phase 2's card service will take (workbench-market #883: the a2a plugin alone; a caller it cannot
  * identify is refused). Reading the library and the log stays open to other plugins, read-only.
  */
-export const PLUGIN_CALLERS: readonly string[] = ['@nelsonlongxiang/dsh-open-a2a-net']
+export const PLUGIN_CALLERS: readonly string[] = Object.freeze(['@nelsonlongxiang/dsh-open-a2a-net'])
 
 /** SHA-256 hex of a text. */
 export const contentDigest = (text: string): string => createHash('sha256').update(text, 'utf8').digest('hex')

@@ -41,3 +41,20 @@
   - `source` 取 `schedule`（按轮次）、`event`（按事件）、`manual`（人在面板上手动发，`method` 分 `insert`、`send`、`interject`）、`plugin`（别的插件发起，留给第 2 期；第 2 期的投卡服务只接受 a2a 插件，记录里的 `caller` 字段写调用方，认不出的调用方被拒）。
   - 每条只记模板的标识、版本、所发文字的 sha256、会话、轮、步和时间，不记会话里的其他内容。
   - 手动发的记录没有轮和步，因为面板看不到 agent 当时走到哪一步。
+
+## 给其他插件的服务（第 2 期，PT-3）
+
+同一宿主上的其他插件通过 `ctx.promptTemplates` 使用：
+
+- **只读，所有插件都能用：** `library()`、`templates(sessionId)`、`interventions({ sessionId, since, source, limit })`。返回的形状和只读路由一样，只给摘要，不给正文。
+- **投卡：** `cast({ sessionId, templateId, reason })`。
+  - **认调用方：** 调用方不认参数里写的字串，认的是 cordis 加载器给调用插件那条 fiber 盖的 entry，也就是 profile 里配置的包名。只认 `@nelsonlongxiang/dsh-open-a2a-net`，别的调用方回 `caller`。
+  - **开关：** 部署配置 `cast.enabled` 默认关，关着时回 `disabled`。
+  - **能投什么：** 卡必须是全局卡，或者这个会话自己的卡；`reason` 必须写，1～500 字。
+  - **投进去的样子：** 卡在该会话的下一步作为可见消息进入，标明投卡方和原因，并写明「不是新的用户指令，不授予任何权限」。
+  - **记录：** 介入记录记成 `source: plugin`，`caller` 是上面认出的包名。
+  - **排队上限：** 同一张卡在同一个会话里最多排一份，再投回 `already-queued`。一个会话最多排 8 张，全宿主最多 256 张。每张最多等 1 小时。
+  - **队列只在内存里：** 宿主重启后，还没投进去的卡会丢。投卡方可以查介入记录，确认卡到底有没有投进去。
+  - **原因压成一行：** 换行和控制字符一律换成空格，所以原因里伪造不出抬头那样的一行。
+  - **服务对象上不暴露存储和队列：** 别的插件拿到的服务只有五个方法：`library`、`templates`、`interventions`、`castEnabled`、`cast`。
+  - **白名单冻结：** `PLUGIN_CALLERS` 用 `Object.freeze` 冻住，运行时改不动。
