@@ -26,6 +26,7 @@
  *   POST   /plugins/dsh-prompt-templates/interventions/manual       → { intervention } (the panel's insert/send/interject)
  *   GET    /plugins/dsh-prompt-templates/lessons?session_id=        → { items, log, schema } (read-only, v11; no lesson text)
  *   PATCH  /plugins/dsh-prompt-templates/lessons/:template_id       { pinned } → { id, pinned } (the owner pins; phase 2)
+ *   GET    /plugins/dsh-prompt-templates/version                    → { name, version, schema, loaded_at, features } (B5b; read-only)
  *   POST   /plugins/dsh-prompt-templates/lessons/:template_id/verdict { verdict, ref } → { id, round, verdict, ref } (B3b; owner only, never closes a round)
  *   PATCH  /plugins/dsh-prompt-templates/lesson-types/:name?session_id= { approved } → { name, status } (the owner decides a proposed type)
  *
@@ -34,6 +35,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { readFileSync } from 'node:fs'
 import s from '@deepseek-ai/schemastery'
 // Type-only: dsh-settings's declaration merging puts `ctx.settings` on
 // Context (alpha.3 removed the runtime settingsNamespace helper, but the
@@ -128,6 +130,31 @@ interface WebRouteHost {
 /** Web-server service key candidates, newest first. */
 const WEB_SERVER_KEYS = ['webServer', 'httpServer'] as const
 
+/**
+ * B5b (owner 2026-11-21): the version of the server code the host actually loaded, read from the package that holds
+ * it (`src/` and `lib/` both sit one level below the package root). `unknown` when the manifest cannot be read.
+ */
+export function loadedPackage(manifestUrl: URL = new URL('../package.json', import.meta.url)): { name: string; version: string } {
+  try {
+    const manifest = JSON.parse(readFileSync(manifestUrl, 'utf8')) as { name?: unknown; version?: unknown }
+    return {
+      name: typeof manifest.name === 'string' ? manifest.name : 'unknown',
+      version: typeof manifest.version === 'string' ? manifest.version : 'unknown',
+    }
+  } catch {
+    return { name: 'unknown', version: 'unknown' }
+  }
+}
+
+/** What GET /version reports: the loaded server version, when it was applied, and which features are on. */
+export interface RuntimeView {
+  readonly name: string
+  readonly version: string
+  readonly schema: number
+  readonly loaded_at: string
+  readonly features: { readonly inject: boolean; readonly lessons: boolean; readonly selfCheck: boolean; readonly cast: boolean; readonly eventInject: boolean }
+}
+
 /** Resolve the default database path under `$DSH_HOME` (default `~/.dsh`). */
 function defaultDbPath(): string {
   const home = process.env['DSH_HOME'] ?? `${process.getBuiltinModule('node:os').homedir()}/.dsh`
@@ -179,6 +206,19 @@ export function apply(ctx: Context, config: Config): void {
   registerLessons(ctx, client, () => lessonsConfig)
   registerEventInject(ctx, eventInjectConfig, () => client().events, () => client().interventions)
 
+  // B5b: host-side evidence of what is loaded — read once when the host applies the plugin.
+  const loaded = { ...loadedPackage(), loaded_at: new Date().toISOString() }
+  const runtime = (): RuntimeView => ({
+    ...loaded, schema: SCHEMA_VERSION,
+    features: {
+      inject: config.injectEnabled ?? true,
+      lessons: lessonsConfig.enabled,
+      selfCheck: config.selfCheck?.enabled !== false,
+      cast: config.cast?.enabled === true,
+      eventInject: client().events.masterEnabled(eventInjectConfig.enabled),
+    },
+  })
+
   let routesRegistered = false
   const registerRoutes = (): void => {
     if (routesRegistered) return
@@ -189,7 +229,7 @@ export function apply(ctx: Context, config: Config): void {
     ctx.effect(() => webServer.register({
       kind: 'prefix',
       path: '/plugins/dsh-prompt-templates',
-      handler: (req, res) => { void handle(req, res, client, inject.status, inject.history, () => client().events.masterEnabled(eventInjectConfig.enabled), () => lessonsConfig) },
+      handler: (req, res) => { void handle(req, res, client, inject.status, inject.history, () => client().events.masterEnabled(eventInjectConfig.enabled), () => lessonsConfig, runtime) },
     }), 'prompt-templates: api routes')
   }
   registerRoutes()
@@ -209,6 +249,7 @@ async function handle(
   injectHistory: (sessionId: string) => readonly InjectionHistoryEntry[],
   eventInjectEnabled: () => boolean,
   lessonsConfig: () => LessonsConfig = () => DEFAULT_LESSONS_CONFIG,
+  runtime?: () => RuntimeView,
 ): Promise<void> {
   const url = new URL(req.url ?? '/', 'http://x')
   const segments = url.pathname.split('/').filter(part => part !== '')
@@ -220,6 +261,12 @@ async function handle(
   const rest = segments.slice(3)
   const method = req.method ?? 'GET'
   try {
+    // B5b: which server version the host loaded, when, and which features are on. Read-only.
+    if (resource === 'version' && rest.length === 0) {
+      if (method !== 'GET') return json(res, 405, errorBody('method-not-allowed', `${method} ${url.pathname}`))
+      if (runtime === undefined) return json(res, 404, errorBody('not-found', 'no runtime view'))
+      return json(res, 200, runtime())
+    }
     // Category tabs: GET/POST /categories, DELETE /categories/:name?scope&session_id.
     if (resource === 'categories') {
       if (rest.length === 0 && method === 'GET') {

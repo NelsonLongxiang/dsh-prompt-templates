@@ -1,7 +1,7 @@
 /** The panel's lesson pin calls (体会 phase 2): request shape and how a full quota settles. Not a browser test. */
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { attachLessonVerdict, listLessonPins, setLessonPinned } from '../src/client/api.ts'
+import { attachLessonVerdict, getServerVersion, listLessonPins, setLessonPinned } from '../src/client/api.ts'
 
 type Call = { url: string; init?: RequestInit }
 function stubFetch(respond: (call: Call) => Response): { calls: Call[]; restore: () => void } {
@@ -60,4 +60,16 @@ test('attachLessonVerdict POSTs the verdict and ref to the lesson verdict route 
     assert.equal(stub.calls[0].init?.method, 'POST')
     assert.deepEqual(JSON.parse(String(stub.calls[0].init?.body)), { verdict: 'pass', ref: 'PR #9' })
   } finally { stub.restore() }
+})
+
+test('getServerVersion reads GET /version and degrades to null on an older host or a broken body (B5b)', async () => {
+  const ok = stubFetch(() => json(200, { name: 'x', version: '0.21.0', schema: 11, loaded_at: '2026-11-21T00:00:00Z', features: {} }))
+  try {
+    assert.deepEqual(await getServerVersion(), { version: '0.21.0', schema: 11, loaded_at: '2026-11-21T00:00:00Z' })
+    assert.equal(ok.calls[0].url, '/plugins/dsh-prompt-templates/version')
+  } finally { ok.restore() }
+  const old = stubFetch(() => json(404, { error: { code: 'not-found' } }))
+  try { assert.equal(await getServerVersion(), null) } finally { old.restore() }
+  const bad = stubFetch(() => json(200, { version: 7 }))
+  try { assert.equal(await getServerVersion(), null) } finally { bad.restore() }
 })

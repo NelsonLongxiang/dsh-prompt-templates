@@ -11,7 +11,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { IconCopyOutlineRegular, IconDownloadOutlineRegular, IconEditOutlineRegular, IconGlobeOutlineRegular, IconPlusOutlineRegular, IconQueueOutlineRegular, IconSendOutlineRegular, IconTrashOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { CategoryView, InjectionHistoryEntry, InjectionStatusView, TemplateInjectMode, TemplateView } from '../types.ts'
 import type { EventEpisodeWire, EventPolicyWire } from './api.ts'
-import { decideLessonType, listCardStats, listLessonPins, listPendingLessonTypes, recordManualIntervention, setLessonPinned, type CardStatWire, type LessonPinWire, type PendingLessonTypeWire, type RecurrenceWire, type VerdictsWire, attachLessonVerdict } from './api.ts'
+import { decideLessonType, listCardStats, listLessonPins, listPendingLessonTypes, recordManualIntervention, setLessonPinned, type CardStatWire, type LessonPinWire, type PendingLessonTypeWire, type RecurrenceWire, type VerdictsWire, attachLessonVerdict, getServerVersion } from './api.ts'
 import type { TemplateLibraryFace } from './slots.ts'
 import { filterTemplateRows, searchableTemplateRows } from './filter.ts'
 import { buildSharePayload, parseSharePayload, planShareImport } from './share.ts'
@@ -614,6 +614,9 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
   const [lessonChurn, setLessonChurn] = useState<ReadonlySet<string>>(new Set())
   const [lessonRecurrence, setLessonRecurrence] = useState<ReadonlyMap<string, RecurrenceWire>>(new Map())
   const [lessonEvidence, setLessonEvidence] = useState<ReadonlyMap<string, string>>(new Map())
+  // B5b: the server's loaded version; a mismatch with this bundle means a stale host or a cached panel.
+  const [serverVersion, setServerVersion] = useState<string | null>(null)
+  useEffect(() => { void getServerVersion().then(v => { setServerVersion(v?.version ?? null) }) }, [])
   const [lessonVerdicts, setLessonVerdicts] = useState<ReadonlyMap<string, VerdictsWire>>(new Map())
   // B3b: the lesson whose latest round the owner is attaching an external verdict to.
   const [verdictFor, setVerdictFor] = useState<TemplateView | null>(null)
@@ -1260,6 +1263,15 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
       <div className={css.footer}>
         <span className={css.meta}>
           <span data-plugin-version>v{PLUGIN_VERSION}</span>
+          {serverVersion !== null && serverVersion !== PLUGIN_VERSION && (
+            <span
+              className={css.injectBadge}
+              title={t('panel.versionMismatch').replace('{server}', serverVersion).replace('{client}', PLUGIN_VERSION)}
+              data-plugin-version-mismatch
+            >
+              {t('panel.versionMismatchShort').replace('{server}', serverVersion)}
+            </span>
+          )}
           <a
             className={css.githubLink}
             href={GITHUB_REPOSITORY_URL}
