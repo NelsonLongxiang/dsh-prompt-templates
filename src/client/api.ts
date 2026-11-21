@@ -184,6 +184,14 @@ export interface LessonPinWire {
   readonly rounds: { readonly opened: number; readonly closed: number; readonly missed: number; readonly kept: number }
   /** The last rewrites of this lesson changed nothing of substance (owner 2026-11-21: shown, never blocked). */
   readonly churn: boolean
+  /** B4a: calls in this lesson's situation before its first recall and after, and how many failed (zeros on older hosts). */
+  readonly recurrence: RecurrenceWire
+}
+
+/** Matching calls and their failures, before a lesson's first recall and after it. */
+export interface RecurrenceWire {
+  readonly before: { readonly hits: number; readonly fails: number }
+  readonly after: { readonly hits: number; readonly fails: number }
 }
 
 /** Load a session's lessons with their pin state (empty when none, unavailable, or the host predates lessons). */
@@ -191,12 +199,16 @@ export async function listLessonPins(sessionId: string): Promise<LessonPinWire[]
   try {
     const response = await fetch(`${BASE}/lessons?session_id=${encodeURIComponent(sessionId)}`, { cache: 'no-store' })
     if (!response.ok) return []
-    const body = await response.json() as { items?: Array<{ id?: unknown; pinned?: unknown; churn?: unknown; rounds?: { opened?: unknown; closed?: unknown; missed?: unknown; kept?: unknown } }> }
+    const body = await response.json() as { items?: Array<{ id?: unknown; pinned?: unknown; churn?: unknown; recurrence?: { before?: { hits?: unknown; fails?: unknown }; after?: { hits?: unknown; fails?: unknown } }; rounds?: { opened?: unknown; closed?: unknown; missed?: unknown; kept?: unknown } }> }
     const n = (v: unknown): number => typeof v === 'number' && Number.isFinite(v) ? v : 0
     return (body.items ?? []).filter(item => typeof item.id === 'string').map(item => ({
       id: item.id as string, pinned: item.pinned === true,
       rounds: { opened: n(item.rounds?.opened), closed: n(item.rounds?.closed), missed: n(item.rounds?.missed), kept: n(item.rounds?.kept) },
       churn: item.churn === true,
+      recurrence: {
+        before: { hits: n(item.recurrence?.before?.hits), fails: n(item.recurrence?.before?.fails) },
+        after: { hits: n(item.recurrence?.after?.hits), fails: n(item.recurrence?.after?.fails) },
+      },
     }))
   } catch {
     return []
@@ -210,6 +222,8 @@ export interface CardStatWire {
   readonly lessons: number
   readonly none: number
   readonly missed: number
+  /** B4a: calls in the situations of this card's lessons after they were recalled, and how many failed. */
+  readonly recurrence: { readonly hits: number; readonly fails: number }
 }
 
 /** A session's workshop-card yields (empty when none, unavailable, or the host predates card rounds). */
@@ -220,7 +234,10 @@ export async function listCardStats(sessionId: string): Promise<CardStatWire[]> 
     const body = await response.json() as { cards?: Array<Record<string, unknown>> }
     const n = (v: unknown): number => typeof v === 'number' && Number.isFinite(v) ? v : 0
     return (body.cards ?? []).filter(card => typeof card['template_id'] === 'string')
-      .map(card => ({ template_id: card['template_id'] as string, injected: n(card['injected']), lessons: n(card['lessons']), none: n(card['none']), missed: n(card['missed']) }))
+      .map(card => {
+        const rec = (card['recurrence'] ?? {}) as Record<string, unknown>
+        return { template_id: card['template_id'] as string, injected: n(card['injected']), lessons: n(card['lessons']), none: n(card['none']), missed: n(card['missed']), recurrence: { hits: n(rec['hits']), fails: n(rec['fails']) } }
+      })
   } catch {
     return []
   }

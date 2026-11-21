@@ -96,11 +96,15 @@ test('real ToolRuntime: card round, typed lesson, RSI recall round, no-entry, ow
     assert.ok(timeline.entries.some(e => e.kind === 'superseded' && e.text === '先查已有入口，再写脚本。'))
     assert.ok(timeline.entries.some(e => e.kind === 'round-closed' && e.outcome === 'none'))
     assert.ok(timeline.entries.some(e => e.kind === 'round-closed' && e.outcome === 'updated'))
+    // B4a: one more call in the recalled lesson's situation, through the real tools/result event, counts as after recall.
+    await bash('TOKEN_X=1 /opt/py/bin/python deploy.py')
     // The route: lessons by type, the approved type, and the card yield (2 injections: 1 lesson, 1 no-entry).
     const read = await request(`${BASE}/lessons?session_id=${S}`)
+    const found = read.body.items.find((i: { key: string }) => i.key === '找')
+    assert.deepEqual(found.recurrence.after, { hits: 1, fails: 0 })
     assert.deepEqual(read.body.items.map((i: { key: string }) => i.key), ['找', '协作'])
     assert.ok(read.body.types.some((t: { name: string; status: string }) => t.name === '协作' && t.status === 'approved'))
-    assert.deepEqual(read.body.cards, [{ template_id: card.id, name: '工坊-行动审视', injected: 2, lessons: 1, none: 1, missed: 0 }])
+    assert.deepEqual(read.body.cards, [{ template_id: card.id, name: '工坊-行动审视', injected: 2, lessons: 1, none: 1, missed: 0, recurrence: { hits: 1, fails: 0 } }])
   } finally {
     await (fiber as unknown as { dispose: () => Promise<void> }).dispose()
     rmSync(dir, { recursive: true, force: true })
