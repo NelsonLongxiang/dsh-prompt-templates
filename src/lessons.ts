@@ -28,7 +28,7 @@ import { extractFeatures } from './event-features.ts'
 import type { ObservationFeatures, ToolOutcomeProbe } from './event-features.ts'
 import { contentDigest } from './interventions.ts'
 import type { TemplateStore } from './store.ts'
-import { registerWhenToolsReady, withOutput } from './tool-registry.ts'
+import { objectParameters, registerWhenToolsReady, withOutput } from './tool-registry.ts'
 
 /** Category tab and name prefix of a session's lessons. */
 export const LESSON_CATEGORY = '体会'
@@ -529,10 +529,10 @@ export function registerLessons(ctx: Context, store: () => TemplateStore, config
     tools.register(withOutput({
       name: 'lesson_write',
       description: 'Write down a lesson for your own session: one or two sentences (at most 160 characters) about an experience that just settled — what hurt or surprised you, and what to do first next time. The plugin links it to the situation it came from and brings it back when you meet that situation again. To rewrite one of your lessons, pass its number as replace. Write judgement, not authority; no secrets, tokens, internal addresses or local paths. No owner confirmation is needed; a lesson the owner edited is theirs. Acts only on the calling session.',
-      parameters: {
-        text: { type: 'string', required: true, description: 'The lesson, 1..160 characters.' },
+      parameters: objectParameters({
+        text: { type: 'string', description: 'The lesson, 1..160 characters.' },
         replace: { type: 'number', description: 'Optional: the number N of your lesson 体会·N to rewrite.' },
-      },
+      }, ['text']),
       execute: async (args: { text?: unknown; replace?: unknown }, exec: unknown) => {
         if (!config().enabled) return { ok: false, code: 'disabled', error: 'lessons are off on this host' }
         const sessionId = (exec as ExecLike).agent?.session.header.id

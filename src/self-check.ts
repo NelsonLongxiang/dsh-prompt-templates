@@ -20,7 +20,7 @@ import type { UserMessage } from '@deepseek-ai/dsh-session'
 import type { DatabaseSync } from 'node:sqlite'
 import { oneLine } from './cast.ts'
 import type { TemplateStore } from './store.ts'
-import { registerWhenToolsReady, withOutput } from './tool-registry.ts'
+import { objectParameters, registerWhenToolsReady, withOutput } from './tool-registry.ts'
 
 /** The fixed part's version label; it moves only with the standard text. */
 export const FIXED_VERSION = 'selfcheck-fixed-1'
@@ -283,7 +283,7 @@ export function registerSelfCheck(ctx: Context, store: () => TemplateStore, enab
     tools.register(withOutput({
       name: 'selfcheck_write',
       description: 'Write your own session\'s self-check template: the domain part (at most 600 characters) the wrap-up self-check carries after the fixed part. Answer four things: what counts as done here, what you usually wait for (who, through what, how long), the checks you never skip before stopping, and the actions you must not just continue with here. Write judgement, not authority; cite skills and ygl entries instead of copying. No owner confirmation is needed; each write keeps the previous version. Acts only on the calling session.',
-      parameters: { text: { type: 'string', required: true, description: 'The domain part, 1..600 characters.' } },
+      parameters: objectParameters({ text: { type: 'string', description: 'The domain part, 1..600 characters.' } }, ['text']),
       execute: async (args: { text?: unknown }, exec: unknown) => {
         if (!enabled()) return { ok: false, code: 'disabled', error: 'self-check is off on this host' }
         const sessionId = sessionOf(exec)
@@ -294,13 +294,13 @@ export function registerSelfCheck(ctx: Context, store: () => TemplateStore, enab
     tools.register(withOutput({
       name: 'selfcheck_conclude',
       description: 'Give the wrap-up self-check\'s conclusion for your own session, once per check: done (with evidence), waiting (registered: with the wake condition and deadline, and the ticket or card it waits on), continue (the next step you take now), or orphan (none of these). Stopping after a check without concluding is logged as an orphan stop.',
-      parameters: {
-        conclusion: { type: 'string', required: true, description: 'done | waiting | continue | orphan' },
+      parameters: objectParameters({
+        conclusion: { type: 'string', enum: ['done', 'waiting', 'continue', 'orphan'], description: 'done | waiting | continue | orphan' },
         evidence: { type: 'string', description: 'For done: the evidence (test run, receipt, checksum).' },
         wake: { type: 'string', description: 'For waiting: what wakes you (an a2a message or a schedule).' },
         deadline: { type: 'string', description: 'For waiting: by when, roughly.' },
         ticket: { type: 'string', description: 'The ticket or goal it concerns.' },
-      },
+      }, ['conclusion']),
       execute: async (args: { conclusion?: unknown; evidence?: unknown; wake?: unknown; deadline?: unknown; ticket?: unknown }, exec: unknown) => {
         if (!enabled()) return { ok: false, code: 'disabled', error: 'self-check is off on this host' }
         const sessionId = sessionOf(exec)

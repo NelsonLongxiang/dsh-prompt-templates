@@ -59,3 +59,32 @@ test('withOutput satisfies the real ToolRuntime for the plugin\'s tool shapes', 
     }
   } finally { await cleanup() }
 })
+
+test('the plugin\'s own tools reach the model with an object parameter schema naming their fields (#50)', async () => {
+  const { ctx, cleanup } = await harness()
+  const { createTestDirectory } = await import('./temp-dir.mjs')
+  const { join } = await import('node:path')
+  const { rmSync } = await import('node:fs')
+  const host = await import('../src/index.ts')
+  const dir = createTestDirectory('pt-tool-schema-')
+  const fiber = await ctx.plugin(host as never, { dbPath: join(dir, 'db.sqlite3') } as never)
+  try {
+    await new Promise(resolve => setImmediate(resolve))
+    const tools = ctx.tools as unknown as { schemas: () => Array<{ name: string, parameters: { type?: string, properties?: Record<string, unknown>, required?: string[] } }> }
+    const byName = new Map(tools.schemas().map(s => [s.name, s.parameters]))
+    const expected: Record<string, string[]> = { lesson_write: ['text'], selfcheck_write: ['text'], selfcheck_conclude: ['conclusion'] }
+    for (const [name, required] of Object.entries(expected)) {
+      const parameters = byName.get(name)
+      assert.ok(parameters !== undefined, `${name} reaches the model`)
+      assert.equal(parameters.type, 'object', `${name} parameters are an object schema, not a property map`)
+      for (const field of required) {
+        assert.ok(parameters.properties !== undefined && field in parameters.properties, `${name} declares ${field} as a property`)
+        assert.ok(parameters.required?.includes(field), `${name} requires ${field}`)
+      }
+    }
+  } finally {
+    await (fiber as unknown as { dispose: () => Promise<void> }).dispose()
+    rmSync(dir, { recursive: true, force: true })
+    await cleanup()
+  }
+})
