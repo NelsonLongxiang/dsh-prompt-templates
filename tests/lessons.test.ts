@@ -401,6 +401,16 @@ async function created(ctx: Context, source: string): Promise<void> {
   await (ctx as unknown as { serial: (...args: unknown[]) => Promise<unknown> }).serial('agent/created', { agent: agentOf(S), source })
 }
 
+test('lesson_write tolerates wire argument-shape drift (observed "lesson" on a real host) without inventing text', async () => {
+  await withHost({ lessons: { enabled: true } }, async (_ctx, _route, tools) => {
+    const neighbour = await tools.get('lesson_write')?.execute({ lesson: '先看第一条报错，再决定要不要重跑。' }, { agent: agentOf(S) })
+    assert.equal(neighbour?.['ok'], true, 'a host dispatching the sole string under "lesson" still writes it')
+    const empty = await tools.get('lesson_write')?.execute({}, { agent: agentOf(S) })
+    assert.equal(empty?.['ok'], false)
+    assert.equal(empty?.['code'], 'length', 'no arguments at all never fabricates a lesson')
+  })
+})
+
 test('host (phase 2): the owner pins over PATCH; startup, resume and compact load the pinned lessons at the next step, clear does not', async () => {
   await withHost({ lessons: { enabled: true, maxPinned: 1 } }, async (ctx, route, tools) => {
     await result(ctx, 'c1', 'make test')

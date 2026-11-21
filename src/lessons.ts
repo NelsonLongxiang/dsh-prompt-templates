@@ -537,8 +537,14 @@ export function registerLessons(ctx: Context, store: () => TemplateStore, config
         if (!config().enabled) return { ok: false, code: 'disabled', error: 'lessons are off on this host' }
         const sessionId = (exec as ExecLike).agent?.session.header.id
         if (sessionId === undefined || sessionId === null) return { ok: false, code: 'session', error: 'no calling session' }
-        return writeLesson(store(), stateOf(String(sessionId)), String(sessionId), String(args.text ?? ''), args.replace, config())
+        // Tolerate argument-shape drift on the wire: hosts may dispatch the sole
+        // required string under a neighbouring name (observed: "lesson"), and a
+        // string body is still a usable lesson. Never fabricate text from the prompt.
+        const text = typeof args.text === 'string' ? args.text
+          : typeof (args as { lesson?: unknown }).lesson === 'string' ? String((args as { lesson?: unknown }).lesson)
+          : ''
+        return writeLesson(store(), stateOf(String(sessionId)), String(sessionId), text, args.replace, config())
       },
     }))
   })
-}
+}
