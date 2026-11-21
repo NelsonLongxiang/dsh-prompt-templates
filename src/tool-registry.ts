@@ -13,6 +13,22 @@ import type { Context } from '@deepseek-ai/cordis'
 
 export interface ToolRegistry { register: (tool: unknown) => unknown }
 
+/**
+ * Every tool must declare `output: { schema, render }` — the real ToolRuntime rejects a definition
+ * without it (TypeError inside the inject fiber, swallowed by the host console; found on a real host,
+ * 2026-11-21, probe tmp/probe-register.mjs). This wrapper adds a permissive object schema and a
+ * JSON card renderer, matching how dsh-open-a2a-net declares its tools.
+ */
+export function withOutput(definition: { name: string, [key: string]: unknown }): { name: string, [key: string]: unknown } {
+  return {
+    ...definition,
+    output: definition.output ?? {
+      schema: { type: 'object', additionalProperties: true },
+      render: (_args: unknown, value: unknown) => [{ type: 'text', text: JSON.stringify(value) }],
+    },
+  }
+}
+
 export function registerWhenToolsReady(ctx: Context, label: string, register: (tools: ToolRegistry) => void): void {
   const provided = (ctx.get as (name: string, strict?: boolean) => unknown)('tools', false)
   if (provided === undefined) console.info(`[dsh-prompt-templates] ${label}: tools service not provided yet; tools register when it is`)
