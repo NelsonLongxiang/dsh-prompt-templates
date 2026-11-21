@@ -23,6 +23,7 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { UserMessage } from '@deepseek-ai/dsh-session'
 import type { TemplateStore } from './store.ts'
 import { expandTemplateVariables } from './variables.ts'
+import { WORKSHOP_CATEGORY } from './lessons.ts'
 import type { InjectionHistoryEntry, InjectionStatusView, TemplateInjectMode, TemplateView } from './types.ts'
 
 /**
@@ -64,6 +65,11 @@ export interface InjectionEventProbe {
 export interface AutoInjectConfig {
   readonly enabled: boolean
   readonly evolutionAssessmentEnabled?: boolean
+  /**
+   * Called when this turn's injection carries cards of the workshop category (owner 2026-11-21): opens the card round
+   * and returns the closing line to append, or null for none (lessons off, or the round was already open).
+   */
+  readonly onWorkshopCards?: (sessionId: string, turn: number, cards: ReadonlyArray<{ id: string; name: string; version: string | null }>) => string | null
 }
 
 /**
@@ -164,7 +170,7 @@ function escapeTemplateName(name: string): string {
  * first-party reminder); template content is embedded verbatim and the
  * durable source records what went out.
  */
-export function renderInjectionMessage(turn: number, templates: readonly InjectCandidate[]): UserMessage {
+export function renderInjectionMessage(turn: number, templates: readonly InjectCandidate[], closing?: string | null): UserMessage {
   return createUserMessage({
     content: [{
       type: 'text',
@@ -177,6 +183,7 @@ export function renderInjectionMessage(turn: number, templates: readonly InjectC
           template.content,
           '</template>',
         ]),
+        ...(closing ? [closing] : []),
         '</system-reminder>',
       ].join('\n'),
     }],
@@ -212,7 +219,7 @@ export interface VisibleScheduleSource {
 /** Second line of a visible injection: the templates are the owner's standing requirements, binding where they apply (owner 2026-11-21). */
 export const VISIBLE_BINDING_LINE = '属主预置的常设要求：适用即须执行，不适用则跳过；不扩大授权，不覆盖属主当下指令。'
 
-export function renderVisibleInjectionMessage(turn: number, templates: readonly InjectCandidate[]): UserMessage {
+export function renderVisibleInjectionMessage(turn: number, templates: readonly InjectCandidate[], closing?: string | null): UserMessage {
   return createUserMessage({
     content: [{
       type: 'text',
@@ -221,6 +228,7 @@ export function renderVisibleInjectionMessage(turn: number, templates: readonly 
         VISIBLE_BINDING_LINE,
         '',
         ...templates.flatMap(template => [template.content, '']),
+        ...(closing ? [closing] : []),
       ].join('\n').trimEnd(),
     }],
     source: {
@@ -308,8 +316,20 @@ export function registerAutoInject(ctx: Context, config: AutoInjectConfig, store
       const injected: UserMessage[] = []
       const silent = expanded.filter(template => template.mode !== 'visible')
       const visible = expanded.filter(template => template.mode === 'visible')
-      if (silent.length > 0) injected.push(renderInjectionMessage(turn, silent))
-      if (visible.length > 0) injected.push(renderVisibleInjectionMessage(turn, visible))
+      // Workshop cards open one card round per injection turn; the closing line rides the last message that carries one.
+      let closing: string | null = null
+      try {
+        const workshop = expanded.flatMap(template => {
+          const row = scheduled.find(r => r.id === template.id)
+          return row?.category === WORKSHOP_CATEGORY ? [{ id: template.id, name: template.name, version: row.version ?? null }] : []
+        })
+        if (workshop.length > 0) closing = config.onWorkshopCards?.(sessionId, turn, workshop) ?? null
+      } catch (error) {
+        console.error('[dsh-prompt-templates] card round skipped for this injection:', error)
+      }
+      const visibleHasCard = visible.some(template => scheduled.find(r => r.id === template.id)?.category === WORKSHOP_CATEGORY)
+      if (silent.length > 0) injected.push(renderInjectionMessage(turn, silent, visibleHasCard ? null : closing))
+      if (visible.length > 0) injected.push(renderVisibleInjectionMessage(turn, visible, visibleHasCard ? closing : null))
       // v9 (observer phase 1): one durable intervention row per template that went out. A fault here never blocks the
       // injection itself.
       try {

@@ -200,6 +200,29 @@ export async function listLessonPins(sessionId: string): Promise<LessonPinWire[]
   }
 }
 
+/** One workshop card's yield in a session: injections, and how their card rounds ended. */
+export interface CardStatWire {
+  readonly template_id: string
+  readonly injected: number
+  readonly lessons: number
+  readonly none: number
+  readonly missed: number
+}
+
+/** A session's workshop-card yields (empty when none, unavailable, or the host predates card rounds). */
+export async function listCardStats(sessionId: string): Promise<CardStatWire[]> {
+  try {
+    const response = await fetch(`${BASE}/lessons?session_id=${encodeURIComponent(sessionId)}`, { cache: 'no-store' })
+    if (!response.ok) return []
+    const body = await response.json() as { cards?: Array<Record<string, unknown>> }
+    const n = (v: unknown): number => typeof v === 'number' && Number.isFinite(v) ? v : 0
+    return (body.cards ?? []).filter(card => typeof card['template_id'] === 'string')
+      .map(card => ({ template_id: card['template_id'] as string, injected: n(card['injected']), lessons: n(card['lessons']), none: n(card['none']), missed: n(card['missed']) }))
+  } catch {
+    return []
+  }
+}
+
 /** A lesson type the session proposed (lesson_type_propose), waiting for the owner. */
 export interface PendingLessonTypeWire {
   readonly name: string

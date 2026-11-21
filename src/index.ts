@@ -48,7 +48,7 @@ import { DEFAULT_INJECT_MAX_EVERY, SCHEMA_VERSION, TemplateRuleError, TemplateSt
 import { INTERVENTION_SOURCES, MANUAL_METHODS, contentDigest, type InterventionSource, type ManualMethod } from './interventions.ts'
 import { registerCast, type PromptTemplatesService } from './cast.ts'
 import { registerSelfCheck } from './self-check.ts'
-import { BUILTIN_LESSON_TYPES, DEFAULT_LESSONS_CONFIG, decideLessonType, lessonsOf, pinLesson, registerLessons, type LessonsConfig } from './lessons.ts'
+import { BUILTIN_LESSON_TYPES, DEFAULT_LESSONS_CONFIG, decideLessonType, lessonsOf, openCardRound, pinLesson, registerLessons, type LessonsConfig } from './lessons.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -159,7 +159,12 @@ export function apply(ctx: Context, config: Config): void {
   // Scheduled auto-injection rides the agent loop's pre-step waterfall and
   // shares the route's store; it needs no web server, so headless profiles
   // inject too. The handle feeds the inject-status route (panel badge).
-  const inject = registerAutoInject(ctx, { enabled: config.injectEnabled ?? true, evolutionAssessmentEnabled: config.evolutionAssessmentEnabled ?? true }, client)
+  const inject = registerAutoInject(ctx, {
+    enabled: config.injectEnabled ?? true,
+    evolutionAssessmentEnabled: config.evolutionAssessmentEnabled ?? true,
+    // Workshop cards open a card round (lesson or stated no-entry) when lessons are on (owner 2026-11-21, option A).
+    onWorkshopCards: (sessionId, turn, cards) => lessonsConfig.enabled ? openCardRound(client(), sessionId, turn, cards) : null,
+  }, client)
   // Event-triggered reminders: a separate observer + pre-step consumer,
   // inert unless the deployment AND a rule policy turn them on.
   const eventInjectConfig = { ...DEFAULT_EVENT_INJECT_CONFIG, ...config.eventInject }
@@ -280,7 +285,7 @@ async function handle(
         })
         const types = [...BUILTIN_LESSON_TYPES.map(t => ({ name: t.name, description: t.description, builtin: true, status: 'approved' })),
           ...store.lessons.types(sessionId).map(t => ({ name: t.name, description: t.description, builtin: false, status: t.status, proposed_at: t.proposed_at, decided_at: t.decided_at }))]
-        return json(res, 200, { schema: SCHEMA_VERSION, items, types, log: store.lessons.log(sessionId, Number(url.searchParams.get('limit') ?? 100)) })
+        return json(res, 200, { schema: SCHEMA_VERSION, items, types, cards: store.lessons.cardStats(sessionId), log: store.lessons.log(sessionId, Number(url.searchParams.get('limit') ?? 100)) })
       }
       // Phase 2: the owner pins a lesson; it is loaded at the session's next start, resume or compaction.
       const lessonId = rest[0]

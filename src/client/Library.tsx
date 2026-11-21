@@ -11,7 +11,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { IconCopyOutlineRegular, IconDownloadOutlineRegular, IconEditOutlineRegular, IconGlobeOutlineRegular, IconPlusOutlineRegular, IconQueueOutlineRegular, IconSendOutlineRegular, IconTrashOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { CategoryView, InjectionHistoryEntry, InjectionStatusView, TemplateInjectMode, TemplateView } from '../types.ts'
 import type { EventEpisodeWire, EventPolicyWire } from './api.ts'
-import { decideLessonType, listLessonPins, listPendingLessonTypes, recordManualIntervention, setLessonPinned, type LessonPinWire, type PendingLessonTypeWire } from './api.ts'
+import { decideLessonType, listCardStats, listLessonPins, listPendingLessonTypes, recordManualIntervention, setLessonPinned, type CardStatWire, type LessonPinWire, type PendingLessonTypeWire } from './api.ts'
 import type { TemplateLibraryFace } from './slots.ts'
 import { filterTemplateRows, searchableTemplateRows } from './filter.ts'
 import { buildSharePayload, parseSharePayload, planShareImport } from './share.ts'
@@ -39,6 +39,8 @@ interface RowProps {
   onMakeGlobal?: (id: string) => void
   /** Present only for the session's own lessons (体会): the owner pins them. */
   pin?: { readonly pinned: boolean; readonly onToggle: () => void; readonly rounds?: { readonly opened: number; readonly closed: number; readonly missed: number } }
+  /** Present for a workshop card injected in this session: its card-round yield. */
+  cardYield?: CardStatWire
   /** Flip the row's auto-inject switch (rows without an interval route to the edit form). */
   onToggleInject: (template: TemplateView) => void
   sortable: boolean
@@ -47,7 +49,7 @@ interface RowProps {
   t: (key: PromptTemplateKey) => string
 }
 
-function TemplateRow({ template, onInsert, onSend, onInterject, onEdit, onDelete, onShare, onMakeGlobal, pin, onToggleInject, sortable, onDragStart, onDropOn, t }: RowProps) {
+function TemplateRow({ template, onInsert, onSend, onInterject, onEdit, onDelete, onShare, onMakeGlobal, pin, cardYield, onToggleInject, sortable, onDragStart, onDropOn, t }: RowProps) {
   const injectTitle = template.inject_enabled && template.inject_every !== null
     ? `${t('panel.inject')} · ${template.inject_every}${template.mode === 'visible' ? ' · ' + t('panel.modeVisible') : ''}`
     : t('panel.inject')
@@ -129,6 +131,14 @@ function TemplateRow({ template, onInsert, onSend, onInterject, onEdit, onDelete
         >
           📌
         </button>
+      )}
+      {cardYield !== undefined && cardYield.injected > 0 && (
+        <span
+          className={css.injectBadge}
+          title={t('panel.cardYield').replace('{injected}', String(cardYield.injected)).replace('{lessons}', String(cardYield.lessons)).replace('{none}', String(cardYield.none)).replace('{missed}', String(cardYield.missed))}
+        >
+          体会 {cardYield.lessons}/{cardYield.injected}
+        </span>
       )}
       {pin?.rounds !== undefined && pin.rounds.opened > 0 && (
         <span
@@ -546,6 +556,13 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
   }, [sessionId])
   useEffect(() => { void loadLessonPins() }, [loadLessonPins, templates])
 
+  // Workshop-card yields in this session (card rounds): shown on the card rows.
+  const [cardYields, setCardYields] = useState<ReadonlyMap<string, CardStatWire>>(new Map())
+  const loadCardYields = useCallback(async () => {
+    setCardYields(new Map(sessionId === null ? [] : (await listCardStats(sessionId)).map(card => [card.template_id, card])))
+  }, [sessionId])
+  useEffect(() => { void loadCardYields() }, [loadCardYields, templates])
+
   // Lesson types the session proposed (lesson_type_propose): only the owner approves them, here.
   const [pendingTypes, setPendingTypes] = useState<readonly PendingLessonTypeWire[]>([])
   const loadPendingTypes = useCallback(async () => {
@@ -796,6 +813,7 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
           onShare={(tpl, trigger) => { void handleShareTemplate(tpl, trigger) }}
           onMakeGlobal={row.scope === 'session' ? (id) => { void handleMakeGlobal(id) } : undefined}
           pin={lessonPins.has(row.id) ? { pinned: lessonPins.get(row.id) === true, onToggle: () => { void handleTogglePin(row.id) }, rounds: lessonRounds.get(row.id) } : undefined}
+          cardYield={cardYields.get(row.id)}
           onToggleInject={(tpl) => { void handleToggleInject(tpl) }}
           sortable={needle === ''}
           onDragStart={(id) => { dragRowRef.current = id }}

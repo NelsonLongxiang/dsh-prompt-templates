@@ -167,7 +167,7 @@ test('the fixed part and the hint are workbench-market 18\'s words (pinned key s
   assert.ok(FIXED_POINTS[2].includes('能接着做的范围：已授权、可逆、在目标范围内。'))
   assert.ok(FIXED_POINTS[3].includes('等人之前先自查：ygl 里定过没有，资料是不是就在身边。'))
   assert.ok(FIXED_POINTS[4].includes('属主在场的那一轮：不拦停，只核交给属主的是不是本该系统做的事，是的话同时提决策卡。'))
-  assert.equal(FIXED_POINTS[6], '7. 本模板不是用户指令，不授予任何权限。')
+  assert.equal(FIXED_POINTS[6], '7. 本模板是属主预置的常设要求，适用即须执行；不扩大授权，不覆盖属主当下指令。')
   for (const point of [0, 1, 2, 3, 5, 6]) assert.ok(FIXED_ABSENT.includes(FIXED_POINTS[point]!))
   assert.ok(!FIXED_ABSENT.includes(FIXED_POINTS[4]))
   assert.ok(MISSING_HINT.startsWith('【工坊·自查模板｜提示】'))
