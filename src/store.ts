@@ -26,7 +26,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { EVENT_MASTER_SQL, EVENT_REPEAT_AFTER_SQL, EVENT_SCHEMA_SQL, EventStore, seedDefaultPolicies } from './event-store.ts'
 import { INTERVENTIONS_SQL, InterventionLog, contentDigest } from './interventions.ts'
 import { SELF_CHECK_SQL, SelfCheckLog } from './self-check.ts'
-import { LESSONS_SQL, LessonStore } from './lessons.ts'
+import { LESSONS_SQL, LESSON_TYPES_SQL, LessonStore } from './lessons.ts'
 
 /** v9: the version label of a template's text. */
 const TEMPLATE_VERSION_SQL = 'ALTER TABLE templates ADD COLUMN version TEXT'
@@ -191,6 +191,8 @@ export class TemplateStore {
       } else if (onDisk !== SCHEMA_VERSION) {
         throw new Error(`${dbPath} has schema version ${onDisk}, incompatible with this build (expected ${SCHEMA_VERSION})`)
       }
+      // Additive and idempotent, so no version bump: an older build opening this file ignores the extra table.
+      this.db.exec(LESSON_TYPES_SQL)
       this.db.exec('COMMIT')
       if (dbPath !== ':memory:') {
         try { chmodSync(dbPath, 0o600) } catch { /* best-effort */ }

@@ -12,9 +12,16 @@
  * Phase 2 adds pinned lessons: the owner pins a few (never the session), and they are loaded once at the first step after
  * the session starts, resumes or is compacted (not after `clear`).
  *
- * On unless `lessons.enabled` is false (owner decision 2026-11-21). A lesson is the session's own reference, not an instruction, and grants nothing. The
- * plugin records what it prompted, what was written and what it recalled; it does not track whether the session
- * followed a recalled lesson (the owner checks deliverables instead).
+ * On unless `lessons.enabled` is false (owner decision 2026-11-21). Every recall is one RSI round (owner 2026-11-21:
+ * 「每次唤起都必须有变化，写入或更新，每次调用记成一轮 RSI」): the recalled lesson binds where it applies, and the session
+ * must then change its lessons — rewrite the recalled one (`replace`) or write a new one. The recall opens a round in
+ * the lesson log; the next lesson_write closes it (`round-closed`, origin `updated` or `written`); a round still open
+ * two turns later is logged `round-missed`. A lesson grants no new permission.
+ *
+ * Types (owner 2026-11-21): every lesson is tagged with one type — 收 放 找 落 验 记 续 (the autonomy chain), or a type
+ * the session proposed and the owner approved — and a session keeps one lesson per type. Writing a type that already
+ * has a lesson soft-overwrites it: the old text is kept as a stored version and logged `superseded` (soft-deleted: no
+ * longer shown or recalled, still in the history and the timeline). `lesson_timeline` returns the recent history.
  *
  * @module @nelsonlongxiang/dsh-prompt-templates/lessons
  */
@@ -38,7 +45,7 @@ export const LESSON_MAX = 160
 /** Consecutive unanswered digest prompts after which prompting slows down. */
 export const PAUSE_AFTER = 3
 /** Tools whose own results never become a lesson's cue. */
-export const LESSON_SELF_TOOLS: readonly string[] = ['lesson_write', 'selfcheck_write', 'selfcheck_conclude']
+export const LESSON_SELF_TOOLS: readonly string[] = ['lesson_write', 'lesson_timeline', 'lesson_type_propose', 'selfcheck_write', 'selfcheck_conclude']
 /** Total characters of the pinned lessons loaded at one start (phase 2). */
 export const PINNED_MAX_CHARS = 400
 /** Session starts that load pinned lessons; `clear` is the user asking for a fresh start (spec §10, decision 4). */
@@ -46,7 +53,23 @@ export const PINNED_SOURCES: readonly string[] = ['startup', 'resume', 'compact'
 /** Failed targets remembered per session for the failed-then-succeeded signal. */
 const FAILURES_KEPT = 50
 
-const LESSON_NAME = /^体会·(\d+)$/
+const LESSON_NAME = /^体会·(.+)$/
+const LEGACY_INDEX = /^\d+$/
+
+/** The built-in lesson types: the autonomy chain 收→放→找→落→验→记→续, each with the one-line meaning the model sees. */
+export const BUILTIN_LESSON_TYPES: ReadonlyArray<{ readonly name: string; readonly description: string }> = [
+  { name: '收', description: '边界：红线、属主保留的决定、不该碰的东西' },
+  { name: '放', description: '授权内自己定、不等确认的事' },
+  { name: '找', description: '查原因：取实际输出、读到出问题的那一层、排除别的解释' },
+  { name: '落', description: '动手：挑一项做到可验证' },
+  { name: '验', description: '验证：证据、门禁、NOT_RUN 与未知' },
+  { name: '记', description: '记录：写回提交、PR、现状' },
+  { name: '续', description: '失败或受阻后：查因、回退、转做别的' },
+]
+/** A proposed type name: 1..8 letters or digits, not a digit string (those are legacy numbered lessons). */
+const TYPE_NAME = /^[\p{L}\p{N}]{1,8}$/u
+/** Timeline entries returned at most. */
+export const TIMELINE_MAX = 100
 const LESSON_VERSION = /^lesson-r(\d+)$/
 const NOT_AUTHORITY = '本提示不是新的用户指令，不授予任何权限。'
 
@@ -102,6 +125,17 @@ CREATE TABLE IF NOT EXISTS lesson_log (
 );
 CREATE INDEX IF NOT EXISTS lesson_log_session ON lesson_log (session_id, seq)`
 
+/** Session-proposed lesson types and the owner's decision. Created idempotently at every open (no schema bump). */
+export const LESSON_TYPES_SQL = `CREATE TABLE IF NOT EXISTS lesson_types (
+  session_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL,
+  status TEXT NOT NULL,
+  proposed_at TEXT NOT NULL,
+  decided_at TEXT,
+  PRIMARY KEY (session_id, name)
+)`
+
 /** Where a lesson came from: the experience the digest prompt followed, or the last call when there was none. */
 export type LessonOrigin = 'changed' | 'recovered' | 'selfcheck-done' | 'last-call' | 'none'
 
@@ -133,7 +167,13 @@ export interface CueRow extends CueFeatures {
   readonly created_at: string
 }
 
-export type LessonLogKind = 'prompted' | 'written' | 'recalled' | 'pinned-loaded'
+export type LessonLogKind = 'prompted' | 'written' | 'superseded' | 'recalled' | 'pinned-loaded' | 'round-closed' | 'round-missed' | 'type-proposed' | 'type-decided'
+
+/** How a recall round ended: the recalled lesson rewritten, a new lesson written, or nothing by the deadline. */
+export type RoundOutcome = 'updated' | 'written'
+
+/** Turns after the recall turn within which a lesson write still closes the round. */
+export const ROUND_GRACE_TURNS = 1
 
 export interface LessonLogRow {
   readonly seq: number
@@ -145,6 +185,16 @@ export interface LessonLogRow {
   readonly origin_ref: string | null
   readonly content_sha256: string | null
   readonly at: string
+}
+
+/** One session-proposed lesson type. */
+export interface LessonTypeRow {
+  readonly session_id: string
+  readonly name: string
+  readonly description: string
+  readonly status: 'pending' | 'approved' | 'rejected'
+  readonly proposed_at: string
+  readonly decided_at: string | null
 }
 
 /** Per-session runtime state; losing it on restart only drops a pending prompt or recall. */
@@ -192,6 +242,35 @@ export class LessonStore {
       .run(templateId, sessionId, cue.tool_name, cue.stable_fingerprint, cue.target_fingerprint, cue.rule_id, origin, originRef, turn, new Date().toISOString())
   }
 
+  /** Rebind a lesson's cue to the experience of its latest write (a soft overwrite). */
+  updateCue(templateId: string, cue: CueFeatures, origin: LessonOrigin, originRef: string | null, turn: number): void {
+    this.#db.prepare(`UPDATE lesson_cues SET tool_name = ?, stable_fingerprint = ?, target_fingerprint = ?, rule_id = ?, origin = ?, origin_ref = ?,
+      created_turn = ? WHERE template_id = ?`).run(cue.tool_name, cue.stable_fingerprint, cue.target_fingerprint, cue.rule_id, origin, originRef, turn, templateId)
+  }
+
+  /** A session's proposed types, oldest first. */
+  types(sessionId: string): LessonTypeRow[] {
+    return this.#db.prepare('SELECT * FROM lesson_types WHERE session_id = ? ORDER BY proposed_at, name').all(sessionId) as unknown as LessonTypeRow[]
+  }
+
+  /** Record a proposal; an existing proposal of the same name is left as it is. Returns false when it already existed. */
+  proposeType(sessionId: string, name: string, description: string): boolean {
+    return Number(this.#db.prepare(`INSERT INTO lesson_types (session_id, name, description, status, proposed_at) VALUES (?, ?, ?, 'pending', ?)
+      ON CONFLICT(session_id, name) DO NOTHING`).run(sessionId, name, description, new Date().toISOString()).changes) > 0
+  }
+
+  /** The owner approves or rejects a proposal. Returns false when there is no such proposal. */
+  decideType(sessionId: string, name: string, approved: boolean): boolean {
+    return Number(this.#db.prepare('UPDATE lesson_types SET status = ?, decided_at = ? WHERE session_id = ? AND name = ?')
+      .run(approved ? 'approved' : 'rejected', new Date().toISOString(), sessionId, name).changes) > 0
+  }
+
+  /** The stored text of one version of a lesson, by its digest (a soft-deleted or earlier text). */
+  versionText(templateId: string, sha256: string): string | undefined {
+    const row = this.#db.prepare('SELECT content FROM template_versions WHERE template_id = ? AND content_sha256 = ? LIMIT 1').get(templateId, sha256) as { content: string } | undefined
+    return row?.content
+  }
+
   /** Pin or unpin a lesson (the owner's route). Returns false when it has no cue row. */
   setPinned(templateId: string, pinned: boolean): boolean {
     return Number(this.#db.prepare('UPDATE lesson_cues SET pinned = ? WHERE template_id = ?').run(pinned ? 1 : 0, templateId).changes) > 0
@@ -229,6 +308,19 @@ export class LessonStore {
     return this.#db.prepare("SELECT 1 FROM lesson_log WHERE session_id = ? AND kind = 'prompted' AND origin_ref = ? LIMIT 1").get(sessionId, originRef) !== undefined
   }
 
+  /** Recall rounds of a session not yet closed or missed, oldest first. A round is keyed by its recall row's seq. */
+  openRounds(sessionId: string): LessonLogRow[] {
+    return this.#db.prepare(`SELECT r.* FROM lesson_log r WHERE r.session_id = ? AND r.kind = 'recalled' AND NOT EXISTS (
+      SELECT 1 FROM lesson_log c WHERE c.session_id = r.session_id AND c.kind IN ('round-closed', 'round-missed') AND c.origin_ref = CAST(r.seq AS TEXT))
+      ORDER BY r.seq`).all(sessionId) as unknown as LessonLogRow[]
+  }
+
+  /** One lesson's recall rounds: how many were opened, closed by a write, and missed. */
+  rounds(templateId: string): { opened: number; closed: number; missed: number } {
+    const count = (kind: string): number => Number((this.#db.prepare('SELECT COUNT(*) AS n FROM lesson_log WHERE template_id = ? AND kind = ?').get(templateId, kind) as { n: number }).n)
+    return { opened: count('recalled'), closed: count('round-closed'), missed: count('round-missed') }
+  }
+
   countAt(sessionId: string, kind: LessonLogKind, turn: number): number {
     const row = this.#db.prepare('SELECT COUNT(*) AS n FROM lesson_log WHERE session_id = ? AND kind = ? AND turn = ?').get(sessionId, kind, turn) as { n: number }
     return Number(row.n)
@@ -238,65 +330,185 @@ export class LessonStore {
 /** One lesson as the read route and the recall see it. */
 export interface LessonView {
   readonly id: string
-  readonly index: number
+  /** What follows 体会·: the type, or the number of a legacy (untyped) lesson. */
+  readonly key: string
+  /** The lesson's type; null for a legacy numbered lesson. */
+  readonly type: string | null
+  /** The number of a legacy numbered lesson; null for a typed one. */
+  readonly index: number | null
   readonly content: string
   readonly version: string | null
 }
 
-/** A session's lessons: its own session templates named 体会·N, oldest first. */
+/** A session's lessons: its own session templates named 体会·<type> (built-in order, then proposed), then legacy 体会·N. */
 export function lessonsOf(store: TemplateStore, sessionId: string): LessonView[] {
-  return store.list('session', sessionId).flatMap(t => {
+  const order = (lesson: LessonView): number => {
+    if (lesson.type === null) return 1000 + (lesson.index ?? 0)
+    const builtin = BUILTIN_LESSON_TYPES.findIndex(t => t.name === lesson.type)
+    return builtin >= 0 ? builtin : 100
+  }
+  return store.list('session', sessionId).flatMap((t): LessonView[] => {
     const m = LESSON_NAME.exec(t.name)
-    return m === null ? [] : [{ id: t.id, index: Number(m[1]), content: t.content, version: t.version ?? null }]
-  }).sort((a, b) => a.index - b.index)
+    if (m === null) return []
+    const key = m[1]!
+    const legacy = LEGACY_INDEX.test(key)
+    return [{ id: t.id, key, type: legacy ? null : key, index: legacy ? Number(key) : null, content: t.content, version: t.version ?? null }]
+  }).sort((a, b) => order(a) - order(b) || a.key.localeCompare(b.key))
 }
 
-type WriteResult = { ok: true; id: string; index: number; version: string } | { ok: false; code: string; error: string }
+/** The types this session may write: the built-ins plus the proposals the owner approved. */
+export function allowedTypes(store: TemplateStore, sessionId: string): string[] {
+  return [...BUILTIN_LESSON_TYPES.map(t => t.name), ...store.lessons.types(sessionId).filter(t => t.status === 'approved').map(t => t.name)]
+}
+
+type ProposeResult = { ok: true; name: string; status: LessonTypeRow['status'] } | { ok: false; code: string; error: string }
+
+/** The session proposes a new lesson type; it is usable only after the owner approves it on the panel. */
+export function proposeLessonType(store: TemplateStore, sessionId: string, name: string, description: string, turn: number | null): ProposeResult {
+  const type = name.trim()
+  const why = oneLineText(description)
+  if (!TYPE_NAME.test(type) || LEGACY_INDEX.test(type)) return { ok: false, code: 'name', error: 'a type name is 1..8 letters or digits, not a number' }
+  if (BUILTIN_LESSON_TYPES.some(t => t.name === type)) return { ok: false, code: 'builtin', error: `${type} is a built-in type; write it directly` }
+  if (why === '' || [...why].length > 120) return { ok: false, code: 'description', error: 'say in 1..120 characters what lessons of this type are about and why the built-in types do not fit' }
+  const created = store.lessons.proposeType(sessionId, type, why)
+  const row = store.lessons.types(sessionId).find(t => t.name === type)!
+  if (created) store.lessons.record({ session_id: sessionId, kind: 'type-proposed', template_id: null, turn, origin: type, origin_ref: null, content_sha256: contentDigest(why) })
+  return { ok: true, name: type, status: row.status }
+}
+
+/** The owner's decision on a proposed type (the panel route). */
+export function decideLessonType(store: TemplateStore, sessionId: string, name: string, approved: boolean): { ok: true } | { ok: false; code: 'not-found'; error: string } {
+  if (!store.lessons.decideType(sessionId, name, approved)) return { ok: false, code: 'not-found', error: 'no such proposed type for this session' }
+  store.lessons.record({ session_id: sessionId, kind: 'type-decided', template_id: null, turn: null, origin: name, origin_ref: approved ? 'approved' : 'rejected', content_sha256: null })
+  return { ok: true }
+}
+
+function oneLineText(text: string): string {
+  return text.replace(/\s+/g, ' ').trim()
+}
+
+/** One entry of a session's lesson timeline, newest first. */
+export interface TimelineEntry {
+  readonly at: string
+  readonly turn: number | null
+  readonly kind: LessonLogKind
+  /** The lesson's type (or legacy number) when the entry concerns a lesson; the type name for type proposals. */
+  readonly type: string | null
+  /** The lesson text at that point, when the entry wrote or soft-deleted one. */
+  readonly text?: string
+  /** For round-closed: updated or written. For type-decided: approved or rejected. */
+  readonly outcome?: string
+}
+
+/** The session's recent lesson history across types: writes, soft deletions, recalls, round outcomes, type decisions. */
+export function lessonTimeline(store: TemplateStore, sessionId: string, limit = 20, type?: string): TimelineEntry[] {
+  const max = Math.max(1, Math.min(TIMELINE_MAX, Math.trunc(Number.isFinite(limit) ? limit : 20)))
+  const keys = new Map(lessonsOf(store, sessionId).map(lesson => [lesson.id, lesson]))
+  const keyOf = (templateId: string | null): string | null => {
+    if (templateId === null) return null
+    const known = keys.get(templateId)
+    if (known !== undefined) return known.key
+    const m = LESSON_NAME.exec(store.get(templateId)?.name ?? '')
+    return m === null ? null : m[1]!
+  }
+  const textOf = (templateId: string | null, sha: string | null): string | undefined => {
+    if (templateId === null || sha === null) return undefined
+    const current = keys.get(templateId)
+    if (current !== undefined && contentDigest(current.content) === sha) return current.content
+    return store.lessons.versionText(templateId, sha)
+  }
+  const out: TimelineEntry[] = []
+  for (const row of store.lessons.log(sessionId, 500).reverse()) {
+    if (row.kind === 'prompted' || row.kind === 'pinned-loaded') continue
+    const isType = row.kind === 'type-proposed' || row.kind === 'type-decided'
+    const key = isType ? row.origin : keyOf(row.template_id)
+    if (type !== undefined && key !== type) continue
+    const entry: { -readonly [K in keyof TimelineEntry]: TimelineEntry[K] } = { at: row.at, turn: row.turn, kind: row.kind, type: key }
+    if (row.kind === 'written' || row.kind === 'superseded') {
+      const text = textOf(row.template_id, row.content_sha256)
+      if (text !== undefined) entry.text = text
+    }
+    if (row.kind === 'round-closed') entry.outcome = row.origin ?? undefined
+    if (row.kind === 'type-decided') entry.outcome = row.origin_ref ?? undefined
+    out.push(entry)
+    if (out.length >= max) break
+  }
+  return out
+}
+
+type WriteResult = { ok: true; id: string; type: string; version: string; superseded: boolean; round: RoundOutcome | null } | { ok: false; code: string; error: string }
 
 /**
- * Write (or, with `replace`, rewrite) one of the calling session's lessons. A new lesson's cue comes from the experience
- * the last digest prompt followed, else from the session's last observed call; the session cannot name a cue. A lesson
- * the owner edited on the panel is the owner's: the session cannot rewrite it.
+ * Close one open recall round with the write that just happened: the round of the lesson that was rewritten if it has
+ * one open (`updated`), else the latest open round (`written`). Returns how it closed, or null when no round was open.
  */
-export function writeLesson(store: TemplateStore, state: LessonState, sessionId: string, text: string, replace: unknown, config: LessonsConfig): WriteResult {
+export function closeRound(store: TemplateStore, sessionId: string, writtenId: string, turn: number | null, body: string): RoundOutcome | null {
+  const open = store.lessons.openRounds(sessionId)
+  if (open.length === 0) return null
+  const own = open.filter(row => row.template_id === writtenId).at(-1)
+  const round = own ?? open.at(-1)!
+  const outcome: RoundOutcome = own !== undefined ? 'updated' : 'written'
+  store.lessons.record({ session_id: sessionId, kind: 'round-closed', template_id: round.template_id, turn, origin: outcome, origin_ref: String(round.seq), content_sha256: contentDigest(body) })
+  return outcome
+}
+
+/** Mark every round still open past its grace turns as missed. */
+export function expireRounds(store: TemplateStore, sessionId: string, turn: number): void {
+  for (const row of store.lessons.openRounds(sessionId)) {
+    if (row.turn === null || turn <= row.turn + ROUND_GRACE_TURNS) continue
+    store.lessons.record({ session_id: sessionId, kind: 'round-missed', template_id: row.template_id, turn, origin: null, origin_ref: String(row.seq), content_sha256: null })
+  }
+}
+
+/**
+ * Write the calling session's lesson of one type. A type with no lesson yet gets one; a type that has one is
+ * soft-overwritten: the old text is kept as a stored version and logged `superseded`, the new text takes its place and
+ * its cue is rebound to the experience it now comes from. The cue comes from the experience the last digest prompt
+ * followed, else from the session's last observed call; the session cannot name a cue. A lesson the owner edited on the
+ * panel is the owner's: the session cannot overwrite it.
+ */
+export function writeLesson(store: TemplateStore, state: LessonState, sessionId: string, text: string, type: unknown, _config?: LessonsConfig): WriteResult {
   const body = text.trim()
   if (body === '' || [...body].length > LESSON_MAX) {
     return { ok: false, code: 'length', error: `a lesson is 1..${String(LESSON_MAX)} characters: one or two sentences, what hurt and what to do first next time` }
   }
-  const lessons = lessonsOf(store, sessionId)
-  if (replace !== undefined && replace !== null) {
-    const index = Number(replace)
-    const current = Number.isInteger(index) ? lessons.find(lesson => lesson.index === index) : undefined
-    if (current === undefined) return { ok: false, code: 'not-found', error: `no lesson ${String(replace)} in this session` }
-    const m = current.version === null ? null : LESSON_VERSION.exec(current.version)
-    if (m === null || current.version === null) return { ok: false, code: 'owner-edited', error: 'the owner edited this lesson on the panel; it is theirs now' }
-    const next = `lesson-r${String(Number(m[1]) + 1)}`
-    store.keepVersion(current.id, current.version, `${LESSON_PREFIX}${String(index)}`, current.content, 'lesson')
-    store.update(current.id, { content: body, version: next })
-    store.lessons.record({ session_id: sessionId, kind: 'written', template_id: current.id, turn: state.turn ?? null, origin: null, origin_ref: null, content_sha256: contentDigest(body) })
-    return { ok: true, id: current.id, index, version: next }
+  const allowed = allowedTypes(store, sessionId)
+  const kind = typeof type === 'string' ? type.trim() : ''
+  if (!allowed.includes(kind)) {
+    return { ok: false, code: 'type', error: `type is one of ${allowed.join(' ')}; to add your own, propose it with lesson_type_propose and wait for the owner's approval` }
   }
-  if (lessons.length >= config.maxPerSession) {
-    return { ok: false, code: 'full', error: `this session already has ${String(lessons.length)} lessons; rewrite one (replace) or ask the owner to remove some` }
-  }
-  if (!store.listCategories(sessionId).some(c => c.scope === 'session' && c.session_id === sessionId && c.name === LESSON_CATEGORY)) {
-    store.createCategory({ name: LESSON_CATEGORY, scope: 'session', session_id: sessionId })
-  }
-  const index = lessons.reduce((max, lesson) => Math.max(max, lesson.index), 0) + 1
-  const made = store.create({
-    name: `${LESSON_PREFIX}${String(index)}`, content: body, scope: 'session', session_id: sessionId, category: LESSON_CATEGORY,
-    description: '会话自己写下的体会：经历之后的一两句话，同类情境下会被唤起',
-  })
-  store.update(made.id, { content: body, version: 'lesson-r1' })
   const context = state.context
   const fromLast = state.last === undefined ? undefined : cueOf(state.last.features)
   const cue: CueFeatures = context ?? fromLast ?? { tool_name: '', stable_fingerprint: '', target_fingerprint: '', rule_id: null }
   const origin: LessonOrigin = context?.origin ?? (fromLast === undefined ? 'none' : 'last-call')
   const originRef = context?.origin_ref ?? (fromLast === undefined ? null : state.last?.callId ?? null)
-  store.lessons.addCue(made.id, sessionId, cue, origin, originRef, state.turn ?? 0)
-  store.lessons.record({ session_id: sessionId, kind: 'written', template_id: made.id, turn: state.turn ?? null, origin, origin_ref: originRef, content_sha256: contentDigest(body) })
+  const turn = state.turn ?? null
+  const current = lessonsOf(store, sessionId).find(lesson => lesson.type === kind)
+  if (current !== undefined) {
+    const m = current.version === null ? null : LESSON_VERSION.exec(current.version)
+    if (m === null || current.version === null) return { ok: false, code: 'owner-edited', error: `the owner edited your ${kind} lesson on the panel; it is theirs now` }
+    const next = `lesson-r${String(Number(m[1]) + 1)}`
+    store.keepVersion(current.id, current.version, `${LESSON_PREFIX}${kind}`, current.content, 'lesson')
+    store.lessons.record({ session_id: sessionId, kind: 'superseded', template_id: current.id, turn, origin: null, origin_ref: current.version, content_sha256: contentDigest(current.content) })
+    store.update(current.id, { content: body, version: next })
+    if (store.lessons.cue(current.id) === undefined) store.lessons.addCue(current.id, sessionId, cue, origin, originRef, turn ?? 0)
+    else store.lessons.updateCue(current.id, cue, origin, originRef, turn ?? 0)
+    store.lessons.record({ session_id: sessionId, kind: 'written', template_id: current.id, turn, origin, origin_ref: originRef, content_sha256: contentDigest(body) })
+    state.context = undefined
+    return { ok: true, id: current.id, type: kind, version: next, superseded: true, round: closeRound(store, sessionId, current.id, turn, body) }
+  }
+  if (!store.listCategories(sessionId).some(c => c.scope === 'session' && c.session_id === sessionId && c.name === LESSON_CATEGORY)) {
+    store.createCategory({ name: LESSON_CATEGORY, scope: 'session', session_id: sessionId })
+  }
+  const made = store.create({
+    name: `${LESSON_PREFIX}${kind}`, content: body, scope: 'session', session_id: sessionId, category: LESSON_CATEGORY,
+    description: `会话自己写下的「${kind}」类体会：经历之后的一两句话，同类情境下会被唤起；每类只留一条，再写会软覆盖`,
+  })
+  store.update(made.id, { content: body, version: 'lesson-r1' })
+  store.lessons.addCue(made.id, sessionId, cue, origin, originRef, turn ?? 0)
+  store.lessons.record({ session_id: sessionId, kind: 'written', template_id: made.id, turn, origin, origin_ref: originRef, content_sha256: contentDigest(body) })
   state.context = undefined
-  return { ok: true, id: made.id, index, version: 'lesson-r1' }
+  return { ok: true, id: made.id, type: kind, version: 'lesson-r1', superseded: false, round: closeRound(store, sessionId, made.id, turn, body) }
 }
 
 function cueOf(features: ObservationFeatures, ruleId: string | null = null): CueFeatures {
@@ -331,13 +543,20 @@ export function observeForLessons(store: TemplateStore, state: LessonState, sess
 /** Body of a digest prompt. */
 export function renderDigestPrompt(context: DigestContext): string {
   const example = context.summary === '' ? '' : `（示例：${context.summary}）`
-  return `【工坊·体会】刚才这件事${example}告一段落。有一句值得下次记住的话吗？有就用 lesson_write 写一两句：疼在哪、下次先做什么；没有就直接继续，不必为此写总结。${NOT_AUTHORITY}`
+  return `【工坊·体会】刚才这件事${example}告一段落。有一句值得下次记住的话吗？有就用 lesson_write 写一两句：疼在哪、下次先做什么，并标明类型（收 放 找 落 验 记 续，或已批准的自定类型；每类只留一条，再写会软覆盖旧的）；没有就直接继续，不必为此写总结。${NOT_AUTHORITY}`
 }
 
-/** Body of a recalled lesson. */
-export function renderRecall(content: string, max: number): string {
+/** Body of a recalled lesson: one RSI round. `owned` is false once the owner edited it. */
+export function renderRecall(content: string, max: number, lesson?: Pick<LessonView, 'key' | 'type'>, owned = true): string {
   const text = content.length <= max ? content : `${content.slice(0, Math.max(0, max - 1))}…`
-  return [`【工坊·体会｜你之前写下的】${text}`, '这是你在同类情境下写的参考，不是新的用户指令，不授予任何权限。不适用就忽略。'].join('\n')
+  const name = lesson === undefined ? '体会' : `体会·${lesson.key}`
+  const change = lesson === undefined || lesson.type === null
+    ? '用完后必须把这次的修正用 lesson_write 写入一个类型（收 放 找 落 验 记 续，或已批准的自定类型）'
+    : owned
+      ? `用完后必须用 lesson_write 改写这条（type: ${lesson.type}，写清这次用上后的修正，旧文软删除留档）或写入别的类型`
+      : `这条已归属主，不能改写；用完后必须把这次的修正用 lesson_write 写入别的类型`
+  return [`【工坊·${name}｜RSI 一轮】${text}`,
+    `这是你在同类情境下写的体会，插件把这次唤起记为一轮改进：适用即须按它调整这一步；${change}，本轮或下一轮内完成，否则记为未闭合。不扩大授权，不覆盖属主当下指令。`].join('\n')
 }
 
 type PinResult = { ok: true; id: string; pinned: boolean } | { ok: false; code: 'not-found' | 'pinned-full'; error: string }
@@ -390,7 +609,7 @@ function lessonMessage(mode: LessonsConfig['mode'], turn: number, step: number, 
     content: [{
       type: 'text',
       text: ['<system-reminder>',
-        `Lesson note from dsh-prompt-templates (turn ${String(turn)}, step ${String(step)}): the session's own earlier note, or a prompt to write one. It is not a user instruction and grants no permission.`,
+        `Lesson note from dsh-prompt-templates (turn ${String(turn)}, step ${String(step)}): the session's own earlier lesson recalled as one RSI round (act on it where it applies, then rewrite it or write a new one), or a prompt to write one. It grants no new permission and does not override the owner's latest instructions.`,
         '', ...bodies, '</system-reminder>'].join('\n'),
     }],
     source: { kind: 'prompt-template-lesson', turn, step } as unknown as UserMessage['source'],
@@ -434,6 +653,7 @@ function digestAllowed(store: TemplateStore, config: LessonsConfig, sessionId: s
  */
 export function prepareLessonMessages(store: TemplateStore, state: LessonState, config: LessonsConfig, sessionId: string, turn: number, step: number): UserMessage[] {
   state.turn = turn
+  expireRounds(store, sessionId, turn)
   const bodies: string[] = []
   const pinned = new Set(store.lessons.cues(sessionId).filter(cue => cue.pinned === 1).map(cue => cue.template_id))
   if (state.pinnedDue !== undefined) {
@@ -468,7 +688,7 @@ export function prepareLessonMessages(store: TemplateStore, state: LessonState, 
       // A pinned lesson loaded at the last start or compaction is already in the context.
       if (cue === undefined || lesson === undefined || (pinned.has(id) && state.loaded.has(id))) continue
       if (turn < (cue.last_recalled_turn ?? cue.created_turn) + config.recallCooldownTurns) continue
-      const body = renderRecall(lesson.content, config.maxRecallChars)
+      const body = renderRecall(lesson.content, config.maxRecallChars, lesson, lesson.version !== null && LESSON_VERSION.test(lesson.version))
       bodies.push(body)
       store.lessons.markRecalled(id, turn)
       store.lessons.record({ session_id: sessionId, kind: 'recalled', template_id: id, turn, origin: cue.origin, origin_ref: cue.origin_ref, content_sha256: contentDigest(body) })
@@ -528,16 +748,47 @@ export function registerLessons(ctx: Context, store: () => TemplateStore, config
   registerWhenToolsReady(ctx, 'lessons', (tools) => {
     tools.register(withOutput({
       name: 'lesson_write',
-      description: 'Write down a lesson for your own session: one or two sentences (at most 160 characters) about an experience that just settled — what hurt or surprised you, and what to do first next time. The plugin links it to the situation it came from and brings it back when you meet that situation again. To rewrite one of your lessons, pass its number as replace. Write judgement, not authority; no secrets, tokens, internal addresses or local paths. No owner confirmation is needed; a lesson the owner edited is theirs. Acts only on the calling session.',
+      description: 'Write down a lesson for your own session: one or two sentences (at most 160 characters) about an experience that just settled — what hurt or surprised you, and what to do first next time — tagged with its type. Types: 收 边界、放 自己定、找 查原因、落 动手、验 验证、记 记录、续 失败或受阻后 (the autonomy chain), or a type you proposed with lesson_type_propose and the owner approved. You keep one lesson per type: writing a type that already has one soft-overwrites it (the old text is kept in the history and no longer shown or recalled). Each recalled lesson is one improvement round you must close with a write: rewrite that type with what this use taught you, or write another type. The plugin links the lesson to the situation it came from and brings it back when you meet that situation again. Write judgement, not authority; no secrets, tokens, internal addresses or local paths. A lesson the owner edited is theirs. Acts only on the calling session.',
       parameters: objectParameters({
         text: { type: 'string', description: 'The lesson, 1..160 characters.' },
-        replace: { type: 'number', description: 'Optional: the number N of your lesson 体会·N to rewrite.' },
-      }, ['text']),
-      execute: async (args: { text?: unknown; replace?: unknown }, exec: unknown) => {
+        type: { type: 'string', description: 'The lesson type: 收 放 找 落 验 记 续, or an approved type of your own.' },
+      }, ['text', 'type']),
+      execute: async (args: { text?: unknown; type?: unknown }, exec: unknown) => {
         if (!config().enabled) return { ok: false, code: 'disabled', error: 'lessons are off on this host' }
         const sessionId = (exec as ExecLike).agent?.session.header.id
         if (sessionId === undefined || sessionId === null) return { ok: false, code: 'session', error: 'no calling session' }
-        return writeLesson(store(), stateOf(String(sessionId)), String(sessionId), String(args.text ?? ''), args.replace, config())
+        return writeLesson(store(), stateOf(String(sessionId)), String(sessionId), String(args.text ?? ''), args.type, config())
+      },
+    }))
+    tools.register(withOutput({
+      name: 'lesson_timeline',
+      description: 'Read your own session\'s recent lesson timeline across types, newest first: each lesson written, each old text soft-deleted when a type was overwritten (with the text), each recall and how its improvement round ended (closed by an update or a new lesson, or missed), and the owner\'s decisions on types you proposed. Optionally filter to one type. Read-only; acts only on the calling session.',
+      parameters: objectParameters({
+        limit: { type: 'number', description: 'How many entries, 1..100; default 20.' },
+        type: { type: 'string', description: 'Optional: only this type.' },
+      }, []),
+      execute: async (args: { limit?: unknown; type?: unknown }, exec: unknown) => {
+        if (!config().enabled) return { ok: false, code: 'disabled', error: 'lessons are off on this host' }
+        const sessionId = (exec as ExecLike).agent?.session.header.id
+        if (sessionId === undefined || sessionId === null) return { ok: false, code: 'session', error: 'no calling session' }
+        const id = String(sessionId)
+        const filter = typeof args.type === 'string' && args.type.trim() !== '' ? args.type.trim() : undefined
+        return { ok: true, types: allowedTypes(store(), id), entries: lessonTimeline(store(), id, args.limit === undefined ? 20 : Number(args.limit), filter) }
+      },
+    }))
+    tools.register(withOutput({
+      name: 'lesson_type_propose',
+      description: 'Propose a new lesson type for your own session when none of 收 放 找 落 验 记 续 fits what you keep learning. Give a short name (1..8 letters or digits) and one line on what lessons of this type are about and why the built-in types do not fit. The type is usable in lesson_write only after the owner approves it on the panel; until then, write the closest built-in type. Acts only on the calling session.',
+      parameters: objectParameters({
+        name: { type: 'string', description: 'The type name, 1..8 letters or digits.' },
+        description: { type: 'string', description: 'What lessons of this type are about, and why no built-in type fits (1..120 characters).' },
+      }, ['name', 'description']),
+      execute: async (args: { name?: unknown; description?: unknown }, exec: unknown) => {
+        if (!config().enabled) return { ok: false, code: 'disabled', error: 'lessons are off on this host' }
+        const sessionId = (exec as ExecLike).agent?.session.header.id
+        if (sessionId === undefined || sessionId === null) return { ok: false, code: 'session', error: 'no calling session' }
+        const id = String(sessionId)
+        return proposeLessonType(store(), id, String(args.name ?? ''), String(args.description ?? ''), stateOf(id).turn ?? null)
       },
     }))
   })

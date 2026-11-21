@@ -14,11 +14,13 @@ import * as host from '../src/index.ts'
 import { DEFAULT_EVENT_INJECT_CONFIG, observeToolResult, prepareEventReminders } from '../src/event-inject.ts'
 import { extractFeatures } from '../src/event-features.ts'
 import type { ObservationFeatures } from '../src/event-features.ts'
-import { DEFAULT_LESSONS_CONFIG, LESSON_CATEGORY, lessonsOf, newLessonState, observeForLessons, pinLesson, prepareLessonMessages, writeLesson } from '../src/lessons.ts'
+import { DEFAULT_LESSONS_CONFIG, LESSON_CATEGORY, allowedTypes, decideLessonType, lessonTimeline, lessonsOf, newLessonState, observeForLessons, pinLesson, prepareLessonMessages, proposeLessonType, writeLesson } from '../src/lessons.ts'
+import { contentDigest } from '../src/interventions.ts'
 import type { LessonsConfig, LessonState } from '../src/lessons.ts'
 import { TemplateStore } from '../src/store.ts'
 
 const S = 'sess-1'
+const TYPES = ['收', '放', '找', '落', '验', '记', '续']
 const ON: LessonsConfig = { ...DEFAULT_LESSONS_CONFIG, enabled: true }
 const ok = { isError: false }
 const fail = { isError: true, error: { info: { code: 'EXIT_1' } } }
@@ -28,30 +30,32 @@ function textOf(messages: unknown[]): string {
   return messages.map(m => ((m as { content: Array<{ text: string }> }).content[0]?.text) ?? '').join('\n')
 }
 
-function world(config: LessonsConfig = ON): { store: TemplateStore, state: LessonState, call: (command: string, result?: { isError: boolean }, session?: string, state?: LessonState) => void, step: (turn: number, step?: number) => unknown[], write: (text: string, replace?: unknown) => ReturnType<typeof writeLesson> } {
+function world(config: LessonsConfig = ON): { store: TemplateStore, state: LessonState, call: (command: string, result?: { isError: boolean }, session?: string, state?: LessonState) => void, step: (turn: number, step?: number) => unknown[], write: (text: string, type?: string) => ReturnType<typeof writeLesson> } {
   const store = new TemplateStore(':memory:')
   const state = newLessonState()
   let n = 0
+  let next = 0
   return {
     store,
     state,
     call(command, result = ok, session = S, own = state) { n += 1; observeForLessons(store, own, session, `call-${String(n)}`, bash(command, result)) },
     step(turn, step = 1) { return prepareLessonMessages(store, state, config, S, turn, step) },
-    write(text, replace) { return writeLesson(store, state, S, text, replace, config) },
+    write(text, type) { return writeLesson(store, state, S, text, type ?? TYPES[next++ % TYPES.length], config) },
   }
 }
 
-test('write: a lesson is a 体会 session template; rewrites keep versions; the owner\'s edit locks it; limits; delete takes its cue', () => {
-  const w = world({ ...ON, maxPerSession: 2 })
+test('write: a lesson is a typed 体会 session template; one per type; rewriting a type soft-overwrites (old text kept, superseded); the owner\'s edit locks it', () => {
+  const w = world()
   try {
     w.call('TOKEN_X=abc /opt/py/bin/python build.py')
-    assert.equal((w.write('   ') as { code: string }).code, 'length')
-    assert.equal((w.write('x'.repeat(161)) as { code: string }).code, 'length')
-    const first = w.write('打包前先跑 make check，失败时别原样重试。')
-    assert.deepEqual(first.ok && { index: first.index, version: first.version }, { index: 1, version: 'lesson-r1' })
+    assert.equal((w.write('   ', '找') as { code: string }).code, 'length')
+    assert.equal((w.write('x'.repeat(161), '找') as { code: string }).code, 'length')
+    assert.equal((w.write('没类型', 'other') as { code: string }).code, 'type')
+    const first = w.write('打包前先跑 make check，失败时别原样重试。', '找')
+    assert.deepEqual(first.ok && { type: first.type, version: first.version, superseded: first.superseded }, { type: '找', version: 'lesson-r1', superseded: false })
     const id = first.ok ? first.id : ''
     const template = w.store.get(id)
-    assert.equal(template?.name, '体会·1')
+    assert.equal(template?.name, '体会·找')
     assert.equal(template?.scope, 'session')
     assert.equal(template?.session_id, S)
     assert.equal(template?.category, LESSON_CATEGORY)
@@ -60,21 +64,55 @@ test('write: a lesson is a 体会 session template; rewrites keep versions; the 
     assert.equal(cue?.origin, 'last-call')
     assert.equal(cue?.tool_name, 'bash')
     assert.notEqual(cue?.stable_fingerprint, '', 'bound to the last call\'s preparation')
-    // Rewrite: the old text is kept as a version.
-    const second = w.write('打包前先跑 make check。', 1)
-    assert.equal(second.ok && second.version, 'lesson-r2')
+    // Same type again: soft overwrite. Same template, old text kept as a version and logged superseded; cue rebound.
+    w.call('make release')
+    const second = w.write('打包前先跑 make check。', '找')
+    assert.deepEqual(second.ok && { id: second.id, version: second.version, superseded: second.superseded }, { id, version: 'lesson-r2', superseded: true })
     assert.equal(w.store.get(id)?.content, '打包前先跑 make check。')
-    // 160 characters counted as characters, not UTF-16 units.
-    assert.equal(w.write('😀'.repeat(160), 1).ok, true)
-    // The owner edits it on the panel: the version is cleared and the session can no longer rewrite it.
+    assert.equal(lessonsOf(w.store, S).filter(lesson => lesson.type === '找').length, 1, 'one lesson per type')
+    assert.equal(w.store.lessons.versionText(id, contentDigest('打包前先跑 make check，失败时别原样重试。')), '打包前先跑 make check，失败时别原样重试。', 'the old text is kept')
+    assert.deepEqual(w.store.lessons.log(S).map(row => row.kind), ['written', 'superseded', 'written'])
+    assert.equal(w.store.lessons.cue(id)?.stable_fingerprint, bash('make release').stableFingerprint, 'the cue follows the latest write')
+    // Another type is another lesson; 160 characters counted as characters.
+    const other = w.write('😀'.repeat(160), '验')
+    assert.equal(other.ok, true)
+    assert.deepEqual(lessonsOf(w.store, S).map(lesson => lesson.key), ['找', '验'], 'chain order')
+    // The owner edits it on the panel: the version is cleared and the session can no longer overwrite that type.
     w.store.update(id, { content: '属主改过的话' })
-    assert.equal((w.write('再改一次', 1) as { code: string }).code, 'owner-edited')
-    assert.equal((w.write('不存在', 9) as { code: string }).code, 'not-found')
-    assert.equal(w.write('第二条').ok, true)
-    assert.equal((w.write('第三条') as { code: string }).code, 'full')
+    assert.equal((w.write('再改一次', '找') as { code: string }).code, 'owner-edited')
     assert.deepEqual(lessonsOf(w.store, 'other-session'), [], 'lessons belong to their session')
     assert.ok(w.store.delete(id))
     assert.equal(w.store.lessons.cue(id), undefined, 'the cue goes with the template')
+  } finally { w.store.close() }
+})
+
+test('types: the session proposes its own type; it is usable only after the owner approves; rejected stays unusable; timeline shows it all', () => {
+  const w = world()
+  try {
+    w.call('make build')
+    assert.equal((proposeLessonType(w.store, S, '找', '重复', 1) as { code: string }).code, 'builtin')
+    assert.equal((proposeLessonType(w.store, S, '12', '编号', 1) as { code: string }).code, 'name')
+    assert.equal((proposeLessonType(w.store, S, '协作', '', 1) as { code: string }).code, 'description')
+    assert.deepEqual(proposeLessonType(w.store, S, '协作', '跨会话交接时学到的，七类都不贴切', 1), { ok: true, name: '协作', status: 'pending' })
+    assert.equal((w.write('交接先写清缺口。', '协作') as { code: string }).code, 'type', 'pending is not usable')
+    assert.equal(decideLessonType(w.store, S, '协作', true).ok, true)
+    assert.ok(allowedTypes(w.store, S).includes('协作'))
+    assert.equal(w.write('交接先写清缺口。', '协作').ok, true)
+    proposeLessonType(w.store, S, '杂项', '不知道放哪', 2)
+    decideLessonType(w.store, S, '杂项', false)
+    assert.equal((w.write('随便写', '杂项') as { code: string }).code, 'type', 'rejected is not usable')
+    assert.equal((decideLessonType(w.store, S, '没有', true) as { code: string }).code, 'not-found')
+    assert.deepEqual(allowedTypes(w.store, 'sess-2'), ['收', '放', '找', '落', '验', '记', '续'], 'a proposal belongs to its session')
+    w.write('交接先写清缺口和期限。', '协作')
+    const timeline = lessonTimeline(w.store, S)
+    assert.deepEqual(timeline.map(e => [e.kind, e.type]), [
+      ['written', '协作'], ['superseded', '协作'], ['type-decided', '杂项'], ['type-proposed', '杂项'], ['written', '协作'], ['type-decided', '协作'], ['type-proposed', '协作'],
+    ])
+    assert.equal(timeline[0]?.text, '交接先写清缺口和期限。')
+    assert.equal(timeline[1]?.text, '交接先写清缺口。', 'the soft-deleted text is in the timeline')
+    assert.equal(timeline[2]?.outcome, 'rejected')
+    assert.deepEqual(lessonTimeline(w.store, S, 2).length, 2)
+    assert.deepEqual(lessonTimeline(w.store, S, 20, '杂项').map(e => e.kind), ['type-decided', 'type-proposed'])
   } finally { w.store.close() }
 })
 
@@ -90,6 +128,7 @@ test('digest: a target that failed and then succeeded gets one prompt; the lesso
     assert.match(text, /^<system-reminder>/)
     assert.ok(text.includes('【工坊·体会】刚才这件事（示例：make test）告一段落'))
     assert.ok(text.includes('lesson_write'))
+    assert.ok(text.includes('并标明类型') && text.includes('软覆盖'))
     assert.ok(text.includes('不授予任何权限'))
     assert.ok(!/a2a_/.test(text))
     assert.deepEqual(w.step(2, 2), [], 'one digest prompt per turn')
@@ -179,9 +218,11 @@ test('recall: a matching call brings the lesson back at the next step after its 
     assert.deepEqual(w.step(2), [], 'cooldown from the turn it was written')
     w.call('TOKEN_X=abc /opt/py/bin/python lint.py')
     const recalled = textOf(w.step(3))
-    assert.ok(recalled.includes('【工坊·体会｜你之前写下的】别再手工带 TOKEN_X'))
+    assert.ok(recalled.includes('【工坊·体会·收｜RSI 一轮】别再手工带 TOKEN_X'))
+    assert.ok(recalled.includes('适用即须按它调整这一步') && recalled.includes('type: 收'))
+    assert.doesNotMatch(recalled, /不适用就忽略|你在同类情境下写的参考/)
     assert.ok(recalled.includes('…'), 'clipped to maxRecallChars')
-    assert.ok(recalled.includes('不授予任何权限'))
+    assert.ok(recalled.includes('不扩大授权'))
     assert.equal(w.store.lessons.cue(id)?.recall_count, 1)
     assert.equal(w.store.lessons.log(S).at(-1)?.kind, 'recalled')
     w.call('TOKEN_X=abc /opt/py/bin/python test.py')
@@ -247,7 +288,7 @@ test('pinned (phase 2): only the owner pins, at most maxPinned; loaded once at t
     // Loaded pinned lessons are not recalled again; an unpinned one still is.
     w.call('make build')
     const step4 = textOf(w.step(4))
-    assert.ok(step4.includes(`【工坊·体会｜你之前写下的】${'x'.repeat(160)}`), 'the unpinned one is recalled')
+    assert.ok(step4.includes(`｜RSI 一轮】${'x'.repeat(160)}`), 'the unpinned one is recalled')
     assert.ok(!step4.includes('make check') && !step4.includes('报错先看'), 'the loaded pinned ones are not')
     // Unpin b, pin the long one: 160 + the 15 of a fit in 400; the cap is on characters, oldest first.
     assert.equal(pinLesson(w.store, b, false, 2).ok, true)
@@ -257,7 +298,7 @@ test('pinned (phase 2): only the owner pins, at most maxPinned; loaded once at t
     assert.ok(again.includes('1. 先跑 make check 再打包。') && again.includes(`2. ${'x'.repeat(160)}`) && !again.includes('报错先看第一条'))
     w.call('make build')
     const recalled = textOf(w.step(6))
-    assert.ok(recalled.includes('【工坊·体会｜你之前写下的】报错先看第一条。'), 'unpinned, it is recalled again')
+    assert.ok(recalled.includes('｜RSI 一轮】报错先看第一条。'), 'unpinned, it is recalled again')
     // Promoted to global: no longer this session's lesson, so it cannot be pinned or loaded here.
     w.store.makeGlobal(a)
     assert.equal((pinLesson(w.store, a, false, 2) as { code: string }).code, 'not-found')
@@ -292,7 +333,7 @@ test('pinned: a lowered maxPinned caps the load; a lesson pinned since the last 
     assert.ok(loaded.includes('1. 先跑 make check。') && !loaded.includes('报错先看'), 'only maxPinned are loaded')
     // b is pinned but not in the context: recall still brings it back.
     w.call('make build')
-    assert.ok(textOf(w.step(2)).includes('【工坊·体会｜你之前写下的】报错先看第一条。'))
+    assert.ok(textOf(w.step(2)).includes('｜RSI 一轮】报错先看第一条。'))
   } finally { w.store.close() }
 })
 
@@ -356,7 +397,7 @@ test('Config turns lessons on by default (owner decision 2026-11-21)', () => {
 
 test('host: with no lessons config the tool is live (on by default since 2026-11-21)', async () => {
   await withHost({}, async (_ctx, _route, tools) => {
-    const written = await tools.get('lesson_write')?.execute({ text: '先看第一条报错，再决定要不要重跑。' }, { agent: agentOf(S) })
+    const written = await tools.get('lesson_write')?.execute({ text: '先看第一条报错，再决定要不要重跑。', type: '找' }, { agent: agentOf(S) })
     assert.equal(written?.['ok'], true)
   })
 })
@@ -366,7 +407,7 @@ test('host: with lessons.enabled false nothing is prompted, recalled or written'
     await result(ctx, 'c1', 'make test', true)
     await result(ctx, 'c2', 'make test')
     assert.deepEqual(await preStep(ctx, 1), [])
-    assert.deepEqual(await tools.get('lesson_write')?.execute({ text: 'x' }, { agent: agentOf(S) }), { ok: false, code: 'disabled', error: 'lessons are off on this host' })
+    assert.deepEqual(await tools.get('lesson_write')?.execute({ text: 'x', type: '找' }, { agent: agentOf(S) }), { ok: false, code: 'disabled', error: 'lessons are off on this host' })
     const read = await request(route, `${BASE}/lessons?session_id=${S}`)
     assert.deepEqual({ items: read.body.items, log: read.body.log, schema: read.body.schema }, { items: [], log: [], schema: 11 })
   })
@@ -381,7 +422,7 @@ test('host: prompt, write through the tool, recall in the visible channel; the r
     assert.equal(prompt[0]?.source?.['kind'], 'user')
     assert.equal(prompt[0]?.source?.['scheduled'], 'prompt-template-lesson')
     assert.match(prompt[0]?.content?.[0]?.text ?? '', /^⚙️ 体会 · 第 1 轮第 1 步/)
-    const written = await tools.get('lesson_write')?.execute({ text: '先看第一条报错，再决定要不要重跑。' }, { agent: agentOf(S) })
+    const written = await tools.get('lesson_write')?.execute({ text: '先看第一条报错，再决定要不要重跑。', type: '找' }, { agent: agentOf(S) })
     assert.equal(written?.['ok'], true)
     await result(ctx, 'c3', 'make test', true)
     const recalled = await preStep(ctx, 2)
@@ -404,8 +445,8 @@ async function created(ctx: Context, source: string): Promise<void> {
 test('host (phase 2): the owner pins over PATCH; startup, resume and compact load the pinned lessons at the next step, clear does not', async () => {
   await withHost({ lessons: { enabled: true, maxPinned: 1 } }, async (ctx, route, tools) => {
     await result(ctx, 'c1', 'make test')
-    const first = await tools.get('lesson_write')?.execute({ text: '先看第一条报错。' }, { agent: agentOf(S) })
-    const second = await tools.get('lesson_write')?.execute({ text: '改配置前先备份。' }, { agent: agentOf(S) })
+    const first = await tools.get('lesson_write')?.execute({ text: '先看第一条报错。', type: '找' }, { agent: agentOf(S) })
+    const second = await tools.get('lesson_write')?.execute({ text: '改配置前先备份。', type: '验' }, { agent: agentOf(S) })
     const id = String(first?.['id']), other = String(second?.['id'])
     assert.equal((await request(route, `${BASE}/lessons/${id}`, 'PATCH', { pinned: 'yes' })).status, 400)
     assert.equal((await request(route, `${BASE}/lessons/missing`, 'PATCH', { pinned: true })).status, 404)
@@ -435,4 +476,54 @@ test('host (phase 2): off, a start loads nothing', async () => {
     await created(ctx, 'startup')
     assert.deepEqual(await preStep(ctx, 1), [])
   })
+})
+
+test('RSI rounds: every recall opens a round; rewriting the recalled lesson or writing a new one closes it; two turns without a write miss it', () => {
+  const w = world({ ...ON, recallCooldownTurns: 1 })
+  try {
+    w.step(1)
+    w.call('TOKEN_X=abc /opt/py/bin/python build.py')
+    const first = w.write('别手工带 TOKEN_X，先用 make 入口。')
+    assert.ok(first.ok)
+    const id = first.ok ? first.id : ''
+    assert.equal(first.ok && first.round, null, 'no round open yet')
+    // Round 1: recalled at turn 2, closed by rewriting the same lesson.
+    w.call('TOKEN_X=abc /opt/py/bin/python lint.py')
+    assert.ok(textOf(w.step(2)).includes('RSI 一轮'))
+    assert.equal(w.store.lessons.openRounds(S).length, 1)
+    const updated = w.write('别手工带 TOKEN_X，先用 make 入口；lint 也走 make lint。', '收')
+    assert.equal(updated.ok && updated.round, 'updated')
+    assert.equal(w.store.lessons.openRounds(S).length, 0)
+    // Round 2: recalled at turn 4, closed by a new lesson.
+    w.call('TOKEN_X=abc /opt/py/bin/python test.py')
+    assert.ok(textOf(w.step(4)).includes('RSI 一轮'))
+    const added = w.write('测试也走 make test，不手拼解释器。')
+    assert.equal(added.ok && added.round, 'written')
+    // Round 3: recalled at turn 6, nothing written in turns 6 and 7: missed at turn 8.
+    w.call('TOKEN_X=abc /opt/py/bin/python deploy.py')
+    assert.ok(textOf(w.step(6)).includes('RSI 一轮'))
+    w.step(7)
+    assert.equal(w.store.lessons.openRounds(S).length, 1, 'still within the grace turn')
+    w.step(8)
+    assert.equal(w.store.lessons.openRounds(S).length, 0)
+    assert.deepEqual(w.store.lessons.rounds(id), { opened: 3, closed: 2, missed: 1 })
+    const kinds = w.store.lessons.log(S).map(row => row.kind)
+    assert.deepEqual(kinds.filter(k => k.startsWith('round')), ['round-closed', 'round-closed', 'round-missed'])
+  } finally { w.store.close() }
+})
+
+test('RSI rounds: a lesson the owner edited asks for a new lesson instead of a rewrite', () => {
+  const w = world({ ...ON, recallCooldownTurns: 1 })
+  try {
+    w.step(1)
+    w.call('TOKEN_X=abc /opt/py/bin/python build.py')
+    const first = w.write('别手工带 TOKEN_X。')
+    const id = first.ok ? first.id : ''
+    w.store.update(id, { content: '属主改过：别手工带 TOKEN_X。', version: null })
+    w.call('TOKEN_X=abc /opt/py/bin/python lint.py')
+    const text = textOf(w.step(2))
+    assert.ok(text.includes('这条已归属主，不能改写'))
+    assert.doesNotMatch(text, /type: 收/)
+    assert.ok(text.includes('写入别的类型'))
+  } finally { w.store.close() }
 })
