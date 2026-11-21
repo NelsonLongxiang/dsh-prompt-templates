@@ -58,6 +58,7 @@ DSH（DeepSeek Harness）的提示词模板库插件：悬浮面板 + 右侧栏 
 - docs/spec-event-inject.md：事件触发提醒设计与实现差异（第 9 节）。
 - docs/test-plan-phase-c.md：事件提醒的真实宿主与行为验证流程（Phase C，尚未执行）。
 - docs/evolution-default.md、docs/library-packs.md、docs/self-check.md：0.15–0.17 各功能的合同、导入步骤与回退。
+- docs/spec-lesson-inject.md：体会（消化写入与情境唤起）的规格草案，未实现；实现前待属主裁定第 10 节。
 - docs/release-notes-<版本>.md：各版发布说明（同文进 GitHub Release）。
 - 技能目录：dsh-plugin-dev-test（开发回路）、双 registry 发布、开源隐私纪律相关技能。
 
