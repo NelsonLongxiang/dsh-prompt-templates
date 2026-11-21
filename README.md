@@ -29,6 +29,9 @@ No Python toolchain required — since 0.3.0 the host half persists templates th
 - **Search & scroll** — filter the list as you type, reliable scrolling for long collections
 - **Drag to reposition, double-click to reset** — the panel remembers where you put it
 - **Durable by design** — templates persist in SQLite through a pure-TS store (`node:sqlite`) owned by the host plugin and closed with its lifecycle
+- **Card library and intervention log** (0.16) — templates carry an effective version; version packs (`packs/`) import as stored versions without switching what is live; every time template content enters a session a durable record keeps id, version, text hash, session, turn and step, never the bodies. See [library packs](docs/library-packs.md)
+- **Wrap-up self-check and card casting** (0.17, both off by default) — `selfCheck.enabled` adds one self-check step before a working session would end its turn; `cast.enabled` lets named plugins cast one card into a session. See [the self-check contract](docs/self-check.md)
+- **Lessons and handoff notice** (0.18, both off by default) — `lessons.enabled` lets a session write one- or two-sentence lessons (its own session templates under the 体会 category) that are recalled in matching situations; once an event-reminder episode exhausts its reminders and repeats, one handoff notice asks the session to stop self-correcting and hand over. Details: `docs/spec-lesson-inject.md` and `docs/release-notes-0.18.0.md` in the source repository
 
 ## Sharing (cross-instance copy)
 
@@ -45,10 +48,10 @@ Each template (global or session-scoped) carries its own **switch + interval N**
 
 - The injected content arrives as one durable `<system-reminder>` user message recorded in the session log (source kind `prompt-template-schedule`), so replays and audits reconstruct exactly what the model saw
 - A boundary round is never injected twice, even across restarts or step retries
-- Config persists in the plugin's SQLite database (schema v6, including evolution enrollment); `injectEnabled: false` in the patch config silences **scheduled injection only** — event reminders (below) have their own independent master switch `eventInject.enabled`
+- Config persists in the plugin's SQLite database (database schema v11 as of 0.18.0, including evolution enrollment; the gate is `SCHEMA_VERSION` in `src/store.ts`); `injectEnabled: false` in the patch config silences **scheduled injection only** — event reminders (below) have their own independent master switch `eventInject.enabled`
 - Each template picks a delivery mode: **silent** (default, model context only) or **visible in chat** (rendered as a normal user message with a ⚙️ scheduled-injection header)
 
-## Atelier evolution checkpoint (unreleased)
+## Atelier evolution checkpoint (since 0.15.0)
 
 A session-scoped `工坊·演化自评估` template is provisioned once by default and scheduled every 100 user turns. Existing same-name global/session templates and user edits, disabling and deletion are preserved. This is a reminder, not migration execution or authorization. Set `evolutionAssessmentEnabled: false` to opt out. See [the lifecycle, counting and rollback contract](docs/evolution-default.md).
 
@@ -78,7 +81,7 @@ Placeholders `{{date}}` `{{time}}` `{{datetime}}` `{{weekday}}` `{{session}}` `{
 ```text
 src/                  TypeScript plugin (host half + browser half)
   index.ts            Host: owns the TS store, exposes the HTTP routes
-  store.ts            Pure-TS store over node:sqlite (database schema v6)
+  store.ts            Pure-TS store over node:sqlite (database schema v11)
   inject.ts           Host: scheduled auto-injection on the pre-step waterfall
   invariant.ts        Host: registers the package's invariant companion
   cli/                The sync CLI (export/diff/merge/import) shipped as bin
@@ -93,7 +96,7 @@ The store is pure TS inside the host half; no child process is spawned.
 
 ## Security
 
-- Template **content** reaches a model request in exactly two ways: as ordinary user text the user chose to insert, or through scheduled auto-injection. User templates follow their saved switches; the unreleased Atelier default is enabled at once-per-session creation unless the deployment opts out, and remains editable/disableable/deletable by the user. Each delivered injection is a durable session event. Event reminders are a separate channel: they carry no template content, and their switch is independent of scheduled injection
+- Template **content** reaches a model request in exactly two ways: as ordinary user text the user chose to insert, or through scheduled auto-injection. User templates follow their saved switches; the Atelier evolution default (shipped since 0.15.0) is enabled at once-per-session creation unless the deployment opts out, and remains editable/disableable/deletable by the user. Each delivered injection is a durable session event. The wrap-up self-check (`selfCheck.enabled`), card casting (`cast.enabled`) and lessons (`lessons.enabled`) are further injection paths, each off by default and gated by deployment config. Event reminders are a separate channel: they carry no template content, and their switch is independent of scheduled injection
 - The panel talks to the host store over the Host's plugin routes only; no extra listener, no outbound network
 
 ## Database sync CLI
@@ -175,6 +178,7 @@ Pull-back verification uses ignored `tmp/release/run-*/` owned by this invocatio
 
 - **Session templates need a current session** — with no session open, only global templates are reachable
 - **Injections don't render in the chat transcript** — the DSH chat view omits injected context rows by design (they carry a non-`user` message source); see them in the trajectory tab. Templates with delivery mode **visible** are the exception: they render as ordinary user messages
+- **Self-check, casting, lessons and handoff are not yet verified on a real host** — model behavior is NOT_RUN; validate in a separate `DSH_HOME` first ([test plan](docs/test-plan-phase-c.md) §7). Panel-sent cards still record no turn or step
 - **Use the published npm build for normal installation** — Git/source installations run a `prepare` build and require the development toolchain and dependencies. The documented verification gate uses public `@deepseek-ai/*` packages and requires no harness source checkout; direct Git-URL installation is not verified by that gate. Use `dsh plugin --profile <name> add @nelsonlongxiang/dsh-prompt-templates` for a prebuilt package.
 
 ## License

@@ -29,6 +29,9 @@ dsh plugin --profile web add @nelsonlongxiang/dsh-prompt-templates
 - **搜索与滚动**——边输入边过滤，长列表滚动可靠
 - **拖拽定位、双击复位**——面板记住你放的位置
 - **设计即持久**——模板经纯 TS 存储（`node:sqlite`）落 SQLite，由 host 插件持有并随其生命周期关闭
+- **卡库与介入记录**（0.16）——模板带生效版本；版本包（`packs/`）导入只存为新版本，不切换正在用的版本；模板内容每次进入会话都留一条持久记录（标识、版本、文字哈希、会话、轮、步），不记正文。见[卡库导入](docs/library-packs.md)
+- **收尾自查与投卡**（0.17，均默认关）——`selfCheck.enabled` 让有活的会话在本来结束的一轮多走一步自查；`cast.enabled` 让点名的插件向会话投一张卡。见[收尾自查合同](docs/self-check.md)
+- **体会与交接通知**（0.18，均默认关）——`lessons.enabled` 让会话写下一两句体会（存为它自己的会话模板，归「体会」分类），同类情境下带回；事件提醒次数用完后同一问题再重复，发一次交接通知，请会话停止自行反复修正、交给属主。细节见源码仓的 `docs/spec-lesson-inject.md` 与 `docs/release-notes-0.18.0.md`
 
 ## 分享（跨实例复制）
 
@@ -45,10 +48,10 @@ dsh plugin --profile web add @nelsonlongxiang/dsh-prompt-templates
 
 - 注入内容是一条持久的 `<system-reminder>` 用户消息，记入会话日志（source kind `prompt-template-schedule`），重放与审计可精确还原模型所见
 - 同一边界轮绝不重复注入——跨重启、跨步骤重试都不例外
-- 配置持久化在插件 SQLite 库（schema v6，含演化模板登记）；patch 配置里的 `injectEnabled: false` 只关**定时注入**——事件提醒（见下）有独立总开关 `eventInject.enabled`，互不控制
+- 配置持久化在插件 SQLite 库（0.18.0 起数据库 schema v11，含演化模板登记；以 `src/store.ts` 的 `SCHEMA_VERSION` 为准）；patch 配置里的 `injectEnabled: false` 只关**定时注入**——事件提醒（见下）有独立总开关 `eventInject.enabled`，互不控制
 - 每条模板可选交付模式：**静默**（默认，只进模型上下文）或**对话流可见**（以普通用户消息渲染，带 ⚙️ 定时注入标记）
 
-## Atelier 演化自评估（待发布）
+## Atelier 演化自评估（0.15.0 起）
 
 默认按会话补充 `工坊·演化自评估`，每100用户轮次调用 Agent Atelier 指引；已有同名模板、编辑、关闭和删除不被覆盖。仅提醒，不执行迁移或授予权限。可用 `evolutionAssessmentEnabled: false` 停用。首次历史边界不追补、升级/退出/回滚详见 [演化自评估合同](docs/evolution-default.md)。
 
@@ -78,7 +81,7 @@ dsh plugin --profile web add @nelsonlongxiang/dsh-prompt-templates
 ```text
 src/                  TypeScript 插件（host 面 + 浏览器面）
   index.ts            Host：持有 TS 存储，暴露 HTTP 路由
-  store.ts            纯 TS 存储（node:sqlite，数据库 schema v6）
+  store.ts            纯 TS 存储（node:sqlite，数据库 schema v11）
   inject.ts           Host：挂在 pre-step waterfall 上的定时注入
   invariant.ts        Host：注册本包的 invariant 伴生插件
   cli/                随 bin 发布的同步 CLI（export/diff/merge/import）
@@ -92,7 +95,7 @@ cordis.patch.yml      Bundle patch：挂插件行
 
 ## 安全
 
-- 模板**内容**进入模型请求只有两条路：用户主动插入的普通用户文本，或经定时注入通道。用户模板按已保存的开关执行；本分支未发布的 Atelier 默认项在每会话首次创建时启用，可由部署退出，用户仍可编辑、关闭或删除。每次实际投递均记为持久会话事件。事件提醒是独立通道：不携带模板内容，开关也与定时注入互不控制
+- 模板**内容**进入模型请求只有两条路：用户主动插入的普通用户文本，或经定时注入通道。用户模板按已保存的开关执行；0.15.0 起发布的 Atelier 演化默认项在每会话首次创建时启用，可由部署退出，用户仍可编辑、关闭或删除。每次实际投递均记为持久会话事件。收尾自查（`selfCheck.enabled`）、投卡（`cast.enabled`）、体会（`lessons.enabled`）是另外几条注入路径，均默认关、由部署配置开启。事件提醒是独立通道：不携带模板内容，开关也与定时注入互不控制
 - 面板仅经 Host 的插件路由访问 host 存储；无额外监听、无外联网络
 
 ## 数据同步 CLI
@@ -174,6 +177,7 @@ GitHub Actions（`.github/workflows/verify.yml`）在指向 `master` 的 push / 
 
 - **会话模板需要当前会话**——无会话打开时只能用全局模板
 - **注入不在对话流中渲染**——DSH 对话视图按设计省略注入的 context 行（消息 source 非 `user`）；可在轨迹 tab 查看。交付模式为"对话流可见"的模板是例外：以普通用户消息渲染
+- **自查、投卡、体会与交接通知尚未在真实宿主上验证**——模型行为 NOT_RUN；开启前先在独立 `DSH_HOME` 验证（[测试计划](docs/test-plan-phase-c.md) §7）。面板手动发卡的记录仍没有轮和步
 - **正式使用优先安装 npm 发布构建**——Git／源码安装会执行 `prepare` 构建，需要开发工具链和依赖。本仓所述验证门禁使用公网 `@deepseek-ai/*` 包，不需要 harness 源码检出；该门禁没有验证直接 Git-URL 安装。使用预构建包请运行 `dsh plugin --profile <name> add @nelsonlongxiang/dsh-prompt-templates`。
 
 ## 许可证
