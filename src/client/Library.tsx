@@ -15,6 +15,7 @@ import { listLessonPins, recordManualIntervention, setLessonPinned } from './api
 import type { TemplateLibraryFace } from './slots.ts'
 import { filterTemplateRows, searchableTemplateRows } from './filter.ts'
 import { buildSharePayload, parseSharePayload, planShareImport } from './share.ts'
+import { startLibraryRefresh } from './refresh.ts'
 import { copyShareText } from './clipboard.ts'
 import type { ShareCopyResult } from './clipboard.ts'
 import { GITHUB_REPOSITORY_URL, PLUGIN_VERSION, templateCountLabel } from './meta.ts'
@@ -421,6 +422,14 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
     void load()
     void loadCategories()
   }, [load, loadCategories])
+
+  // Rows the agent writes with its own tools (selfcheck_write, lesson_write) land server-side while this library stays
+  // mounted; re-read rows and categories on a timer, on focus and on visibility, and whenever the target session changes.
+  useEffect(() => {
+    void load()
+    void loadCategories()
+    return startLibraryRefresh(() => { void load(); void loadCategories() })
+  }, [load, loadCategories, sessionId])
 
   // Toolbar badge `⟳N`: the target session's latest scheduled injection,
   // polled every 30s (and re-read whenever the target changes). null hides
