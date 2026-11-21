@@ -17,12 +17,12 @@ function stubFetch(respond: (call: Call) => Response): { calls: Call[]; restore:
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 
 test('listLessonPins reads the session lessons route and keeps id, pinned and the RSI rounds', async () => {
-  const stub = stubFetch(() => json(200, { items: [{ id: 'a', pinned: true, recall_count: 2, churn: true, rounds: { opened: 3, closed: 2, missed: 1, kept: 1 }, recurrence: { before: { hits: 2, fails: 2 }, after: { hits: 4, fails: 1 } } }, { id: 'b', pinned: false }, { pinned: true }] }))
+  const stub = stubFetch(() => json(200, { items: [{ id: 'a', pinned: true, recall_count: 2, churn: true, evidence: 'PR #57 CI 267/267', rounds: { opened: 3, closed: 2, missed: 1, kept: 1 }, recurrence: { before: { hits: 2, fails: 2 }, after: { hits: 4, fails: 1 } } }, { id: 'b', pinned: false }, { pinned: true }] }))
   try {
     // Owner 2026-11-21: rounds carry verified keeps; churn is a hint (older hosts: zero and false).
     assert.deepEqual(await listLessonPins('sess 1'), [
-      { id: 'a', pinned: true, rounds: { opened: 3, closed: 2, missed: 1, kept: 1 }, churn: true, recurrence: { before: { hits: 2, fails: 2 }, after: { hits: 4, fails: 1 } } },
-      { id: 'b', pinned: false, rounds: { opened: 0, closed: 0, missed: 0, kept: 0 }, churn: false, recurrence: { before: { hits: 0, fails: 0 }, after: { hits: 0, fails: 0 } } },
+      { id: 'a', pinned: true, rounds: { opened: 3, closed: 2, missed: 1, kept: 1 }, churn: true, recurrence: { before: { hits: 2, fails: 2 }, after: { hits: 4, fails: 1 } }, evidence: 'PR #57 CI 267/267' },
+      { id: 'b', pinned: false, rounds: { opened: 0, closed: 0, missed: 0, kept: 0 }, churn: false, recurrence: { before: { hits: 0, fails: 0 }, after: { hits: 0, fails: 0 } }, evidence: null },
     ])
     assert.equal(stub.calls[0].url, '/plugins/dsh-prompt-templates/lessons?session_id=sess%201')
   } finally { stub.restore() }

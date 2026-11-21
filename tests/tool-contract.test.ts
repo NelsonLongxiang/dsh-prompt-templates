@@ -82,6 +82,10 @@ test('the plugin\'s own tools reach the model with an object parameter schema na
         assert.ok(parameters.required?.includes(field), `${name} requires ${field}`)
       }
     }
+    // B2b: evidence is a declared, optional property of lesson_write as the model sees it.
+    const write = byName.get('lesson_write')!
+    assert.ok(write.properties !== undefined && 'evidence' in write.properties, 'lesson_write declares evidence')
+    assert.ok(!write.required?.includes('evidence'), 'evidence is optional')
   } finally {
     await (fiber as unknown as { dispose: () => Promise<void> }).dispose()
     rmSync(dir, { recursive: true, force: true })
@@ -103,7 +107,7 @@ test('lesson_write tells the model what a good lesson is, as the model sees it (
     const description = tools.schemas().find(s => s.name === 'lesson_write')?.description ?? ''
     for (const phrase of ['read references/lessons.md', 'really happened', 'says why it hurt', 'what to do first next time',
       'is transferable', 'is short', 'can be checked', 'judgement, not authority', 'not a slogan', 'not filler',
-      'by the link where the problem arose, not where it was noticed']) {
+      'by the link where the problem arose, not where it was noticed', 'add it as evidence; it is optional']) {
       assert.ok(description.includes(phrase), `lesson_write description includes "${phrase}"`)
     }
   } finally {

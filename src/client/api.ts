@@ -186,6 +186,8 @@ export interface LessonPinWire {
   readonly churn: boolean
   /** B4a: calls in this lesson's situation before its first recall and after, and how many failed (zeros on older hosts). */
   readonly recurrence: RecurrenceWire
+  /** B2b: the evidence attached to the lesson's current text, or null. */
+  readonly evidence: string | null
 }
 
 /** Matching calls and their failures, before a lesson's first recall and after it. */
@@ -199,7 +201,7 @@ export async function listLessonPins(sessionId: string): Promise<LessonPinWire[]
   try {
     const response = await fetch(`${BASE}/lessons?session_id=${encodeURIComponent(sessionId)}`, { cache: 'no-store' })
     if (!response.ok) return []
-    const body = await response.json() as { items?: Array<{ id?: unknown; pinned?: unknown; churn?: unknown; recurrence?: { before?: { hits?: unknown; fails?: unknown }; after?: { hits?: unknown; fails?: unknown } }; rounds?: { opened?: unknown; closed?: unknown; missed?: unknown; kept?: unknown } }> }
+    const body = await response.json() as { items?: Array<{ id?: unknown; pinned?: unknown; churn?: unknown; evidence?: unknown; recurrence?: { before?: { hits?: unknown; fails?: unknown }; after?: { hits?: unknown; fails?: unknown } }; rounds?: { opened?: unknown; closed?: unknown; missed?: unknown; kept?: unknown } }> }
     const n = (v: unknown): number => typeof v === 'number' && Number.isFinite(v) ? v : 0
     return (body.items ?? []).filter(item => typeof item.id === 'string').map(item => ({
       id: item.id as string, pinned: item.pinned === true,
@@ -209,6 +211,7 @@ export async function listLessonPins(sessionId: string): Promise<LessonPinWire[]
         before: { hits: n(item.recurrence?.before?.hits), fails: n(item.recurrence?.before?.fails) },
         after: { hits: n(item.recurrence?.after?.hits), fails: n(item.recurrence?.after?.fails) },
       },
+      evidence: typeof item.evidence === 'string' && item.evidence !== '' ? item.evidence : null,
     }))
   } catch {
     return []
