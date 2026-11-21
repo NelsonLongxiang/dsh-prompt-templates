@@ -20,6 +20,7 @@ import type { UserMessage } from '@deepseek-ai/dsh-session'
 import type { DatabaseSync } from 'node:sqlite'
 import { oneLine } from './cast.ts'
 import type { TemplateStore } from './store.ts'
+import { registerWhenToolsReady } from './tool-registry.ts'
 
 /** The fixed part's version label; it moves only with the standard text. */
 export const FIXED_VERSION = 'selfcheck-fixed-1'
@@ -277,8 +278,7 @@ export function registerSelfCheck(ctx: Context, store: () => TemplateStore, enab
   })
 
   // The two tools, when this host composes a tool registry. The session is the calling agent's, never a parameter.
-  const tools = ctx.get('tools' as never) as { register?: (tool: unknown) => unknown } | undefined
-  if (typeof tools?.register === 'function') {
+  registerWhenToolsReady(ctx, 'self-check', (tools) => {
     const sessionOf = (exec: unknown): string | undefined => { const agent = (exec as { agent?: AgentLike }).agent; return agent === undefined ? undefined : String(agent.session.header.id) }
     tools.register({
       name: 'selfcheck_write',
@@ -317,6 +317,6 @@ export function registerSelfCheck(ctx: Context, store: () => TemplateStore, enab
         return { ok: true }
       },
     })
-  }
+  })
   return { log }
 }
