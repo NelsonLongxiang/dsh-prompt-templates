@@ -147,6 +147,8 @@ pnpm verify:release    # pnpm verify 的别名
 
 推送前跑 `pnpm verify`。它不启动 DeepSeek Harness 进程，顺序为：
 
+> **Windows：从 Git Bash 运行。** 若父 shell 是 PowerShell/cmd，`bash` 会先解析到 WSL——WSL 剥掉 Windows 环境变量，release-script 离线套件（`tests/release-script.test.ts`）的夹具会因 `RELEASE_FIXTURE_STUBS` 为空而整套跳过并提示原因（#31）；从 Git Bash 运行则 40 项全跑。
+
 1. **typecheck** — host 与 client 两个工程的 `tsc --noEmit`
 2. **test:cli** — `node:test` 跑 `tests/*.test.ts`：CLI 同步、store 规则、schema 迁移、注入纯函数、client 过滤，以及进程内 host 检查。该检查把 `apply()` 挂到 Cordis 上，用替身 web server 驱动 `/plugins/dsh-prompt-templates` 路由（含 inject-status），并对一份假会话日志跑 `agent/pre-step` 监听器
 3. **build** — host `tsc`、client `tsc`、tsdown 浏览器 bundle
