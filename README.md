@@ -148,6 +148,8 @@ pnpm verify:release    # alias of pnpm verify
 
 `pnpm verify` is the gate to run before pushing. It does not boot a DeepSeek Harness process. In order:
 
+> **Windows: run it from Git Bash.** Under a PowerShell/cmd parent shell `bash` resolves to WSL first, which strips Windows env vars; the offline release-script suite (`tests/release-script.test.ts`) then skips itself with one explanatory line (`RELEASE_FIXTURE_STUBS` arrives empty, #31). From Git Bash all 40 run.
+
 1. **typecheck** — `tsc --noEmit` for the host project and the client project
 2. **test:cli** — `node:test` over `tests/*.test.ts`: CLI sync, store rules, schema migration, inject helpers, client filters, and an in-process host check. That check mounts `apply()` on Cordis with a stand-in web server, drives the `/plugins/dsh-prompt-templates` routes (including inject-status), and runs the `agent/pre-step` listener against a fake session log
 3. **build** — host `tsc`, client `tsc`, and the tsdown browser bundle
