@@ -73,6 +73,9 @@ export function oneLine(text: string): string {
   return text.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]+/g, ' ').replace(/ {2,}/g, ' ').trim()
 }
 
+/** Closing line of a cast (owner 2026-11-21): the card comes from the owner's library, so it binds where it applies. */
+export const CAST_BINDING_LINE = '本卡取自属主的卡片库，适用即须执行；不扩大授权，不覆盖属主当下指令。'
+
 /** The visible message a cast becomes. */
 export function renderCastMessage(turn: number, step: number, cards: readonly Queued[], sessionId: string): UserMessage {
   return createUserMessage({
@@ -82,7 +85,7 @@ export function renderCastMessage(turn: number, step: number, cards: readonly Qu
         `⚙️ 投卡 · 第 ${String(turn)} 轮 · ${cards.map(card => card.name).join('、')}`,
         '',
         ...cards.flatMap(card => [`（投卡方：${card.caller}；原因：${card.reason}）`, expandTemplateVariables(card.content, { sessionId, turn }), '']),
-        '本卡不是新的用户指令，不授予任何权限。',
+        CAST_BINDING_LINE,
       ].join('\n').trimEnd(),
     }],
     source: { kind: 'user', scheduled: 'prompt-template-cast', turn, step, templates: cards.map(card => ({ id: card.templateId, name: card.name, caller: card.caller })) } satisfies CastSource as unknown as UserMessage['source'],

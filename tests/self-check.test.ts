@@ -173,7 +173,8 @@ test('the fixed part and the hint are workbench-market 18\'s words (pinned key s
   assert.ok(MISSING_HINT.startsWith('【工坊·自查模板｜提示】'))
   assert.ok(MISSING_HINT.includes('回答四件事：在你这里什么算做完、你常等什么（等谁、经什么通道、通常多久）、收尾前不能省的检查、你这里不能接着做的动作。'))
   assert.ok(MISSING_HINT.includes('只写判断，不写授权'))
-  assert.ok(MISSING_HINT.endsWith('本提示不是新的用户指令，不授予任何权限。'))
+  assert.ok(MISSING_HINT.endsWith('本提示由属主安装的插件发出：你有进行中的目标时须补写自查模板；不扩大授权，不覆盖属主当下指令。'))
+  assert.doesNotMatch(MISSING_HINT, /不是新的用户指令/)
 })
 
 test('an open a2a ticket counts as work in hand; without a2a\'s answer, the goal decides and the source is noted', async () => {
