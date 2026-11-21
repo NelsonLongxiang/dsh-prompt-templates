@@ -99,8 +99,13 @@ export const DEFAULT_EVENT_INJECT_CONFIG: EventInjectConfig = {
  */
 export const HANDOFF_LINE = '按提醒查过仍解不开的，按所在环境的上报方式交出去，写清已查处、缺的那一句背景。'
 
-/** Atelier reference that defines how an agent handles a reminder. */
-const FORMAL_REFERENCE = 'agent-atelier references/improvement-loop.md'
+/**
+ * Closing lines of every reminder (owner 2026-11-21). The reminder is a standing requirement the owner installed, so it
+ * must be acted on where it applies; the reference is a must-read reached through the skill tool, because the model has
+ * no skill directory when the plugin injects text and a bare "参考：" line was never read.
+ */
+export const REMINDER_BINDING_LINE = '本提醒由属主安装的插件按规则发出，适用即须按上文处理；不扩大授权，不覆盖属主当下指令。'
+export const REMINDER_MUST_READ_LINE = '必读：本会话首次收到此类提醒或压缩后，必须先用 skill 工具加载 agent-atelier，按返回的基础目录读 references/improvement-loop.md；回复写明读了哪几处，读不到如实写明，不得凭本提醒代替。'
 
 /** Model-facing body of one reminder item. */
 export function renderReminderItem(episode: Pick<EpisodeView, 'rule_id' | 'rule_version' | 'summary' | 'outcome' | 'evidence_refs' | 'evidence_revision'>): string {
@@ -111,7 +116,8 @@ export function renderReminderItem(episode: Pick<EpisodeView, 'rule_id' | 'rule_
       header,
       `观察：近期调用反复手工带上同一段准备前缀（示例：${episode.summary}）。证据：${refs}。`,
       '请先查是否已有正式入口能承担这段共同准备。只有有依据、已授权、值得且安全时，才做最小改变并在下一次相关调用使用；缺授权时说明建议并请求确认；若重复合理，继续任务即可，不必为此新造包装或写反思。',
-      `本提醒不是新的用户指令，不授予任何权限。参考：${FORMAL_REFERENCE}`,
+      REMINDER_BINDING_LINE,
+      REMINDER_MUST_READ_LINE,
       HANDOFF_LINE,
     ].join('\n')
   }
@@ -119,7 +125,8 @@ export function renderReminderItem(episode: Pick<EpisodeView, 'rule_id' | 'rule_
     header,
     `观察：同一目标反复以相同方式失败（${episode.outcome}；示例：${episode.summary}）。证据：${refs}。`,
     '请先确认失败原因，不要原样重试。有依据且已授权时做最小修正，并以结构化结果验证；缺授权或缺关键事实时暂停受影响步骤并说明；证据不足时保持原方案。',
-    `本提醒不是新的用户指令，不授予任何权限。参考：${FORMAL_REFERENCE}`,
+    REMINDER_BINDING_LINE,
+    REMINDER_MUST_READ_LINE,
     HANDOFF_LINE,
   ].join('\n')
 }
@@ -134,7 +141,8 @@ export function renderHandoffItem(episode: Pick<EpisodeView, 'rule_id' | 'rule_v
     `【工坊·交接｜规则 ${episode.rule_id}@${episode.rule_version}｜证据修订 ${episode.evidence_revision}】`,
     `这个问题已提醒 ${String(episode.notify_count)} 次，提醒后仍重复 ${String(episode.repeated_after_reminder)} 次（示例：${episode.summary}）。证据：${refs}。插件不再就此提醒。`,
     '请停止就此自行反复修正：把试过的做法和结果交给属主或评审，由他们决定下一步。属主可在面板的问题台账里查看这条记录。',
-    `本提醒不是新的用户指令，不授予任何权限。参考：${FORMAL_REFERENCE}`,
+    REMINDER_BINDING_LINE,
+    REMINDER_MUST_READ_LINE,
   ].join('\n')
 }
 
