@@ -11,7 +11,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { IconCopyOutlineRegular, IconDownloadOutlineRegular, IconEditOutlineRegular, IconGlobeOutlineRegular, IconPlusOutlineRegular, IconQueueOutlineRegular, IconSendOutlineRegular, IconTrashOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { CategoryView, InjectionHistoryEntry, InjectionStatusView, TemplateInjectMode, TemplateView } from '../types.ts'
 import type { EventEpisodeWire, EventPolicyWire } from './api.ts'
-import { recordManualIntervention } from './api.ts'
+import { listLessonPins, recordManualIntervention, setLessonPinned } from './api.ts'
 import type { TemplateLibraryFace } from './slots.ts'
 import { filterTemplateRows, searchableTemplateRows } from './filter.ts'
 import { buildSharePayload, parseSharePayload, planShareImport } from './share.ts'
@@ -36,6 +36,8 @@ interface RowProps {
   /** Copy the row as a one-template clipboard share payload. */
   onShare: (template: TemplateView, trigger: HTMLButtonElement) => void
   onMakeGlobal?: (id: string) => void
+  /** Present only for the session's own lessons (体会): the owner pins them. */
+  pin?: { readonly pinned: boolean; readonly onToggle: () => void }
   /** Flip the row's auto-inject switch (rows without an interval route to the edit form). */
   onToggleInject: (template: TemplateView) => void
   sortable: boolean
@@ -44,7 +46,7 @@ interface RowProps {
   t: (key: PromptTemplateKey) => string
 }
 
-function TemplateRow({ template, onInsert, onSend, onInterject, onEdit, onDelete, onShare, onMakeGlobal, onToggleInject, sortable, onDragStart, onDropOn, t }: RowProps) {
+function TemplateRow({ template, onInsert, onSend, onInterject, onEdit, onDelete, onShare, onMakeGlobal, pin, onToggleInject, sortable, onDragStart, onDropOn, t }: RowProps) {
   const injectTitle = template.inject_enabled && template.inject_every !== null
     ? `${t('panel.inject')} · ${template.inject_every}${template.mode === 'visible' ? ' · ' + t('panel.modeVisible') : ''}`
     : t('panel.inject')
@@ -113,6 +115,18 @@ function TemplateRow({ template, onInsert, onSend, onInterject, onEdit, onDelete
           title={t('panel.makeGlobal')}
         >
           <IconGlobeOutlineRegular size={12} />
+        </button>
+      )}
+      {pin !== undefined && (
+        <button
+          type="button"
+          className={pin.pinned ? css.injectBtnActive : css.injectBtn}
+          onClick={() => { pin.onToggle() }}
+          aria-label={pin.pinned ? t('panel.unpin') : t('panel.pin')}
+          aria-pressed={pin.pinned}
+          title={pin.pinned ? t('panel.unpin') : t('panel.pin')}
+        >
+          📌
         </button>
       )}
       <button
@@ -504,6 +518,19 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
     setManualShare(null)
     return () => { shareRequest.current += 1 }
   }, [sessionId])
+  // 体会 pins (phase 2): only the session's own lessons get the toggle; the host enforces the quota.
+  const [lessonPins, setLessonPins] = useState<ReadonlyMap<string, boolean>>(new Map())
+  const loadLessonPins = useCallback(async () => {
+    if (sessionId === null) { setLessonPins(new Map()); return }
+    const items = await listLessonPins(sessionId)
+    setLessonPins(new Map(items.map(item => [item.id, item.pinned])))
+  }, [sessionId])
+  useEffect(() => { void loadLessonPins() }, [loadLessonPins, templates])
+  const handleTogglePin = useCallback(async (id: string) => {
+    const result = await setLessonPinned(id, lessonPins.get(id) !== true)
+    if (!result.ok) setNotice(result.error.code === 'pinned-full' ? t('panel.pinFull') : result.error.message)
+    await loadLessonPins()
+  }, [lessonPins, loadLessonPins, t])
   useEffect(() => {
     if (notice === null) return
     const timer = setTimeout(() => { setNotice(null) }, 3000)
@@ -736,6 +763,7 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
           onDelete={(id) => { void handleRemove(id) }}
           onShare={(tpl, trigger) => { void handleShareTemplate(tpl, trigger) }}
           onMakeGlobal={row.scope === 'session' ? (id) => { void handleMakeGlobal(id) } : undefined}
+          pin={lessonPins.has(row.id) ? { pinned: lessonPins.get(row.id) === true, onToggle: () => { void handleTogglePin(row.id) } } : undefined}
           onToggleInject={(tpl) => { void handleToggleInject(tpl) }}
           sortable={needle === ''}
           onDragStart={(id) => { dragRowRef.current = id }}

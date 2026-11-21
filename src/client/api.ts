@@ -176,6 +176,29 @@ export async function eventEpisodes(sessionId: string): Promise<EventEpisodeWire
   return [...body.items ?? []]
 }
 
+/** One lesson's pin state as the panel needs it (体会, schema v11). */
+export interface LessonPinWire {
+  readonly id: string
+  readonly pinned: boolean
+}
+
+/** Load a session's lessons with their pin state (empty when none, unavailable, or the host predates lessons). */
+export async function listLessonPins(sessionId: string): Promise<LessonPinWire[]> {
+  try {
+    const response = await fetch(`${BASE}/lessons?session_id=${encodeURIComponent(sessionId)}`, { cache: 'no-store' })
+    if (!response.ok) return []
+    const body = await response.json() as { items?: Array<{ id?: unknown; pinned?: unknown }> }
+    return (body.items ?? []).filter(item => typeof item.id === 'string').map(item => ({ id: item.id as string, pinned: item.pinned === true }))
+  } catch {
+    return []
+  }
+}
+
+/** The owner pins or unpins one lesson; a full pin quota settles as error code `pinned-full`. */
+export function setLessonPinned(templateId: string, pinned: boolean): Promise<TemplateActionResult> {
+  return mutate('PATCH', `/lessons/${encodeURIComponent(templateId)}`, { pinned })
+}
+
 /** Run one mutating request and settle it into the action envelope. */
 async function mutate(method: string, path: string, body?: unknown): Promise<TemplateActionResult> {
   try {
