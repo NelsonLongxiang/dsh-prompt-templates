@@ -11,7 +11,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { IconCopyOutlineRegular, IconDownloadOutlineRegular, IconEditOutlineRegular, IconGlobeOutlineRegular, IconPlusOutlineRegular, IconQueueOutlineRegular, IconSendOutlineRegular, IconTrashOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { CategoryView, InjectionHistoryEntry, InjectionStatusView, TemplateInjectMode, TemplateView } from '../types.ts'
 import type { EventEpisodeWire, EventPolicyWire } from './api.ts'
-import { listLessonPins, recordManualIntervention, setLessonPinned } from './api.ts'
+import { decideLessonType, listLessonPins, listPendingLessonTypes, recordManualIntervention, setLessonPinned, type LessonPinWire, type PendingLessonTypeWire } from './api.ts'
 import type { TemplateLibraryFace } from './slots.ts'
 import { filterTemplateRows, searchableTemplateRows } from './filter.ts'
 import { buildSharePayload, parseSharePayload, planShareImport } from './share.ts'
@@ -38,7 +38,7 @@ interface RowProps {
   onShare: (template: TemplateView, trigger: HTMLButtonElement) => void
   onMakeGlobal?: (id: string) => void
   /** Present only for the session's own lessons (体会): the owner pins them. */
-  pin?: { readonly pinned: boolean; readonly onToggle: () => void }
+  pin?: { readonly pinned: boolean; readonly onToggle: () => void; readonly rounds?: { readonly opened: number; readonly closed: number; readonly missed: number } }
   /** Flip the row's auto-inject switch (rows without an interval route to the edit form). */
   onToggleInject: (template: TemplateView) => void
   sortable: boolean
@@ -129,6 +129,14 @@ function TemplateRow({ template, onInsert, onSend, onInterject, onEdit, onDelete
         >
           📌
         </button>
+      )}
+      {pin?.rounds !== undefined && pin.rounds.opened > 0 && (
+        <span
+          className={css.injectBadge}
+          title={t('panel.rounds').replace('{opened}', String(pin.rounds.opened)).replace('{closed}', String(pin.rounds.closed)).replace('{missed}', String(pin.rounds.missed))}
+        >
+          RSI {pin.rounds.closed}/{pin.rounds.opened}
+        </span>
       )}
       <button
         type="button"
@@ -529,12 +537,27 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
   }, [sessionId])
   // 体会 pins (phase 2): only the session's own lessons get the toggle; the host enforces the quota.
   const [lessonPins, setLessonPins] = useState<ReadonlyMap<string, boolean>>(new Map())
+  const [lessonRounds, setLessonRounds] = useState<ReadonlyMap<string, LessonPinWire['rounds']>>(new Map())
   const loadLessonPins = useCallback(async () => {
-    if (sessionId === null) { setLessonPins(new Map()); return }
+    if (sessionId === null) { setLessonPins(new Map()); setLessonRounds(new Map()); return }
     const items = await listLessonPins(sessionId)
     setLessonPins(new Map(items.map(item => [item.id, item.pinned])))
+    setLessonRounds(new Map(items.map(item => [item.id, item.rounds])))
   }, [sessionId])
   useEffect(() => { void loadLessonPins() }, [loadLessonPins, templates])
+
+  // Lesson types the session proposed (lesson_type_propose): only the owner approves them, here.
+  const [pendingTypes, setPendingTypes] = useState<readonly PendingLessonTypeWire[]>([])
+  const loadPendingTypes = useCallback(async () => {
+    setPendingTypes(sessionId === null ? [] : await listPendingLessonTypes(sessionId))
+  }, [sessionId])
+  useEffect(() => { void loadPendingTypes() }, [loadPendingTypes, templates])
+  const handleDecideType = useCallback(async (name: string, approved: boolean) => {
+    if (sessionId === null) return
+    const result = await decideLessonType(sessionId, name, approved)
+    if (!result.ok) setNotice(result.error.message)
+    await loadPendingTypes()
+  }, [sessionId, loadPendingTypes])
   const handleTogglePin = useCallback(async (id: string) => {
     const result = await setLessonPinned(id, lessonPins.get(id) !== true)
     if (!result.ok) setNotice(result.error.code === 'pinned-full' ? t('panel.pinFull') : result.error.message)
@@ -772,7 +795,7 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
           onDelete={(id) => { void handleRemove(id) }}
           onShare={(tpl, trigger) => { void handleShareTemplate(tpl, trigger) }}
           onMakeGlobal={row.scope === 'session' ? (id) => { void handleMakeGlobal(id) } : undefined}
-          pin={lessonPins.has(row.id) ? { pinned: lessonPins.get(row.id) === true, onToggle: () => { void handleTogglePin(row.id) } } : undefined}
+          pin={lessonPins.has(row.id) ? { pinned: lessonPins.get(row.id) === true, onToggle: () => { void handleTogglePin(row.id) }, rounds: lessonRounds.get(row.id) } : undefined}
           onToggleInject={(tpl) => { void handleToggleInject(tpl) }}
           sortable={needle === ''}
           onDragStart={(id) => { dragRowRef.current = id }}
@@ -1052,6 +1075,13 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
         {rowError !== null && (
           <div className={css.error} role="alert" data-prompt-row-error>{t('panel.error')} · {rowError}</div>
         )}
+        {pendingTypes.map(type => (
+          <div key={type.name} className={css.notice} data-prompt-lesson-type={type.name}>
+            {t('panel.typeProposed')}「{type.name}」：{type.description}{' '}
+            <button type="button" onClick={() => { void handleDecideType(type.name, true) }}>{t('panel.typeApprove')}</button>{' '}
+            <button type="button" onClick={() => { void handleDecideType(type.name, false) }}>{t('panel.typeReject')}</button>
+          </div>
+        ))}
         {/* Empty states: the whole library is empty, or the active tab (with
             or without a search needle) holds no rows — both show the empty
             copy instead of a silently missing list area. */}

@@ -26,6 +26,7 @@
  *   POST   /plugins/dsh-prompt-templates/interventions/manual       → { intervention } (the panel's insert/send/interject)
  *   GET    /plugins/dsh-prompt-templates/lessons?session_id=        → { items, log, schema } (read-only, v11; no lesson text)
  *   PATCH  /plugins/dsh-prompt-templates/lessons/:template_id       { pinned } → { id, pinned } (the owner pins; phase 2)
+ *   PATCH  /plugins/dsh-prompt-templates/lesson-types/:name?session_id= { approved } → { name, status } (the owner decides a proposed type)
  *
  * @module dsh-prompt-templates
  */
@@ -47,7 +48,7 @@ import { DEFAULT_INJECT_MAX_EVERY, SCHEMA_VERSION, TemplateRuleError, TemplateSt
 import { INTERVENTION_SOURCES, MANUAL_METHODS, contentDigest, type InterventionSource, type ManualMethod } from './interventions.ts'
 import { registerCast, type PromptTemplatesService } from './cast.ts'
 import { registerSelfCheck } from './self-check.ts'
-import { DEFAULT_LESSONS_CONFIG, lessonsOf, pinLesson, registerLessons, type LessonsConfig } from './lessons.ts'
+import { BUILTIN_LESSON_TYPES, DEFAULT_LESSONS_CONFIG, decideLessonType, lessonsOf, pinLesson, registerLessons, type LessonsConfig } from './lessons.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -273,10 +274,13 @@ async function handle(
         const store = client()
         const items = lessonsOf(store, sessionId).map(lesson => {
           const cue = store.lessons.cue(lesson.id)
-          return { id: lesson.id, index: lesson.index, version: lesson.version, content_sha256: contentDigest(lesson.content),
-            origin: cue?.origin ?? null, pinned: cue?.pinned === 1, recall_count: cue?.recall_count ?? 0, last_recalled_turn: cue?.last_recalled_turn ?? null }
+          return { id: lesson.id, key: lesson.key, type: lesson.type, index: lesson.index, version: lesson.version, content_sha256: contentDigest(lesson.content),
+            origin: cue?.origin ?? null, pinned: cue?.pinned === 1, recall_count: cue?.recall_count ?? 0, last_recalled_turn: cue?.last_recalled_turn ?? null,
+            rounds: store.lessons.rounds(lesson.id) }
         })
-        return json(res, 200, { schema: SCHEMA_VERSION, items, log: store.lessons.log(sessionId, Number(url.searchParams.get('limit') ?? 100)) })
+        const types = [...BUILTIN_LESSON_TYPES.map(t => ({ name: t.name, description: t.description, builtin: true, status: 'approved' })),
+          ...store.lessons.types(sessionId).map(t => ({ name: t.name, description: t.description, builtin: false, status: t.status, proposed_at: t.proposed_at, decided_at: t.decided_at }))]
+        return json(res, 200, { schema: SCHEMA_VERSION, items, types, log: store.lessons.log(sessionId, Number(url.searchParams.get('limit') ?? 100)) })
       }
       // Phase 2: the owner pins a lesson; it is loaded at the session's next start, resume or compaction.
       const lessonId = rest[0]
@@ -286,6 +290,20 @@ async function handle(
         const result = pinLesson(client(), decodeURIComponent(lessonId), body['pinned'], lessonsConfig().maxPinned)
         if (!result.ok) return json(res, result.code === 'not-found' ? 404 : 409, errorBody(result.code, result.error))
         return json(res, 200, { id: result.id, pinned: result.pinned })
+      }
+      return json(res, 405, errorBody('method-not-allowed', `${method} ${url.pathname}`))
+    }
+    // A session proposes its own lesson type with lesson_type_propose; only the owner approves or rejects it here.
+    if (resource === 'lesson-types') {
+      const name = rest[0]
+      if (name !== undefined && rest.length === 1 && method === 'PATCH') {
+        const sessionId = url.searchParams.get('session_id')
+        if (sessionId === null || sessionId === '') return json(res, 400, errorBody('bad-request', 'missing session_id'))
+        const body = await readJson(req)
+        if (typeof body['approved'] !== 'boolean') return json(res, 400, errorBody('bad-request', 'approved must be true or false'))
+        const result = decideLessonType(client(), sessionId, decodeURIComponent(name), body['approved'])
+        if (!result.ok) return json(res, 404, errorBody(result.code, result.error))
+        return json(res, 200, { name: decodeURIComponent(name), status: body['approved'] ? 'approved' : 'rejected' })
       }
       return json(res, 405, errorBody('method-not-allowed', `${method} ${url.pathname}`))
     }

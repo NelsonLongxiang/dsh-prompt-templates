@@ -180,6 +180,8 @@ export async function eventEpisodes(sessionId: string): Promise<EventEpisodeWire
 export interface LessonPinWire {
   readonly id: string
   readonly pinned: boolean
+  /** Recall rounds (RSI): opened by a recall, closed by a write, or missed. Zeros on a host that predates rounds. */
+  readonly rounds: { readonly opened: number; readonly closed: number; readonly missed: number }
 }
 
 /** Load a session's lessons with their pin state (empty when none, unavailable, or the host predates lessons). */
@@ -187,11 +189,39 @@ export async function listLessonPins(sessionId: string): Promise<LessonPinWire[]
   try {
     const response = await fetch(`${BASE}/lessons?session_id=${encodeURIComponent(sessionId)}`, { cache: 'no-store' })
     if (!response.ok) return []
-    const body = await response.json() as { items?: Array<{ id?: unknown; pinned?: unknown }> }
-    return (body.items ?? []).filter(item => typeof item.id === 'string').map(item => ({ id: item.id as string, pinned: item.pinned === true }))
+    const body = await response.json() as { items?: Array<{ id?: unknown; pinned?: unknown; rounds?: { opened?: unknown; closed?: unknown; missed?: unknown } }> }
+    const n = (v: unknown): number => typeof v === 'number' && Number.isFinite(v) ? v : 0
+    return (body.items ?? []).filter(item => typeof item.id === 'string').map(item => ({
+      id: item.id as string, pinned: item.pinned === true,
+      rounds: { opened: n(item.rounds?.opened), closed: n(item.rounds?.closed), missed: n(item.rounds?.missed) },
+    }))
   } catch {
     return []
   }
+}
+
+/** A lesson type the session proposed (lesson_type_propose), waiting for the owner. */
+export interface PendingLessonTypeWire {
+  readonly name: string
+  readonly description: string
+}
+
+/** The session's proposed lesson types still waiting for the owner (empty when none or unavailable). */
+export async function listPendingLessonTypes(sessionId: string): Promise<PendingLessonTypeWire[]> {
+  try {
+    const response = await fetch(`${BASE}/lessons?session_id=${encodeURIComponent(sessionId)}`, { cache: 'no-store' })
+    if (!response.ok) return []
+    const body = await response.json() as { types?: Array<{ name?: unknown; description?: unknown; builtin?: unknown; status?: unknown }> }
+    return (body.types ?? []).filter(type => type.builtin !== true && type.status === 'pending' && typeof type.name === 'string')
+      .map(type => ({ name: type.name as string, description: typeof type.description === 'string' ? type.description : '' }))
+  } catch {
+    return []
+  }
+}
+
+/** The owner approves or rejects a proposed lesson type of one session. */
+export function decideLessonType(sessionId: string, name: string, approved: boolean): Promise<TemplateActionResult> {
+  return mutate('PATCH', `/lesson-types/${encodeURIComponent(name)}?session_id=${encodeURIComponent(sessionId)}`, { approved })
 }
 
 /** The owner pins or unpins one lesson; a full pin quota settles as error code `pinned-full`. */
