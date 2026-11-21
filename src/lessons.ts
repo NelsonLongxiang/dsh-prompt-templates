@@ -45,7 +45,7 @@ export const LESSON_MAX = 160
 /** Consecutive unanswered digest prompts after which prompting slows down. */
 export const PAUSE_AFTER = 3
 /** Tools whose own results never become a lesson's cue. */
-export const LESSON_SELF_TOOLS: readonly string[] = ['lesson_write', 'lesson_none', 'lesson_keep', 'lesson_timeline', 'lesson_type_propose', 'selfcheck_write', 'selfcheck_conclude']
+export const LESSON_SELF_TOOLS: readonly string[] = ['lesson_write', 'lesson_none', 'lesson_keep', 'lesson_pin', 'lesson_timeline', 'lesson_type_propose', 'selfcheck_write', 'selfcheck_conclude']
 /** Total characters of the pinned lessons loaded at one start (phase 2). */
 export const PINNED_MAX_CHARS = 400
 /** Session starts that load pinned lessons; `clear` is the user asking for a fresh start (spec §10, decision 4). */
@@ -96,7 +96,7 @@ export interface LessonsConfig {
   readonly digestCooldownTurns: number
   readonly recallCooldownTurns: number
   readonly maxRecallChars: number
-  /** Pinned lessons per session (phase 2); only the owner pins. */
+  /** Pinned lessons per session (phase 2); the owner pins on the panel, the session with lesson_pin. */
   readonly maxPinned: number
 }
 
@@ -220,7 +220,7 @@ export interface CueRow extends CueFeatures {
   readonly created_at: string
 }
 
-export type LessonLogKind = 'prompted' | 'written' | 'superseded' | 'recalled' | 'pinned-loaded' | 'card-injected' | 'round-closed' | 'round-missed' | 'type-proposed' | 'type-decided' | 'round-verdict'
+export type LessonLogKind = 'prompted' | 'written' | 'superseded' | 'recalled' | 'pinned-loaded' | 'card-injected' | 'round-closed' | 'round-missed' | 'type-proposed' | 'type-decided' | 'round-verdict' | 'self-pinned' | 'self-unpinned' | 'owner-unpinned'
 
 /** How a recall round ended: the recalled lesson rewritten, a new lesson written, or nothing by the deadline. */
 export type RoundOutcome = 'updated' | 'written' | 'none'
@@ -419,6 +419,11 @@ export class LessonStore {
     return { opened: count('recalled'), closed: count('round-closed'), missed: count('round-missed'), kept }
   }
 
+  /** Whether the owner ever unpinned this lesson (then the session cannot pin it back). */
+  ownerUnpinned(templateId: string): boolean {
+    return this.#db.prepare("SELECT 1 FROM lesson_log WHERE template_id = ? AND kind = 'owner-unpinned' LIMIT 1").get(templateId) !== undefined
+  }
+
   /** The lesson's latest recall row (open, closed or missed), if it was ever recalled. */
   latestRecall(templateId: string): LessonLogRow | undefined {
     return this.#db.prepare("SELECT * FROM lesson_log WHERE template_id = ? AND kind = 'recalled' ORDER BY seq DESC LIMIT 1").get(templateId) as unknown as LessonLogRow | undefined
@@ -602,6 +607,7 @@ export function lessonTimeline(store: TemplateStore, sessionId: string, limit = 
     if (row.kind === 'card-injected') { entry.card = (row.origin ?? '').split('@')[0]; entry.type = null }
     if ((row.kind === 'round-closed' || row.kind === 'round-missed') && (row.origin_ref ?? '').startsWith(CARD_KEY)) entry.card = row.origin_ref ?? undefined
     if (row.kind === 'type-decided') entry.outcome = row.origin_ref ?? undefined
+    if (row.kind === 'self-pinned' || row.kind === 'self-unpinned') entry.reason = row.origin ?? undefined
     if (row.kind === 'round-verdict') {
       const parsed = parseVerdict(row.origin)
       if (parsed !== null) { entry.outcome = parsed.verdict; entry.evidence = parsed.ref }
@@ -887,7 +893,8 @@ export function renderRecall(content: string, max: number, lesson?: Pick<LessonV
       ? `用完后必须用 lesson_write 改写这条（type: ${lesson.type}，写清这次用上后的修正，旧文软删除留档）或写入别的类型；照做有效、确实无可改时，用 lesson_keep 附上这次怎么验证它仍然对的证据（光说「仍然对」不算）`
       : `用完后必须用 lesson_write 改写这条（type: ${lesson.type}；这条属主改过，旧文同样留档）或写入别的类型；照做有效、确实无可改时，用 lesson_keep 附上验证证据`
   return [`【工坊·${name}｜RSI 一轮】${text}`,
-    `这是你在同类情境下写的体会，插件把这次唤起记为一轮改进：适用即须按它调整这一步；${change}，本轮或下一轮内完成，否则记为未闭合。不扩大授权，不覆盖属主当下指令。`, LESSONS_MUST_READ_LINE].join('\n')
+    `这是你在同类情境下写的体会，插件把这次唤起记为一轮改进：适用即须按它调整这一步；${change}，本轮或下一轮内完成，否则记为未闭合。不扩大授权，不覆盖属主当下指令。`,
+    LESSON_PIN_LINE, LESSONS_MUST_READ_LINE].join('\n')
 }
 
 type PinResult = { ok: true; id: string; pinned: boolean } | { ok: false; code: 'not-found' | 'pinned-full'; error: string }
@@ -904,8 +911,44 @@ export function pinLesson(store: TemplateStore, templateId: string, pinned: bool
     const count = store.lessons.cues(cue.session_id).filter(c => c.pinned === 1).length
     if (count >= max) return { ok: false, code: 'pinned-full', error: `this session already has ${String(count)} pinned lessons (max ${String(max)}); unpin one first` }
   }
+  // Owner 2026-11-21: a lesson the owner unpinned stays unpinned — the session cannot pin it back (lesson_pin).
+  if (!pinned && cue.pinned === 1) store.lessons.record({ session_id: cue.session_id, kind: 'owner-unpinned', template_id: templateId, turn: null, origin: null, origin_ref: null, content_sha256: null })
   store.lessons.setPinned(templateId, pinned)
   return { ok: true, id: templateId, pinned }
+}
+
+/** Why the session pins or unpins its own lesson: one line, this many characters. */
+export const PIN_REASON_MIN = 10
+export const PIN_REASON_MAX = 200
+
+type SelfPinResult = { ok: true; type: string; pinned: boolean } | { ok: false; code: 'type' | 'reason' | 'untested' | 'owner-unpinned' | 'pinned-full'; error: string }
+
+/**
+ * The session manages its own pinned lessons (owner 2026-11-21: 「做个工具让他自己管理」 — hundreds of sessions are
+ * too many to curate by hand). Pinning needs at least one closed round, so only a lesson that held when used is
+ * loaded at every start; the quota still applies; a lesson the owner unpinned cannot be pinned back. Unpinning is
+ * always allowed. Each change is logged with its reason.
+ */
+export function lessonPin(store: TemplateStore, sessionId: string, type: unknown, pinned: unknown, reason: string, turn: number | null, max: number): SelfPinResult {
+  const kind = typeof type === 'string' ? type.trim() : ''
+  const lesson = lessonsOf(store, sessionId).find(l => l.type === kind)
+  if (lesson === undefined) return { ok: false, code: 'type', error: 'no lesson of that type in this session' }
+  const why = oneLineText(reason)
+  const n = [...why].length
+  if (n < PIN_REASON_MIN || n > PIN_REASON_MAX) return { ok: false, code: 'reason', error: `say in ${String(PIN_REASON_MIN)}..${String(PIN_REASON_MAX)} characters why: how it held in its rounds, or why it no longer applies` }
+  const want = pinned === true
+  const cue = store.lessons.cue(lesson.id)!
+  if (want && cue.pinned !== 1) {
+    if (store.lessons.rounds(lesson.id).closed < 1) return { ok: false, code: 'untested', error: 'pin a lesson only after at least one of its recall rounds closed (it was recalled, followed, then rewritten or kept with evidence)' }
+    if (store.lessons.ownerUnpinned(lesson.id)) return { ok: false, code: 'owner-unpinned', error: 'the owner unpinned this lesson; only the owner can pin it again' }
+    const count = store.lessons.cues(sessionId).filter(c => c.pinned === 1).length
+    if (count >= max) return { ok: false, code: 'pinned-full', error: `you already have ${String(count)} pinned lessons (max ${String(max)}); unpin the one that helps least first` }
+  }
+  if (want !== (cue.pinned === 1)) {
+    store.lessons.setPinned(lesson.id, want)
+    store.lessons.record({ session_id: sessionId, kind: want ? 'self-pinned' : 'self-unpinned', template_id: lesson.id, turn, origin: why, origin_ref: null, content_sha256: contentDigest(lesson.content) })
+  }
+  return { ok: true, type: kind, pinned: want }
 }
 
 /** The pinned lessons loaded at one start: oldest first, at most `max` of them and PINNED_MAX_CHARS in all. */
@@ -924,10 +967,13 @@ export function pinnedLessons(lessons: readonly LessonView[], max: number): Less
 
 /** Body of the pinned lessons loaded at a start or after compaction. */
 export function renderPinned(contents: readonly string[]): string {
-  return [`【工坊·体会｜常驻】属主从你之前写下的体会里选了这几条，每次开工和上下文压缩之后带上：`,
+  return [`【工坊·体会｜常驻】你之前写下、经过检验后钉住的体会（属主或你自己钉的），每次开工和上下文压缩之后带上：`,
     ...contents.map((content, i) => `${String(i + 1)}. ${content}`),
-    '这些是参考，不是新的用户指令，不授予任何权限。不适用就忽略。'].join('\n')
+    '适用即须照做；不扩大授权，不覆盖属主当下指令。某条已不再适用或被更准的取代，必须用 lesson_pin 取消它（pinned: false，写明原因）。'].join('\n')
 }
+
+/** The self-management line on every recall (owner 2026-11-21: sessions curate their own pinned lessons). */
+export const LESSON_PIN_LINE = '常驻由你自己管：这一类照做后多轮有效（闭合过的轮次里有带证据的保持，唤起后同类没再失败），就用 lesson_pin 钉为常驻并写明依据；常驻满额时先取消最不常用的一条。只钉经过检验的，不为凑数钉。'
 
 function lessonMessage(mode: LessonsConfig['mode'], turn: number, step: number, bodies: readonly string[]): UserMessage {
   if (mode === 'visible') {
@@ -1136,6 +1182,22 @@ export function registerLessons(ctx: Context, store: () => TemplateStore, config
         const id = String(sessionId)
         const filter = typeof args.type === 'string' && args.type.trim() !== '' ? args.type.trim() : undefined
         return { ok: true, types: allowedTypes(store(), id), entries: lessonTimeline(store(), id, args.limit === undefined ? 20 : Number(args.limit), filter) }
+      },
+    }))
+    tools.register(withOutput({
+      name: 'lesson_pin',
+      description: 'Pin or unpin one of your own lessons. A pinned lesson is loaded at every session start, resume and after compaction (and is no longer recalled as a round). Pin only a lesson that held in use: at least one of its recall rounds must have closed, ideally with a verified keep and no failure in the same situation since. You hold at most a few pinned lessons; unpin the one that helps least to make room. Unpin a pinned lesson as soon as it no longer applies. A lesson the owner unpinned cannot be pinned back. Give the reason in one line. Acts only on the calling session.',
+      parameters: objectParameters({
+        type: { type: 'string', description: 'The type of your lesson: 收 放 找 落 验 记 续, or an approved type of your own.' },
+        pinned: { type: 'boolean', description: 'true to pin, false to unpin.' },
+        reason: { type: 'string', description: `Why, ${String(PIN_REASON_MIN)}..${String(PIN_REASON_MAX)} characters, one line: how it held in its rounds, or why it no longer applies.` },
+      }, ['type', 'pinned', 'reason']),
+      execute: async (args: { type?: unknown; pinned?: unknown; reason?: unknown }, exec: unknown) => {
+        if (!config().enabled) return { ok: false, code: 'disabled', error: 'lessons are off on this host' }
+        const sessionId = (exec as ExecLike).agent?.session.header.id
+        if (sessionId === undefined || sessionId === null) return { ok: false, code: 'session', error: 'no calling session' }
+        const id = String(sessionId)
+        return lessonPin(store(), id, args.type, args.pinned, String(args.reason ?? ''), stateOf(id).turn ?? null, config().maxPinned)
       },
     }))
     tools.register(withOutput({

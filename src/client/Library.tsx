@@ -133,7 +133,7 @@ function TemplateRow({ template, onInsert, onSend, onInterject, onEdit, onDelete
           📌
         </button>
       )}
-      {pin?.pinned === true && pin.onTasteAsk !== undefined && (
+      {pin !== undefined && pin.onTasteAsk !== undefined && (pin.pinned || (pin.rounds?.closed ?? 0) > 0) && (
         <button
           type="button"
           className={css.injectBtn}

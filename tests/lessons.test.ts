@@ -14,7 +14,7 @@ import * as host from '../src/index.ts'
 import { DEFAULT_EVENT_INJECT_CONFIG, observeToolResult, prepareEventReminders } from '../src/event-inject.ts'
 import { extractFeatures } from '../src/event-features.ts'
 import type { ObservationFeatures } from '../src/event-features.ts'
-import { CHURN_REWRITES, DEFAULT_LESSONS_CONFIG, LESSON_CATEGORY, allowedTypes, lessonChurn, lessonKeep, lessonSimilarity, decideLessonType, lessonNone, lessonTimeline, lessonsOf, newLessonState, observeForLessons, openCardRound, pinLesson, prepareLessonMessages, proposeLessonType, writeLesson } from '../src/lessons.ts'
+import { CHURN_REWRITES, DEFAULT_LESSONS_CONFIG, LESSON_CATEGORY, LESSONS_MUST_READ_LINE, allowedTypes, lessonChurn, lessonKeep, lessonSimilarity, decideLessonType, lessonNone, lessonTimeline, lessonsOf, newLessonState, observeForLessons, openCardRound, pinLesson, prepareLessonMessages, proposeLessonType, writeLesson } from '../src/lessons.ts'
 import { contentDigest } from '../src/interventions.ts'
 import type { LessonsConfig, LessonState } from '../src/lessons.ts'
 import { TemplateStore } from '../src/store.ts'
@@ -289,7 +289,7 @@ test('pinned (phase 2): only the owner pins, at most maxPinned; loaded once at t
     assert.ok(loaded.includes('【工坊·体会｜常驻】'))
     assert.ok(loaded.includes('1. 先跑 make check 再打包。') && loaded.includes('2. 报错先看第一条。'))
     assert.ok(!loaded.includes('xxxx'), 'an unpinned lesson is not loaded')
-    assert.ok(loaded.includes('不授予任何权限'))
+    assert.ok(loaded.includes('不扩大授权'))
     assert.deepEqual(w.store.lessons.log(S).filter(r => r.kind === 'pinned-loaded').map(r => [r.template_id, r.origin]), [[a, 'compact'], [b, 'compact']])
     assert.deepEqual(w.step(3), [], 'loaded once per start')
     // Loaded pinned lessons are not recalled again; an unpinned one still is.
@@ -496,6 +496,61 @@ test('host (B5b): GET /version reports the loaded server version from the packag
     assert.equal((await request(route, `${BASE}/version`, 'POST', {})).status, 405)
   })
   assert.deepEqual(host.loadedPackage(new URL('file:///nonexistent/package.json')), { name: 'unknown', version: 'unknown' })
+})
+
+test('host (owner 2026-11-21): the session pins its own tested lessons with lesson_pin; quota, owner unpins and reasons hold', async () => {
+  await withHost({ lessons: { enabled: true, recallCooldownTurns: 1, maxPinned: 1 } }, async (ctx, route, tools) => {
+    const pin = (type: string, pinned: boolean, reason = '唤起两轮都照做有效，CI 证据见时间线。') => tools.get('lesson_pin')?.execute({ type, pinned, reason }, { agent: agentOf(S) }) as Promise<Record<string, unknown>>
+    await result(ctx, 'c1', 'make test', true)
+    const written = await tools.get('lesson_write')?.execute({ text: '先看第一条报错，再决定要不要重跑。', type: '找' }, { agent: agentOf(S) })
+    const id = String(written?.['id'])
+    await tools.get('lesson_write')?.execute({ text: '改配置前先备份。', type: '验' }, { agent: agentOf(S) })
+    assert.equal((await pin('收', true))['code'], 'type')
+    assert.equal((await pin('找', true, '有效'))['code'], 'reason')
+    assert.equal((await pin('找', true))['code'], 'untested', 'never recalled: no closed round yet')
+    // Recall, then a verified keep closes the round: now it may be pinned.
+    await result(ctx, 'c2', 'make test', true)
+    const recall = await preStep(ctx, 2)
+    const text = recall[0]?.content?.[0]?.text ?? ''
+    assert.ok(text.includes('lesson_pin'), 'the recall tells the session it manages its own pinned lessons')
+    assert.ok(text.indexOf('lesson_pin') < text.indexOf(LESSONS_MUST_READ_LINE), 'the must-read line stays after the pin line')
+    assert.equal((await tools.get('lesson_keep')?.execute({ type: '找', evidence: 'make test 第二次先读首条报错后通过，CI run 7 绿' }, { agent: agentOf(S) }))?.['ok'], true)
+    assert.deepEqual(await pin('找', true), { ok: true, type: '找', pinned: true })
+    let items = (await request(route, `${BASE}/lessons?session_id=${S}`)).body.items as Array<{ id: string, pinned: boolean }>
+    assert.equal(items.find(i => i.id === id)?.pinned, true)
+    // The loaded block tells the session to unpin what no longer applies.
+    await created(ctx, 'startup')
+    const loaded = (await preStep(ctx, 4))[0]?.content?.[0]?.text ?? ''
+    assert.ok(loaded.includes('1. 先看第一条报错') && loaded.includes('lesson_pin'))
+    // Unpin is always allowed; the owner's unpin cannot be undone by the session.
+    assert.deepEqual(await pin('找', false, '已被更准的「验」类取代，不再适用。'), { ok: true, type: '找', pinned: false })
+    assert.equal((await pin('找', true))['ok'], true)
+    assert.equal((await request(route, `${BASE}/lessons/${id}`, 'PATCH', { pinned: false })).status, 200)
+    assert.equal((await pin('找', true))['code'], 'owner-unpinned')
+    items = (await request(route, `${BASE}/lessons?session_id=${S}`)).body.items
+    assert.equal(items.find(i => i.id === id)?.pinned, false)
+    const timeline = await tools.get('lesson_timeline')?.execute({ type: '找' }, { agent: agentOf(S) }) as { entries?: Array<{ kind: string, reason?: string }> }
+    assert.deepEqual((timeline.entries ?? []).filter(e => e.kind.endsWith('pinned')).map(e => e.kind), ['owner-unpinned', 'self-pinned', 'self-unpinned', 'self-pinned'])
+    assert.equal((timeline.entries ?? []).find(e => e.kind === 'self-unpinned')?.reason, '已被更准的「验」类取代，不再适用。')
+  })
+})
+
+test('lesson_pin respects the quota: a second pin needs an unpin first', async () => {
+  await withHost({ lessons: { enabled: true, recallCooldownTurns: 1, maxPinned: 1 } }, async (ctx, _route, tools) => {
+    await result(ctx, 'c1', 'make test', true)
+    await tools.get('lesson_write')?.execute({ text: '先看第一条报错，再决定要不要重跑。', type: '找' }, { agent: agentOf(S) })
+    await result(ctx, 'c2', 'make test', true)
+    await preStep(ctx, 2)
+    await tools.get('lesson_write')?.execute({ text: '先看第一条报错并对照 CI 日志，再决定要不要重跑。', type: '找' }, { agent: agentOf(S) })
+    await result(ctx, 'd1', 'npm run lint', true)
+    await tools.get('lesson_write')?.execute({ text: 'lint 失败先看规则名，再改代码。', type: '落' }, { agent: agentOf(S) })
+    await result(ctx, 'd2', 'npm run lint', true)
+    await preStep(ctx, 5)
+    await tools.get('lesson_write')?.execute({ text: 'lint 失败先看规则名和文件，再改代码。', type: '落' }, { agent: agentOf(S) })
+    const pin = (type: string) => tools.get('lesson_pin')?.execute({ type, pinned: true, reason: '唤起后照做并改写，之后同类没再失败。' }, { agent: agentOf(S) }) as Promise<Record<string, unknown>>
+    assert.equal((await pin('找'))['ok'], true)
+    assert.equal((await pin('落'))['code'], 'pinned-full')
+  })
 })
 
 async function created(ctx: Context, source: string): Promise<void> {

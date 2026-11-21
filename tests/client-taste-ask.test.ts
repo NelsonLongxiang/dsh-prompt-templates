@@ -41,10 +41,10 @@ test('lessonTypeOf strips the 体会· prefix and leaves other names alone', () 
   assert.equal(lessonTypeOf('other'), 'other')
 })
 
-test('the panel inserts the ask (never sends it) and offers it only on pinned lessons', () => {
+test('the panel inserts the ask (never sends it) and offers it on pinned lessons or lessons with a closed round', () => {
   const src = readFileSync(new URL('../src/client/Library.tsx', import.meta.url), 'utf8')
   const handler = src.slice(src.indexOf('const handleTasteAsk'), src.indexOf('const handleSend'))
   assert.match(handler, /insert\(sessionId, buildTasteAsk\(/)
   assert.doesNotMatch(handler, /\b(send|interject)\(/)
-  assert.match(src, /pin\?\.pinned === true && pin\.onTasteAsk !== undefined/)
+  assert.match(src, /pin\.onTasteAsk !== undefined && \(pin\.pinned \|\| \(pin\.rounds\?\.closed \?\? 0\) > 0\)/)
 })

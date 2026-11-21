@@ -11,7 +11,7 @@ import test from 'node:test'
 import { Context } from '@deepseek-ai/cordis'
 import * as host from '../src/index.ts'
 
-const TOOLS = ['lesson_keep', 'lesson_none', 'lesson_timeline', 'lesson_type_propose', 'lesson_write', 'selfcheck_conclude', 'selfcheck_write']
+const TOOLS = ['lesson_keep', 'lesson_none', 'lesson_pin', 'lesson_timeline', 'lesson_type_propose', 'lesson_write', 'selfcheck_conclude', 'selfcheck_write']
 const settle = async () => { for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve)) }
 
 function registry() {
@@ -19,7 +19,7 @@ function registry() {
   return { names, service: { register: (tool: { name: string }) => { names.add(tool.name); return () => names.delete(tool.name) } } }
 }
 
-test('tools provided after the plugin applied still register all seven model tools', async () => {
+test('tools provided after the plugin applied still register all eight model tools', async () => {
   const dir = createTestDirectory('pt-tools-late-')
   const ctx = new Context()
   const fiber = await ctx.plugin(host, { dbPath: join(dir, 'db.sqlite3') })
