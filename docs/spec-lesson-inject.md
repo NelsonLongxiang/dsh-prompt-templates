@@ -303,3 +303,16 @@ lessons:
 - **提案人是会话自己。** 插件不调用 taste-loop，也不持有市场网关凭据。生效仍按 taste-loop 的规矩：作者以外两个独立会话背书。请求里写明：不自己背书，不找别的会话代签。
 - **不做的事。** 插件不记录这一步，不改体会、不改轮次。提案状态以 taste-loop 为准。
 - **测试：** `tests/client-taste-ask.test.ts`。覆盖中英两版都点名四个工具名和体会事实；花括号不二次展开；处理函数只调 `insert`；按钮只出现在钉住的行上。
+
+## 5.13 轮次上的外部结论（系统 RSI 回路图断点 B3b，属主 2026-11-21「开始吧」）
+
+- **谁写：** 只有属主，在面板上写。体会行被唤起过（至少一轮）才显示 ☑ 按钮。点了在库底部出一个小表单：填链接或编号（PR、CI、评审、ygl 断言编号，一行，1..200 字），选「通过」或「不通过」。会话没有写外部结论的工具：结论来自被评会话以外，不该由它自己写。
+- **挂到哪一轮：** 这条体会最近一次唤起开的轮次，无论该轮是开着、已闭合还是未闭合。从没被唤起过的返回 409 `no-round`。
+- **怎么存：** `lesson_log` 加一种行 `round-verdict`：`origin` 为 `pass:<ref>` 或 `fail:<ref>`，`origin_ref` 为那一轮唤起行的 seq。不建新表，`SCHEMA_VERSION` 仍是 v11。
+- **只记录：** 外部结论不闭合、不重开、也不判未闭合任何轮次；轮次计数、卡片统计、`lesson_keep` 与改写闭合轮次的规则都不变。
+- **谁看得到：**
+  - 面板：`GET /lessons` 的每条加 `verdicts: { pass, fail, latest }`，行上显示「外部 ✓n ✗m」，悬停看最近一次的结论和链接；
+  - 会话：`lesson_timeline` 里出现 `round-verdict` 条目，`outcome` 为 pass 或 fail，`evidence` 为链接。会话改写体会时能查到。
+- **路由：** `POST /plugins/dsh-prompt-templates/lessons/:template_id/verdict`，体 `{ verdict, ref }`，返回 `{ id, round, verdict, ref }`；400 参数不对，404 没有这条体会，409 没被唤起过。
+- **不做的事：** 不把外部结论写进唤起提示（要不要让模型在唤起时直接看到上一轮的结论，交属主另定）；卡片轮次暂不挂外部结论。
+- **测试：** `tests/lessons.test.ts`（宿主路由：409/400/404、单行化、轮次计数不变、时间线条目、之后改写仍闭合该轮；反向验证：把这行记成 `round-closed` 时该测试失败）、`tests/client-lesson-pin.test.ts`（解析与 POST 形状）。

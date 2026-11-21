@@ -26,6 +26,7 @@
  *   POST   /plugins/dsh-prompt-templates/interventions/manual       → { intervention } (the panel's insert/send/interject)
  *   GET    /plugins/dsh-prompt-templates/lessons?session_id=        → { items, log, schema } (read-only, v11; no lesson text)
  *   PATCH  /plugins/dsh-prompt-templates/lessons/:template_id       { pinned } → { id, pinned } (the owner pins; phase 2)
+ *   POST   /plugins/dsh-prompt-templates/lessons/:template_id/verdict { verdict, ref } → { id, round, verdict, ref } (B3b; owner only, never closes a round)
  *   PATCH  /plugins/dsh-prompt-templates/lesson-types/:name?session_id= { approved } → { name, status } (the owner decides a proposed type)
  *
  * @module dsh-prompt-templates
@@ -48,7 +49,7 @@ import { DEFAULT_INJECT_MAX_EVERY, SCHEMA_VERSION, TemplateRuleError, TemplateSt
 import { INTERVENTION_SOURCES, MANUAL_METHODS, contentDigest, type InterventionSource, type ManualMethod } from './interventions.ts'
 import { registerCast, type PromptTemplatesService } from './cast.ts'
 import { registerSelfCheck } from './self-check.ts'
-import { BUILTIN_LESSON_TYPES, DEFAULT_LESSONS_CONFIG, decideLessonType, lessonChurn, lessonsOf, openCardRound, pinLesson, registerLessons, type LessonsConfig } from './lessons.ts'
+import { BUILTIN_LESSON_TYPES, DEFAULT_LESSONS_CONFIG, attachVerdict, decideLessonType, lessonChurn, lessonsOf, openCardRound, pinLesson, registerLessons, type LessonsConfig } from './lessons.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -281,7 +282,7 @@ async function handle(
           const cue = store.lessons.cue(lesson.id)
           return { id: lesson.id, key: lesson.key, type: lesson.type, index: lesson.index, version: lesson.version, content_sha256: contentDigest(lesson.content),
             origin: cue?.origin ?? null, pinned: cue?.pinned === 1, recall_count: cue?.recall_count ?? 0, last_recalled_turn: cue?.last_recalled_turn ?? null,
-            rounds: store.lessons.rounds(lesson.id), churn: lessonChurn(store, lesson.id), recurrence: store.lessons.recurrence(lesson.id), evidence: store.lessons.evidence(lesson.id, contentDigest(lesson.content)) ?? null }
+            rounds: store.lessons.rounds(lesson.id), churn: lessonChurn(store, lesson.id), recurrence: store.lessons.recurrence(lesson.id), evidence: store.lessons.evidence(lesson.id, contentDigest(lesson.content)) ?? null, verdicts: store.lessons.verdicts(lesson.id) }
         })
         const types = [...BUILTIN_LESSON_TYPES.map(t => ({ name: t.name, description: t.description, builtin: true, status: 'approved' })),
           ...store.lessons.types(sessionId).map(t => ({ name: t.name, description: t.description, builtin: false, status: t.status, proposed_at: t.proposed_at, decided_at: t.decided_at }))]
@@ -295,6 +296,13 @@ async function handle(
         const result = pinLesson(client(), decodeURIComponent(lessonId), body['pinned'], lessonsConfig().maxPinned)
         if (!result.ok) return json(res, result.code === 'not-found' ? 404 : 409, errorBody(result.code, result.error))
         return json(res, 200, { id: result.id, pinned: result.pinned })
+      }
+      // B3b: the owner attaches an external verdict (review, CI, receipt) to the lesson's latest round. Recorded only.
+      if (lessonId !== undefined && rest.length === 2 && rest[1] === 'verdict' && method === 'POST') {
+        const body = await readJson(req)
+        const result = attachVerdict(client(), decodeURIComponent(lessonId), body['verdict'], body['ref'])
+        if (!result.ok) return json(res, result.code === 'not-found' ? 404 : result.code === 'no-round' ? 409 : 400, errorBody(result.code, result.error))
+        return json(res, 200, result)
       }
       return json(res, 405, errorBody('method-not-allowed', `${method} ${url.pathname}`))
     }

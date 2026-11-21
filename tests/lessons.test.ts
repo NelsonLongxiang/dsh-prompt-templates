@@ -445,6 +445,44 @@ test('host: prompt, write through the tool, recall in the visible channel; the r
   })
 })
 
+test('host (B3b): the owner attaches an external verdict to the latest round; it is recorded, never closes the round, and the timeline shows it', async () => {
+  await withHost({ lessons: { enabled: true, recallCooldownTurns: 1 } }, async (ctx, route, tools) => {
+    await result(ctx, 'c1', 'make test', true)
+    const written = await tools.get('lesson_write')?.execute({ text: '先看第一条报错，再决定要不要重跑。', type: '找' }, { agent: agentOf(S) })
+    const id = String(written?.['id'])
+    // Never recalled yet: no round to attach to.
+    const early = await request(route, `${BASE}/lessons/${id}/verdict`, 'POST', { verdict: 'pass', ref: 'PR #9 review' })
+    assert.equal(early.status, 409)
+    assert.equal(early.body.error.code, 'no-round')
+    await result(ctx, 'c2', 'make test', true)
+    assert.ok(((await preStep(ctx, 2))[0]?.content?.[0]?.text ?? '').includes('先看第一条报错'))
+    const before = (await request(route, `${BASE}/lessons?session_id=${S}`)).body.items[0]
+    assert.equal(before.rounds.opened, 1)
+    assert.deepEqual(before.verdicts, { pass: 0, fail: 0, latest: null })
+    assert.equal((await request(route, `${BASE}/lessons/${id}/verdict`, 'POST', { verdict: 'maybe', ref: 'x' })).status, 400)
+    assert.equal((await request(route, `${BASE}/lessons/${id}/verdict`, 'POST', { verdict: 'fail', ref: '  ' })).status, 400)
+    assert.equal((await request(route, `${BASE}/lessons/${id}/verdict`, 'POST', { verdict: 'fail', ref: 'x'.repeat(201) })).status, 400)
+    assert.equal((await request(route, `${BASE}/lessons/missing/verdict`, 'POST', { verdict: 'fail', ref: 'x' })).status, 404)
+    const ok = await request(route, `${BASE}/lessons/${id}/verdict`, 'POST', { verdict: 'fail', ref: 'CI run 42\nred' })
+    assert.equal(ok.status, 200)
+    assert.equal(ok.body.verdict, 'fail')
+    assert.equal(ok.body.ref, 'CI run 42 red', 'one line')
+    assert.equal((await request(route, `${BASE}/lessons/${id}/verdict`, 'POST', { verdict: 'pass', ref: 'PR #9 approved' })).status, 200)
+    const after = (await request(route, `${BASE}/lessons?session_id=${S}`)).body.items[0]
+    assert.deepEqual(after.rounds, before.rounds, 'a verdict never closes, reopens or misses a round')
+    assert.equal(after.verdicts.pass, 1)
+    assert.equal(after.verdicts.fail, 1)
+    assert.equal(after.verdicts.latest.verdict, 'pass')
+    assert.equal(after.verdicts.latest.ref, 'PR #9 approved')
+    const timeline = await tools.get('lesson_timeline')?.execute({}, { agent: agentOf(S) }) as { entries?: Array<{ kind: string, outcome?: string, evidence?: string, type: string | null }> } | undefined
+    const verdicts = (timeline?.entries ?? []).filter(e => e.kind === 'round-verdict')
+    assert.deepEqual(verdicts.map(e => [e.outcome, e.evidence, e.type]), [['pass', 'PR #9 approved', '找'], ['fail', 'CI run 42 red', '找']])
+    // The round is still open: the session's own rewrite still closes it.
+    const rewrite = await tools.get('lesson_write')?.execute({ text: '先看第一条报错并对照 CI 日志，再决定要不要重跑。', type: '找' }, { agent: agentOf(S) })
+    assert.equal(rewrite?.['round'], 'updated')
+  })
+})
+
 async function created(ctx: Context, source: string): Promise<void> {
   await (ctx as unknown as { serial: (...args: unknown[]) => Promise<unknown> }).serial('agent/created', { agent: agentOf(S), source })
 }

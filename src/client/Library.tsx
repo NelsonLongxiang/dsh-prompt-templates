@@ -11,7 +11,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { IconCopyOutlineRegular, IconDownloadOutlineRegular, IconEditOutlineRegular, IconGlobeOutlineRegular, IconPlusOutlineRegular, IconQueueOutlineRegular, IconSendOutlineRegular, IconTrashOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { CategoryView, InjectionHistoryEntry, InjectionStatusView, TemplateInjectMode, TemplateView } from '../types.ts'
 import type { EventEpisodeWire, EventPolicyWire } from './api.ts'
-import { decideLessonType, listCardStats, listLessonPins, listPendingLessonTypes, recordManualIntervention, setLessonPinned, type CardStatWire, type LessonPinWire, type PendingLessonTypeWire, type RecurrenceWire } from './api.ts'
+import { decideLessonType, listCardStats, listLessonPins, listPendingLessonTypes, recordManualIntervention, setLessonPinned, type CardStatWire, type LessonPinWire, type PendingLessonTypeWire, type RecurrenceWire, type VerdictsWire, attachLessonVerdict } from './api.ts'
 import type { TemplateLibraryFace } from './slots.ts'
 import { filterTemplateRows, searchableTemplateRows } from './filter.ts'
 import { buildSharePayload, parseSharePayload, planShareImport } from './share.ts'
@@ -39,7 +39,7 @@ interface RowProps {
   onShare: (template: TemplateView, trigger: HTMLButtonElement) => void
   onMakeGlobal?: (id: string) => void
   /** Present only for the session's own lessons (体会): the owner pins them. */
-  pin?: { readonly pinned: boolean; readonly onToggle: () => void; readonly onTasteAsk?: () => void; readonly rounds?: { readonly opened: number; readonly closed: number; readonly missed: number; readonly kept?: number }; readonly churn?: boolean; readonly recurrence?: RecurrenceWire; readonly evidence?: string | null }
+  pin?: { readonly pinned: boolean; readonly onToggle: () => void; readonly onTasteAsk?: () => void; readonly onVerdict?: () => void; readonly verdicts?: VerdictsWire; readonly rounds?: { readonly opened: number; readonly closed: number; readonly missed: number; readonly kept?: number }; readonly churn?: boolean; readonly recurrence?: RecurrenceWire; readonly evidence?: string | null }
   /** Present for a workshop card injected in this session: its card-round yield. */
   cardYield?: CardStatWire
   /** Flip the row's auto-inject switch (rows without an interval route to the edit form). */
@@ -183,6 +183,28 @@ function TemplateRow({ template, onInsert, onSend, onInterject, onEdit, onDelete
         <span className={css.injectBadge} title={t('panel.evidence').replace('{evidence}', pin.evidence)} data-lesson-evidence>
           {t('panel.evidenceShort')}
         </span>
+      )}
+      {pin?.verdicts !== undefined && pin.verdicts.pass + pin.verdicts.fail > 0 && (
+        <span
+          className={css.injectBadge}
+          title={t('panel.verdicts').replace('{pass}', String(pin.verdicts.pass)).replace('{fail}', String(pin.verdicts.fail))
+            .replace('{latest}', pin.verdicts.latest === null ? '' : `${t(pin.verdicts.latest.verdict === 'pass' ? 'panel.verdictPass' : 'panel.verdictFail')} ${pin.verdicts.latest.ref}`)}
+          data-lesson-verdicts
+        >
+          {t('panel.verdictShort')} ✓{pin.verdicts.pass} ✗{pin.verdicts.fail}
+        </span>
+      )}
+      {pin?.onVerdict !== undefined && pin.rounds !== undefined && pin.rounds.opened > 0 && (
+        <button
+          type="button"
+          className={css.injectBtn}
+          onClick={() => { pin.onVerdict?.() }}
+          aria-label={t('panel.verdict')}
+          title={t('panel.verdict')}
+          data-lesson-verdict
+        >
+          ☑
+        </button>
       )}
       {pin?.churn === true && (
         <span className={css.injectBadge} title={t('panel.churn')} data-lesson-churn>
@@ -592,14 +614,20 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
   const [lessonChurn, setLessonChurn] = useState<ReadonlySet<string>>(new Set())
   const [lessonRecurrence, setLessonRecurrence] = useState<ReadonlyMap<string, RecurrenceWire>>(new Map())
   const [lessonEvidence, setLessonEvidence] = useState<ReadonlyMap<string, string>>(new Map())
+  const [lessonVerdicts, setLessonVerdicts] = useState<ReadonlyMap<string, VerdictsWire>>(new Map())
+  // B3b: the lesson whose latest round the owner is attaching an external verdict to.
+  const [verdictFor, setVerdictFor] = useState<TemplateView | null>(null)
+  const [verdictRef, setVerdictRef] = useState('')
+  const [verdictBusy, setVerdictBusy] = useState(false)
   const loadLessonPins = useCallback(async () => {
-    if (sessionId === null) { setLessonPins(new Map()); setLessonRounds(new Map()); setLessonChurn(new Set()); setLessonRecurrence(new Map()); setLessonEvidence(new Map()); return }
+    if (sessionId === null) { setLessonPins(new Map()); setLessonRounds(new Map()); setLessonChurn(new Set()); setLessonRecurrence(new Map()); setLessonEvidence(new Map()); setLessonVerdicts(new Map()); return }
     const items = await listLessonPins(sessionId)
     setLessonPins(new Map(items.map(item => [item.id, item.pinned])))
     setLessonRounds(new Map(items.map(item => [item.id, item.rounds])))
     setLessonChurn(new Set(items.filter(item => item.churn).map(item => item.id)))
     setLessonRecurrence(new Map(items.map(item => [item.id, item.recurrence])))
     setLessonEvidence(new Map(items.flatMap(item => item.evidence === null ? [] : [[item.id, item.evidence] as [string, string]])))
+    setLessonVerdicts(new Map(items.map(item => [item.id, item.verdicts])))
   }, [sessionId])
   useEffect(() => { void loadLessonPins() }, [loadLessonPins, templates])
 
@@ -746,6 +774,19 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
     void recordManualIntervention(sessionId, template.id, 'insert')
   }, [insert, sessionId])
 
+  // B3b: recorded only — a verdict never closes, reopens or misses a round.
+  const handleVerdict = useCallback(async (verdict: 'pass' | 'fail') => {
+    if (verdictFor === null) return
+    setVerdictBusy(true)
+    const result = await attachLessonVerdict(verdictFor.id, verdict, verdictRef)
+    setVerdictBusy(false)
+    if (!result.ok) { setNotice(result.error.code === 'no-round' ? t('panel.verdictNoRound') : result.error.message); return }
+    setVerdictFor(null)
+    setVerdictRef('')
+    setNotice(t('panel.verdictSaved'))
+    await loadLessonPins()
+  }, [verdictFor, verdictRef, loadLessonPins, t])
+
   // B1b (甲): insert, never send — the owner reads the ask; the session proposes as itself.
   const handleTasteAsk = useCallback((template: TemplateView) => {
     if (sessionId === null) return
@@ -868,7 +909,7 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
           onDelete={(id) => { void handleRemove(id) }}
           onShare={(tpl, trigger) => { void handleShareTemplate(tpl, trigger) }}
           onMakeGlobal={row.scope === 'session' ? (id) => { void handleMakeGlobal(id) } : undefined}
-          pin={lessonPins.has(row.id) ? { pinned: lessonPins.get(row.id) === true, onToggle: () => { void handleTogglePin(row.id) }, onTasteAsk: () => { handleTasteAsk(row) }, rounds: lessonRounds.get(row.id), churn: lessonChurn.has(row.id), recurrence: lessonRecurrence.get(row.id), evidence: lessonEvidence.get(row.id) ?? null } : undefined}
+          pin={lessonPins.has(row.id) ? { pinned: lessonPins.get(row.id) === true, onToggle: () => { void handleTogglePin(row.id) }, onTasteAsk: () => { handleTasteAsk(row) }, onVerdict: () => { setVerdictFor(row); setVerdictRef('') }, verdicts: lessonVerdicts.get(row.id), rounds: lessonRounds.get(row.id), churn: lessonChurn.has(row.id), recurrence: lessonRecurrence.get(row.id), evidence: lessonEvidence.get(row.id) ?? null } : undefined}
           cardYield={cardYields.get(row.id)}
           onToggleInject={(tpl) => { void handleToggleInject(tpl) }}
           sortable={needle === ''}
@@ -966,6 +1007,30 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
             </button>
           </div>
         </section>
+      )}
+      {verdictFor !== null && (
+        <div className={css.importForm} data-prompt-verdict-form>
+          <div>{t('panel.verdictTitle').replace('{name}', verdictFor.name)}</div>
+          <input
+            className={css.nameInput}
+            value={verdictRef}
+            maxLength={200}
+            onChange={(e) => { setVerdictRef(e.target.value) }}
+            placeholder={t('panel.verdictRef')}
+            aria-label={t('panel.verdictRef')}
+          />
+          <div className={css.importActions}>
+            <button type="button" className={css.saveBtn} onClick={() => { void handleVerdict('pass') }} disabled={verdictBusy || verdictRef.trim() === ''}>
+              {t('panel.verdictPass')}
+            </button>
+            <button type="button" className={css.saveBtn} onClick={() => { void handleVerdict('fail') }} disabled={verdictBusy || verdictRef.trim() === ''}>
+              {t('panel.verdictFail')}
+            </button>
+            <button type="button" className={css.cancelBtn} onClick={() => { setVerdictFor(null); setVerdictRef('') }} disabled={verdictBusy}>
+              {t('panel.importCancel')}
+            </button>
+          </div>
+        </div>
       )}
       {showImport && (
         <div className={css.importForm} data-prompt-import>
