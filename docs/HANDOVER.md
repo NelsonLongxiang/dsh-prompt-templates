@@ -23,6 +23,7 @@ DSH（DeepSeek Harness）的提示词模板库插件：悬浮面板 + 右侧栏 
 - 卡库版本与介入记录（0.16.0，schema v9）：模板带版本号，版本包导入默认只预演；`interventions` 记每次介入（src/interventions.ts）。见 docs/library-packs.md。
 - 收尾自查与投卡服务（src/self-check.ts、src/cast.ts，0.17.0，schema v10）：`selfCheck.enabled` 默认开（属主 2026-11-21 裁定），`cast.enabled` 仍默认关、开启要另外批准。见 docs/self-check.md。
 - 体会（src/lessons.ts，0.18.0，schema v11）：经历告一段落时给一句消化提示，会话用 `lesson_write` 把一两句体会写成自己的会话模板（「体会」分类），同类情境下在下一次模型决策前唤起。第二期加了常驻：属主经 `PATCH /lessons/:template_id` 标记，会话开始、恢复和压缩之后装载一次（面板按钮未做）。`lessons.enabled` 默认开（属主 2026-11-21 裁定），部署方写 false 关闭；压缩后 `agent/created` 仍 NOT_RUN。见 docs/spec-lesson-inject.md。
+- 模型工具注册（src/tool-registry.ts，#43）：`lesson_write`、`selfcheck_write`、`selfcheck_conclude` 经 `ctx.inject(['tools'], …)` 在宿主 tools 服务就绪后注册。0.17.0／0.18.0 在加载时直接 `ctx.get('tools')`，真实宿主上服务尚未激活时三者静默缺席（测试宿主 2026-11-21 实测）。插件不在顶层声明 `inject`：本版 cordis 没有可选依赖，声明了会让没有 tools 的宿主整个插件不加载。
 
 ## 3. 开发回路
 

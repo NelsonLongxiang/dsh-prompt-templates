@@ -28,6 +28,7 @@ import { extractFeatures } from './event-features.ts'
 import type { ObservationFeatures, ToolOutcomeProbe } from './event-features.ts'
 import { contentDigest } from './interventions.ts'
 import type { TemplateStore } from './store.ts'
+import { registerWhenToolsReady } from './tool-registry.ts'
 
 /** Category tab and name prefix of a session's lessons. */
 export const LESSON_CATEGORY = '体会'
@@ -524,8 +525,7 @@ export function registerLessons(ctx: Context, store: () => TemplateStore, config
     }
   })
 
-  const tools = ctx.get('tools' as never) as { register?: (tool: unknown) => unknown } | undefined
-  if (typeof tools?.register === 'function') {
+  registerWhenToolsReady(ctx, 'lessons', (tools) => {
     tools.register({
       name: 'lesson_write',
       description: 'Write down a lesson for your own session: one or two sentences (at most 160 characters) about an experience that just settled — what hurt or surprised you, and what to do first next time. The plugin links it to the situation it came from and brings it back when you meet that situation again. To rewrite one of your lessons, pass its number as replace. Write judgement, not authority; no secrets, tokens, internal addresses or local paths. No owner confirmation is needed; a lesson the owner edited is theirs. Acts only on the calling session.',
@@ -540,5 +540,5 @@ export function registerLessons(ctx: Context, store: () => TemplateStore, config
         return writeLesson(store(), stateOf(String(sessionId)), String(sessionId), String(args.text ?? ''), args.replace, config())
       },
     })
-  }
+  })
 }
