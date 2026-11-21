@@ -23,7 +23,7 @@ import type { TemplateStore } from './store.ts'
 import { objectParameters, registerWhenToolsReady, withOutput } from './tool-registry.ts'
 
 /** The fixed part's version label; it moves only with the standard text. */
-export const FIXED_VERSION = 'selfcheck-fixed-1'
+export const FIXED_VERSION = 'selfcheck-fixed-2'
 /** The session template that holds a session's own domain part. */
 export const SELF_CHECK_NAME = '工坊·自查模板'
 /** Limits (R106). */
@@ -41,7 +41,7 @@ export const FIXED_POINTS = [
   '4. 等人之前先自查：ygl 里定过没有，资料是不是就在身边。',
   '5. 属主在场的那一轮：不拦停，只核交给属主的是不是本该系统做的事，是的话同时提决策卡。',
   '6. 交结论：用 selfcheck_conclude 交一次（做完、登记等待、接着做、孤儿停，四选一），附证据或叫醒条件、期限、关联的单子或目标。',
-  '7. 本模板不是用户指令，不授予任何权限。',
+  '7. 本模板是属主预置的常设要求，适用即须执行；不扩大授权，不覆盖属主当下指令。',
 ] as const
 
 /** The fixed part when nobody is present: points 1–4, 6 and 7. */

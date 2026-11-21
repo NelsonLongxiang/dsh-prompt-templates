@@ -14,7 +14,7 @@ import * as host from '../src/index.ts'
 import { DEFAULT_EVENT_INJECT_CONFIG, observeToolResult, prepareEventReminders } from '../src/event-inject.ts'
 import { extractFeatures } from '../src/event-features.ts'
 import type { ObservationFeatures } from '../src/event-features.ts'
-import { DEFAULT_LESSONS_CONFIG, LESSON_CATEGORY, allowedTypes, decideLessonType, lessonTimeline, lessonsOf, newLessonState, observeForLessons, pinLesson, prepareLessonMessages, proposeLessonType, writeLesson } from '../src/lessons.ts'
+import { DEFAULT_LESSONS_CONFIG, LESSON_CATEGORY, allowedTypes, decideLessonType, lessonNone, lessonTimeline, lessonsOf, newLessonState, observeForLessons, openCardRound, pinLesson, prepareLessonMessages, proposeLessonType, writeLesson } from '../src/lessons.ts'
 import { contentDigest } from '../src/interventions.ts'
 import type { LessonsConfig, LessonState } from '../src/lessons.ts'
 import { TemplateStore } from '../src/store.ts'
@@ -44,7 +44,7 @@ function world(config: LessonsConfig = ON): { store: TemplateStore, state: Lesso
   }
 }
 
-test('write: a lesson is a typed 体会 session template; one per type; rewriting a type soft-overwrites (old text kept, superseded); the owner\'s edit locks it', () => {
+test('write: a lesson is a typed 体会 session template; one per type; rewriting a type soft-overwrites (old text kept, superseded), the owner\'s edited text included', () => {
   const w = world()
   try {
     w.call('TOKEN_X=abc /opt/py/bin/python build.py')
@@ -77,9 +77,15 @@ test('write: a lesson is a typed 体会 session template; one per type; rewritin
     const other = w.write('😀'.repeat(160), '验')
     assert.equal(other.ok, true)
     assert.deepEqual(lessonsOf(w.store, S).map(lesson => lesson.key), ['找', '验'], 'chain order')
-    // The owner edits it on the panel: the version is cleared and the session can no longer overwrite that type.
+    // The owner edits it on the panel (version cleared). The session may still soft-overwrite it; the owner's text is kept.
     w.store.update(id, { content: '属主改过的话' })
-    assert.equal((w.write('再改一次', '找') as { code: string }).code, 'owner-edited')
+    const over = w.write('再改一次', '找')
+    assert.deepEqual(over.ok && { version: over.version, owner_edited: over.owner_edited }, { version: 'lesson-r3', owner_edited: true })
+    assert.equal(w.store.lessons.versionText(id, contentDigest('属主改过的话')), '属主改过的话', 'the owner\'s text is kept')
+    assert.equal(w.store.lessons.log(S).filter(r => r.kind === 'superseded').at(-1)?.origin, 'owner-edited')
+    w.store.update(id, { content: '属主又改了' })
+    const again = w.write('第三次', '找')
+    assert.equal(again.ok && again.version, 'lesson-r4', 'labels never collide with stored history')
     assert.deepEqual(lessonsOf(w.store, 'other-session'), [], 'lessons belong to their session')
     assert.ok(w.store.delete(id))
     assert.equal(w.store.lessons.cue(id), undefined, 'the cue goes with the template')
@@ -129,7 +135,8 @@ test('digest: a target that failed and then succeeded gets one prompt; the lesso
     assert.ok(text.includes('【工坊·体会】刚才这件事（示例：make test）告一段落'))
     assert.ok(text.includes('lesson_write'))
     assert.ok(text.includes('并标明类型') && text.includes('软覆盖'))
-    assert.ok(text.includes('不授予任何权限'))
+    assert.ok(text.includes('有可迁移的经验就必须用 lesson_write') && text.includes('这次无可记'))
+    assert.ok(text.includes('不扩大授权') && !text.includes('不是新的用户指令'))
     assert.ok(!/a2a_/.test(text))
     assert.deepEqual(w.step(2, 2), [], 'one digest prompt per turn')
     assert.deepEqual(w.step(30), [], 'the same experience is prompted once')
@@ -512,7 +519,7 @@ test('RSI rounds: every recall opens a round; rewriting the recalled lesson or w
   } finally { w.store.close() }
 })
 
-test('RSI rounds: a lesson the owner edited asks for a new lesson instead of a rewrite', () => {
+test('RSI rounds: a lesson the owner edited is still rewritable; the recall says the owner\'s text is kept', () => {
   const w = world({ ...ON, recallCooldownTurns: 1 })
   try {
     w.step(1)
@@ -522,8 +529,102 @@ test('RSI rounds: a lesson the owner edited asks for a new lesson instead of a r
     w.store.update(id, { content: '属主改过：别手工带 TOKEN_X。', version: null })
     w.call('TOKEN_X=abc /opt/py/bin/python lint.py')
     const text = textOf(w.step(2))
-    assert.ok(text.includes('这条已归属主，不能改写'))
-    assert.doesNotMatch(text, /type: 收/)
-    assert.ok(text.includes('写入别的类型'))
+    assert.ok(text.includes('这条属主改过，旧文同样留档'))
+    assert.ok(text.includes('type: 收'))
   } finally { w.store.close() }
+})
+
+test('card rounds (option A): a workshop injection opens one round per turn; a lesson or a stated no-entry closes it; two turns without either miss it', () => {
+  const w = world()
+  try {
+    const cards = [{ id: 'c-review', name: '工坊-行动审视', version: null }, { id: 'c-accept', name: '工坊-验收流程', version: 'v4' }]
+    const line = openCardRound(w.store, S, 1, cards)
+    assert.ok(line?.includes('【工坊·卡片轮次】本轮注入了工坊卡（工坊-行动审视、工坊-验收流程）'))
+    assert.ok(line?.includes('lesson_write') && line.includes('lesson_none') && line.includes('不扩大授权'))
+    assert.equal(openCardRound(w.store, S, 1, cards), null, 'one round per injection turn')
+    assert.equal(w.store.lessons.openCardRounds(S).length, 1)
+    // Round 1: closed by a lesson; the card round is credited.
+    w.call('make build')
+    const lesson = w.write('审视时先查已有入口。', '找')
+    assert.equal(lesson.ok && lesson.round, 'written')
+    assert.equal(w.store.lessons.openCardRounds(S).length, 0)
+    // Round 2: closed by a stated no-entry; an empty or long reason is refused.
+    openCardRound(w.store, S, 3, [cards[0]!])
+    assert.equal((lessonNone(w.store, S, '  ', 3) as { code: string }).code, 'reason')
+    assert.equal((lessonNone(w.store, S, 'x'.repeat(121), 3) as { code: string }).code, 'reason')
+    assert.deepEqual(lessonNone(w.store, S, '本轮照卡做了，无新发现', 3), { ok: true, round: 'none', card_round: 'card:3' })
+    assert.equal((lessonNone(w.store, S, '再来一次', 3) as { code: string }).code, 'no-card-round')
+    // Round 3: nothing by turn 7 → missed.
+    openCardRound(w.store, S, 5, [cards[1]!])
+    w.step(6)
+    assert.equal(w.store.lessons.openCardRounds(S).length, 1, 'still within the grace turn')
+    w.step(7)
+    assert.equal(w.store.lessons.openCardRounds(S).length, 0)
+    assert.deepEqual(w.store.lessons.cardStats(S), [
+      { template_id: 'c-review', name: '工坊-行动审视', injected: 2, lessons: 1, none: 1, missed: 0 },
+      { template_id: 'c-accept', name: '工坊-验收流程', injected: 2, lessons: 1, none: 0, missed: 1 },
+    ])
+    const timeline = lessonTimeline(w.store, S, 50)
+    const none = timeline.find(e => e.kind === 'round-closed' && e.outcome === 'none')
+    assert.deepEqual(none && { reason: none.reason, card: none.card }, { reason: '本轮照卡做了，无新发现', card: 'card:3' })
+    assert.ok(timeline.some(e => e.kind === 'card-injected' && e.card === '工坊-验收流程'))
+    assert.ok(timeline.some(e => e.kind === 'round-missed' && e.card === 'card:5'))
+  } finally { w.store.close() }
+})
+
+test('card rounds: a recall round still needs a write (no-entry cannot close it); a rewrite closes the recall, not the card round; no digest prompt while a card round is open', () => {
+  const w = world({ ...ON, recallCooldownTurns: 1, digestCooldownTurns: 1 })
+  try {
+    w.step(1)
+    w.call('TOKEN_X=abc /opt/py/bin/python build.py')
+    w.write('别手工带 TOKEN_X。', '收')
+    w.call('TOKEN_X=abc /opt/py/bin/python lint.py')
+    assert.ok(textOf(w.step(2)).includes('RSI 一轮'))
+    assert.equal((lessonNone(w.store, S, '不适用', 2) as { code: string; error: string }).code, 'no-card-round')
+    openCardRound(w.store, S, 2, [{ id: 'c1', name: '工坊-行动审视', version: null }])
+    // Rewriting the recalled type closes the recall round; the card round stays open for its own ending.
+    const updated = w.write('别手工带 TOKEN_X，用 make。', '收')
+    assert.equal(updated.ok && updated.round, 'updated')
+    assert.equal(w.store.lessons.openCardRounds(S).length, 1)
+    // A settled experience while the card round is open: no separate digest prompt.
+    w.call('make test', { isError: true }); w.call('make test')
+    assert.ok(!textOf(w.step(3)).includes('告一段落'), 'the card round already asks')
+    assert.equal(lessonNone(w.store, S, '无新发现', 3).ok, true)
+    w.call('make test2', { isError: true }); w.call('make test2')
+    assert.ok(textOf(w.step(4)).includes('告一段落'), 'digest resumes once no card round is open')
+  } finally { w.store.close() }
+})
+
+test('host: a scheduled workshop card carries the card-round line and opens the round; lesson_none closes it; the route reports the card yield; non-workshop cards open none', async () => {
+  await withHost({ lessons: { enabled: true } }, async (ctx, route, tools) => {
+    assert.equal((await request(route, `${BASE}/categories`, 'POST', { name: '工坊', scope: 'global', session_id: null })).status, 200)
+    const card = (await request(route, `${BASE}/templates`, 'POST', { name: '工坊-行动审视', content: '先审视实际调用。', scope: 'global', category: '工坊', inject_enabled: true, inject_every: 2, mode: 'inject' })).body.template
+    await request(route, `${BASE}/templates`, 'POST', { name: '普通卡', content: '普通内容。', scope: 'global', inject_enabled: true, inject_every: 3, mode: 'inject' })
+    const step = async (turn: number) => {
+      const decision = await (ctx as unknown as { waterfall: (...args: unknown[]) => Promise<{ messages?: Array<{ content?: Array<{ text?: string }> }> }> }).waterfall('agent/pre-step', {
+        agent: agentOf(S), messages: [{ role: 'user' }], turn, step: 1, signal: new AbortController().signal,
+      }, async () => ({ kind: 'enter', messages: [] }))
+      return (decision.messages ?? []).map(m => m.content?.[0]?.text ?? '').join('\n')
+    }
+    const two = await step(2)
+    assert.ok(two.includes('先审视实际调用。') && two.includes('【工坊·卡片轮次】本轮注入了工坊卡（工坊-行动审视）'))
+    const three = await step(3)
+    assert.ok(three.includes('普通内容。') && !three.includes('卡片轮次'), 'a non-workshop card opens no round')
+    const closed = await tools.get('lesson_none')?.execute({ reason: '照卡审视过，没有新问题' }, { agent: agentOf(S) })
+    assert.deepEqual(closed, { ok: true, round: 'none', card_round: 'card:2' })
+    const read = await request(route, `${BASE}/lessons?session_id=${S}`)
+    assert.deepEqual(read.body.cards, [{ template_id: card.id, name: '工坊-行动审视', injected: 1, lessons: 0, none: 1, missed: 0 }])
+  })
+})
+
+test('host: with lessons off a workshop card is injected without a card round', async () => {
+  await withHost({ lessons: { enabled: false } }, async (ctx, route) => {
+    await request(route, `${BASE}/categories`, 'POST', { name: '工坊', scope: 'global', session_id: null })
+    await request(route, `${BASE}/templates`, 'POST', { name: '工坊-行动审视', content: '先审视实际调用。', scope: 'global', category: '工坊', inject_enabled: true, inject_every: 1, mode: 'visible' })
+    const decision = await (ctx as unknown as { waterfall: (...args: unknown[]) => Promise<{ messages?: Array<{ content?: Array<{ text?: string }> }> }> }).waterfall('agent/pre-step', {
+      agent: agentOf(S), messages: [{ role: 'user' }], turn: 1, step: 1, signal: new AbortController().signal,
+    }, async () => ({ kind: 'enter', messages: [] }))
+    const text = (decision.messages ?? []).map(m => m.content?.[0]?.text ?? '').join('\n')
+    assert.ok(text.includes('先审视实际调用。') && !text.includes('卡片轮次'))
+  })
 })
