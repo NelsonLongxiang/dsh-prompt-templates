@@ -57,7 +57,8 @@ DSH（DeepSeek Harness）的提示词模板库插件：悬浮面板 + 右侧栏 
 - ygl-trees 台账（本机 ygl-trees 工作区，项目 dsh-pt-rc2-review + 科技树 dsh-plugin-eng）：里程碑的 source/evidence/claim 与解锁依据。
 - docs/spec-template-auto-inject.md：定时注入机制 spec（file:line 引用）。
 - docs/spec-event-inject.md：事件触发提醒设计与实现差异（第 9 节）。
-- docs/test-plan-phase-c.md：事件提醒的真实宿主与行为验证流程（Phase C，尚未执行）。
+- docs/test-plan-phase-c.md：事件提醒的真实宿主与行为验证流程（Phase C，尚未执行）；§7 补 0.18.0 的交接通知与体会。
+- docs/host-validation-guide.md：在测试宿主上验证插件功能的引导提示词，给运行机上的 Agent 或属主照做（基础功能、定时注入、事件提醒、0.18.0 新功能、交回证据）。
 - docs/evolution-default.md、docs/library-packs.md、docs/self-check.md：0.15–0.17 各功能的合同、导入步骤与回退。
 - docs/spec-lesson-inject.md：体会（消化写入与情境唤起）的规格，第一、二期已随 0.18.0 发布，第 13、14 节是实现说明。
 - docs/release-notes-<版本>.md：各版发布说明（同文进 GitHub Release）。
