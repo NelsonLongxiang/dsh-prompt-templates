@@ -38,7 +38,7 @@ interface RowProps {
   onShare: (template: TemplateView, trigger: HTMLButtonElement) => void
   onMakeGlobal?: (id: string) => void
   /** Present only for the session's own lessons (体会): the owner pins them. */
-  pin?: { readonly pinned: boolean; readonly onToggle: () => void; readonly rounds?: { readonly opened: number; readonly closed: number; readonly missed: number } }
+  pin?: { readonly pinned: boolean; readonly onToggle: () => void; readonly rounds?: { readonly opened: number; readonly closed: number; readonly missed: number; readonly kept?: number }; readonly churn?: boolean }
   /** Present for a workshop card injected in this session: its card-round yield. */
   cardYield?: CardStatWire
   /** Flip the row's auto-inject switch (rows without an interval route to the edit form). */
@@ -143,9 +143,14 @@ function TemplateRow({ template, onInsert, onSend, onInterject, onEdit, onDelete
       {pin?.rounds !== undefined && pin.rounds.opened > 0 && (
         <span
           className={css.injectBadge}
-          title={t('panel.rounds').replace('{opened}', String(pin.rounds.opened)).replace('{closed}', String(pin.rounds.closed)).replace('{missed}', String(pin.rounds.missed))}
+          title={t('panel.rounds').replace('{opened}', String(pin.rounds.opened)).replace('{closed}', String(pin.rounds.closed)).replace('{missed}', String(pin.rounds.missed)).replace('{kept}', String(pin.rounds.kept ?? 0))}
         >
           RSI {pin.rounds.closed}/{pin.rounds.opened}
+        </span>
+      )}
+      {pin?.churn === true && (
+        <span className={css.injectBadge} title={t('panel.churn')} data-lesson-churn>
+          {t('panel.churnShort')}
         </span>
       )}
       <button
@@ -548,11 +553,13 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
   // 体会 pins (phase 2): only the session's own lessons get the toggle; the host enforces the quota.
   const [lessonPins, setLessonPins] = useState<ReadonlyMap<string, boolean>>(new Map())
   const [lessonRounds, setLessonRounds] = useState<ReadonlyMap<string, LessonPinWire['rounds']>>(new Map())
+  const [lessonChurn, setLessonChurn] = useState<ReadonlySet<string>>(new Set())
   const loadLessonPins = useCallback(async () => {
-    if (sessionId === null) { setLessonPins(new Map()); setLessonRounds(new Map()); return }
+    if (sessionId === null) { setLessonPins(new Map()); setLessonRounds(new Map()); setLessonChurn(new Set()); return }
     const items = await listLessonPins(sessionId)
     setLessonPins(new Map(items.map(item => [item.id, item.pinned])))
     setLessonRounds(new Map(items.map(item => [item.id, item.rounds])))
+    setLessonChurn(new Set(items.filter(item => item.churn).map(item => item.id)))
   }, [sessionId])
   useEffect(() => { void loadLessonPins() }, [loadLessonPins, templates])
 
@@ -812,7 +819,7 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
           onDelete={(id) => { void handleRemove(id) }}
           onShare={(tpl, trigger) => { void handleShareTemplate(tpl, trigger) }}
           onMakeGlobal={row.scope === 'session' ? (id) => { void handleMakeGlobal(id) } : undefined}
-          pin={lessonPins.has(row.id) ? { pinned: lessonPins.get(row.id) === true, onToggle: () => { void handleTogglePin(row.id) }, rounds: lessonRounds.get(row.id) } : undefined}
+          pin={lessonPins.has(row.id) ? { pinned: lessonPins.get(row.id) === true, onToggle: () => { void handleTogglePin(row.id) }, rounds: lessonRounds.get(row.id), churn: lessonChurn.has(row.id) } : undefined}
           cardYield={cardYields.get(row.id)}
           onToggleInject={(tpl) => { void handleToggleInject(tpl) }}
           sortable={needle === ''}

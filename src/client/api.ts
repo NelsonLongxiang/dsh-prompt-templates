@@ -181,7 +181,9 @@ export interface LessonPinWire {
   readonly id: string
   readonly pinned: boolean
   /** Recall rounds (RSI): opened by a recall, closed by a write, or missed. Zeros on a host that predates rounds. */
-  readonly rounds: { readonly opened: number; readonly closed: number; readonly missed: number }
+  readonly rounds: { readonly opened: number; readonly closed: number; readonly missed: number; readonly kept: number }
+  /** The last rewrites of this lesson changed nothing of substance (owner 2026-11-21: shown, never blocked). */
+  readonly churn: boolean
 }
 
 /** Load a session's lessons with their pin state (empty when none, unavailable, or the host predates lessons). */
@@ -189,11 +191,12 @@ export async function listLessonPins(sessionId: string): Promise<LessonPinWire[]
   try {
     const response = await fetch(`${BASE}/lessons?session_id=${encodeURIComponent(sessionId)}`, { cache: 'no-store' })
     if (!response.ok) return []
-    const body = await response.json() as { items?: Array<{ id?: unknown; pinned?: unknown; rounds?: { opened?: unknown; closed?: unknown; missed?: unknown } }> }
+    const body = await response.json() as { items?: Array<{ id?: unknown; pinned?: unknown; churn?: unknown; rounds?: { opened?: unknown; closed?: unknown; missed?: unknown; kept?: unknown } }> }
     const n = (v: unknown): number => typeof v === 'number' && Number.isFinite(v) ? v : 0
     return (body.items ?? []).filter(item => typeof item.id === 'string').map(item => ({
       id: item.id as string, pinned: item.pinned === true,
-      rounds: { opened: n(item.rounds?.opened), closed: n(item.rounds?.closed), missed: n(item.rounds?.missed) },
+      rounds: { opened: n(item.rounds?.opened), closed: n(item.rounds?.closed), missed: n(item.rounds?.missed), kept: n(item.rounds?.kept) },
+      churn: item.churn === true,
     }))
   } catch {
     return []
