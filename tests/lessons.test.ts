@@ -14,7 +14,7 @@ import * as host from '../src/index.ts'
 import { DEFAULT_EVENT_INJECT_CONFIG, observeToolResult, prepareEventReminders } from '../src/event-inject.ts'
 import { extractFeatures } from '../src/event-features.ts'
 import type { ObservationFeatures } from '../src/event-features.ts'
-import { DEFAULT_LESSONS_CONFIG, LESSON_CATEGORY, allowedTypes, decideLessonType, lessonNone, lessonTimeline, lessonsOf, newLessonState, observeForLessons, openCardRound, pinLesson, prepareLessonMessages, proposeLessonType, writeLesson } from '../src/lessons.ts'
+import { CHURN_REWRITES, DEFAULT_LESSONS_CONFIG, LESSON_CATEGORY, allowedTypes, lessonChurn, lessonKeep, lessonSimilarity, decideLessonType, lessonNone, lessonTimeline, lessonsOf, newLessonState, observeForLessons, openCardRound, pinLesson, prepareLessonMessages, proposeLessonType, writeLesson } from '../src/lessons.ts'
 import { contentDigest } from '../src/interventions.ts'
 import type { LessonsConfig, LessonState } from '../src/lessons.ts'
 import { TemplateStore } from '../src/store.ts'
@@ -513,7 +513,7 @@ test('RSI rounds: every recall opens a round; rewriting the recalled lesson or w
     assert.equal(w.store.lessons.openRounds(S).length, 1, 'still within the grace turn')
     w.step(8)
     assert.equal(w.store.lessons.openRounds(S).length, 0)
-    assert.deepEqual(w.store.lessons.rounds(id), { opened: 3, closed: 2, missed: 1 })
+    assert.deepEqual(w.store.lessons.rounds(id), { opened: 3, closed: 2, missed: 1, kept: 0 })
     const kinds = w.store.lessons.log(S).map(row => row.kind)
     assert.deepEqual(kinds.filter(k => k.startsWith('round')), ['round-closed', 'round-closed', 'round-missed'])
   } finally { w.store.close() }
@@ -627,4 +627,54 @@ test('host: with lessons off a workshop card is injected without a card round', 
     const text = (decision.messages ?? []).map(m => m.content?.[0]?.text ?? '').join('\n')
     assert.ok(text.includes('先审视实际调用。') && !text.includes('卡片轮次'))
   })
+})
+
+// Owner 2026-11-21 (system RSI loop map, item 2): a recall round may end with a verified keep, but only with evidence.
+test('verified keep: a recalled lesson that held closes its round with evidence, unchanged; a bare "still right", no round or a card round are refused', () => {
+  const w = world({ ...ON, recallCooldownTurns: 1 })
+  try {
+    w.step(1)
+    w.call('TOKEN_X=abc /opt/py/bin/python build.py')
+    const first = w.write('别手工带 TOKEN_X，先用 make 入口。', '收')
+    const id = first.ok ? first.id : ''
+    assert.equal(lessonKeep(w.store, S, '收', 'make build 退出 0，日志无 TOKEN_X', 2).ok, false, 'no recall round open yet')
+    w.call('TOKEN_X=abc /opt/py/bin/python lint.py')
+    const recalled = textOf(w.step(2))
+    assert.ok(recalled.includes('lesson_keep') && recalled.includes('光说「仍然对」不算'), 'the recall names the keep exit and its evidence rule')
+    const bare = lessonKeep(w.store, S, '收', '仍然对', 2)
+    assert.equal(bare.ok, false)
+    assert.equal(!bare.ok && bare.code, 'evidence')
+    assert.equal(lessonKeep(w.store, S, '验', 'make build 退出 0，日志无 TOKEN_X', 2).ok, false, 'no lesson of that type')
+    const kept = lessonKeep(w.store, S, '收', 'make lint 退出 0，命令行里没有 TOKEN_X', 2)
+    assert.deepEqual(kept, { ok: true, round: 'kept', type: '收' })
+    assert.equal(w.store.lessons.openRounds(S).length, 0)
+    assert.equal(w.store.get(id)?.content, '别手工带 TOKEN_X，先用 make 入口。', 'the text is unchanged')
+    assert.deepEqual(w.store.lessons.rounds(id), { opened: 1, closed: 1, missed: 0, kept: 1 })
+    const entry = lessonTimeline(w.store, S, 5).find(e => e.kind === 'round-closed')
+    assert.equal(entry?.outcome, 'kept')
+    assert.equal(entry?.evidence, 'make lint 退出 0，命令行里没有 TOKEN_X')
+    // A card round is not a keep: it still needs a lesson or lesson_none.
+    openCardRound(w.store, S, 3, [{ id: 'card-1', name: '自主推进', version: 'v4' }])
+    assert.equal(lessonKeep(w.store, S, '收', 'make lint 退出 0，命令行里没有 TOKEN_X', 3).ok, false)
+    assert.equal(w.store.lessons.openCardRounds(S).length, 1)
+  } finally { w.store.close() }
+})
+
+test('churn hint: three rewrites in a row that change nothing of substance are flagged; a real change clears it; nothing is blocked', () => {
+  const w = world(ON)
+  try {
+    assert.equal(lessonSimilarity('先用 make 入口。', '先用 make 入口！'), 1)
+    assert.ok(lessonSimilarity('别手工带 TOKEN_X，先用 make 入口。', 'CI 绿不等于测试跑了，先看测试数') < 0.5)
+    const base = '别手工带 TOKEN_X，先用 make build 入口，不手拼解释器路径。'
+    const first = w.write(base, '收')
+    const id = first.ok ? first.id : ''
+    for (let i = 0; i < CHURN_REWRITES - 1; i++) {
+      assert.ok(w.write(base + (i % 2 === 0 ? '' : '。'), '收').ok, 'never blocked')
+      assert.equal(lessonChurn(w.store, id), false, 'fewer than three rewrites')
+    }
+    assert.ok(w.write(base + '！', '收').ok)
+    assert.equal(lessonChurn(w.store, id), true, 'three near-identical rewrites in a row')
+    assert.ok(w.write('报错停在表面就动手会返工；下次先拿完整输出，读到出错的那一层再改。', '收').ok)
+    assert.equal(lessonChurn(w.store, id), false, 'a substantive rewrite clears the hint')
+  } finally { w.store.close() }
 })

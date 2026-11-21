@@ -72,7 +72,7 @@ test('the plugin\'s own tools reach the model with an object parameter schema na
     await new Promise(resolve => setImmediate(resolve))
     const tools = ctx.tools as unknown as { schemas: () => Array<{ name: string, parameters: { type?: string, properties?: Record<string, unknown>, required?: string[] } }> }
     const byName = new Map(tools.schemas().map(s => [s.name, s.parameters]))
-    const expected: Record<string, string[]> = { lesson_write: ['text', 'type'], lesson_none: ['reason'], lesson_timeline: [], lesson_type_propose: ['name', 'description'], selfcheck_write: ['text'], selfcheck_conclude: ['conclusion'] }
+    const expected: Record<string, string[]> = { lesson_write: ['text', 'type'], lesson_none: ['reason'], lesson_keep: ['type', 'evidence'], lesson_timeline: [], lesson_type_propose: ['name', 'description'], selfcheck_write: ['text'], selfcheck_conclude: ['conclusion'] }
     for (const [name, required] of Object.entries(expected)) {
       const parameters = byName.get(name)
       assert.ok(parameters !== undefined, `${name} reaches the model`)
