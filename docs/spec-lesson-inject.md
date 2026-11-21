@@ -131,7 +131,7 @@ CREATE INDEX lesson_cues_session ON lesson_cues (session_id);
 CREATE TABLE lesson_log (
   seq INTEGER PRIMARY KEY AUTOINCREMENT,
   session_id TEXT NOT NULL,
-  kind TEXT NOT NULL,                    -- prompted / written / recalled（第二期加 pinned-loaded）
+  kind TEXT NOT NULL,                    -- prompted / written / recalled / pinned-loaded（第二期，origin 记 startup/resume/compact）
   template_id TEXT,
   turn INTEGER,
   origin TEXT,
@@ -156,13 +156,13 @@ lessons:
   digestCooldownTurns: 10
   recallCooldownTurns: 20
   maxRecallChars: 300
-  # 第二期再加：maxPinned（常驻上限，默认 3）
+  maxPinned: 3              # 第二期：每会话常驻上限（1..10）；合计另有 400 字上限
 ```
 
 - 工具：`lesson_write`（第 5.2 节）。
 - 只读路由：`GET /plugins/dsh-prompt-templates/lessons?session_id=` → 该会话的体会（模板 id、序号、正文摘要 sha256、版本、线索类型、是否常驻、唤起次数），不含正文以外的会话内容。
 - 只读路由同时返回 `log`：该会话的 `lesson_log`（提示、写入、唤起）。
-- 写路由（属主，第二期）：`PATCH /plugins/dsh-prompt-templates/lessons/:template_id` → `{ pinned }`。
+- 写路由（属主，第二期）：`PATCH /plugins/dsh-prompt-templates/lessons/:template_id`，body `{ pinned: true|false }` → `{ id, pinned }`；`pinned` 不是布尔值 400，不是某个会话自己的体会 404，超过 `maxPinned` 409 `pinned-full`。
 - 介入记录：**第一期不写入 `interventions`**。该表的 `source` 列有 `CHECK (source IN ('schedule', 'event', 'manual', 'plugin'))` 约束，加新来源要重建整张表，和「只加表」的迁移原则冲突。提示、写入与唤起改记在 `lesson_log`，同样带正文 sha256、会话与轮次，可以追溯。以后若要并入介入记录，另做一次表重建迁移。
 - 给其他插件的服务：第一期不新增。
 
@@ -222,3 +222,15 @@ lessons:
 - 测试：`tests/lessons.test.ts`（写入、三种消化时机、预算、唤起、迁移、宿主接线、默认关闭）。表结构升到 11，原先写死 10 的断言同步改为 11；`host-apply` 里模拟「库比本版本新」的用例从 11 改为 12（当前 + 1），用意不变。
 - 先红后绿：16 处变异中 14 处被测试拦住；其余 2 处是等价变异（去掉线索查询里的「仍是本会话的会话模板」条件，唤起时另有一道只取本会话体会的过滤；去掉「每轮最多一条提示」的计数，冷却至少 1 轮已经保证），保留作为多一层的保险。
 - 真实宿主与模型行为：NOT_RUN。
+
+## 14. 第二期实现说明（2026-11-21）
+
+- 实现：`src/lessons.ts`（`pinLesson`、`pinnedLessons`、`renderPinned`、`agent/created` 监听，`prepareLessonMessages` 开头装载常驻）；`src/index.ts`（`maxPinned` 配置、PATCH 路由）。不改表结构：`lesson_cues.pinned` 在 v11 已建好。
+- 只有属主能标：标记只经 PATCH 路由；`lesson_write` 不接受常驻参数。只能标仍是本会话会话模板的体会，「设为全局」之后既不能标也不装载。
+- 装载：`agent/created` 的 `source` 为 `startup`、`resume`、`compact` 时记下「待装载」，该会话下一次 `agent/pre-step` 把常驻体会合成一条消息带上（措辞同样写明不是指令、不授予权限），每条记一行 `pinned-loaded`，`origin` 记来源；`clear` 不装载（裁定 4）。只装一次，直到下一次开工或压缩。
+- 上限：按写入先后取，条数不超过 `maxPinned`，合计不超过 400 字，超过的那条和其后的都不装。属主事后把 `maxPinned` 调小，装载照新的上限截。
+- 和唤起的关系：已装进当前上下文的常驻体会不再被唤起；标了常驻但还没装载过（标记之后还没有开工或压缩）的照常唤起。装载记录只在内存里，宿主重启后可能多唤起一次，无害。
+- 面板标记：**未做**。属主暂用 PATCH 路由标记；面板按钮要扩展 `TemplateLibraryFace`（公开的 slot 接口），留到下一步，在测试宿主上看过再上。
+- 测试：`tests/lessons.test.ts` 新增 5 个（标记与上限、装载一次、400 字截断、调小上限、已标未装照常唤起、宿主上的 PATCH 与四种 `source`、关闭时不装）。
+- 先红后绿：15 处变异中 14 处被测试拦住；剩下 1 处是等价变异（`agent/created` 监听不看总开关，`agent/pre-step` 那一侧也看，关闭时同样什么都不装）。
+- 真实宿主上压缩之后是否真的发 `agent/created`（`source: compact`）：NOT_RUN，只依据 `@deepseek-ai/dsh-agent` 的类型声明。在测试宿主实测之前，`lessons.enabled` 保持默认关。

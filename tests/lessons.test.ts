@@ -1,6 +1,6 @@
 import { createTestDirectory } from './temp-dir.mjs'
 /**
- * 体会 (docs/spec-lesson-inject.md, phase 1): lessons as session templates, digest prompts after a settled experience,
+ * 体会 (docs/spec-lesson-inject.md, phases 1 and 2): lessons as session templates, pinned lessons loaded at a start, digest prompts after a settled experience,
  * situational recall, budgets, the v11 migration and the host wiring (tools/result, agent/pre-step, lesson_write, route).
  */
 import assert from 'node:assert/strict'
@@ -14,7 +14,7 @@ import * as host from '../src/index.ts'
 import { DEFAULT_EVENT_INJECT_CONFIG, observeToolResult, prepareEventReminders } from '../src/event-inject.ts'
 import { extractFeatures } from '../src/event-features.ts'
 import type { ObservationFeatures } from '../src/event-features.ts'
-import { DEFAULT_LESSONS_CONFIG, LESSON_CATEGORY, lessonsOf, newLessonState, observeForLessons, prepareLessonMessages, writeLesson } from '../src/lessons.ts'
+import { DEFAULT_LESSONS_CONFIG, LESSON_CATEGORY, lessonsOf, newLessonState, observeForLessons, pinLesson, prepareLessonMessages, writeLesson } from '../src/lessons.ts'
 import type { LessonsConfig, LessonState } from '../src/lessons.ts'
 import { TemplateStore } from '../src/store.ts'
 
@@ -222,6 +222,80 @@ test('v10 databases migrate to v11 in place: the lesson tables are added, templa
     check.close()
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
+test('pinned (phase 2): only the owner pins, at most maxPinned; loaded once at the next step after a start, within 400 characters; recall skips what is loaded', () => {
+  const w = world({ ...ON, maxPinned: 2, recallCooldownTurns: 1 })
+  try {
+    w.call('make build')
+    const ids = ['先跑 make check 再打包。', '报错先看第一条。', 'x'.repeat(160)].map(text => { const r = w.write(text); return r.ok ? r.id : '' })
+    const [a, b, c] = ids as [string, string, string]
+    assert.equal(w.store.lessons.cue(a)?.pinned, 0, 'a written lesson is not pinned')
+    assert.deepEqual(pinLesson(w.store, a, true, 2), { ok: true, id: a, pinned: true })
+    assert.equal(pinLesson(w.store, b, true, 2).ok, true)
+    assert.equal((pinLesson(w.store, c, true, 2) as { code: string }).code, 'pinned-full')
+    assert.equal(pinLesson(w.store, a, true, 2).ok, true, 'pinning a pinned one again is not over the limit')
+    assert.equal((pinLesson(w.store, 'nope', true, 2) as { code: string }).code, 'not-found')
+    // No start seen: nothing loaded.
+    assert.deepEqual(w.step(1), [])
+    w.state.pinnedDue = 'compact'
+    const loaded = textOf(w.step(2))
+    assert.ok(loaded.includes('【工坊·体会｜常驻】'))
+    assert.ok(loaded.includes('1. 先跑 make check 再打包。') && loaded.includes('2. 报错先看第一条。'))
+    assert.ok(!loaded.includes('xxxx'), 'an unpinned lesson is not loaded')
+    assert.ok(loaded.includes('不授予任何权限'))
+    assert.deepEqual(w.store.lessons.log(S).filter(r => r.kind === 'pinned-loaded').map(r => [r.template_id, r.origin]), [[a, 'compact'], [b, 'compact']])
+    assert.deepEqual(w.step(3), [], 'loaded once per start')
+    // Loaded pinned lessons are not recalled again; an unpinned one still is.
+    w.call('make build')
+    const step4 = textOf(w.step(4))
+    assert.ok(step4.includes(`【工坊·体会｜你之前写下的】${'x'.repeat(160)}`), 'the unpinned one is recalled')
+    assert.ok(!step4.includes('make check') && !step4.includes('报错先看'), 'the loaded pinned ones are not')
+    // Unpin b, pin the long one: 160 + the 15 of a fit in 400; the cap is on characters, oldest first.
+    assert.equal(pinLesson(w.store, b, false, 2).ok, true)
+    assert.equal(pinLesson(w.store, c, true, 2).ok, true)
+    w.state.pinnedDue = 'resume'
+    const again = textOf(w.step(5))
+    assert.ok(again.includes('1. 先跑 make check 再打包。') && again.includes(`2. ${'x'.repeat(160)}`) && !again.includes('报错先看第一条'))
+    w.call('make build')
+    const recalled = textOf(w.step(6))
+    assert.ok(recalled.includes('【工坊·体会｜你之前写下的】报错先看第一条。'), 'unpinned, it is recalled again')
+    // Promoted to global: no longer this session's lesson, so it cannot be pinned or loaded here.
+    w.store.makeGlobal(a)
+    assert.equal((pinLesson(w.store, a, false, 2) as { code: string }).code, 'not-found')
+    w.state.pinnedDue = 'startup'
+    const third = textOf(w.step(7))
+    assert.ok(third.includes(`1. ${'x'.repeat(160)}`) && !third.includes('make check'))
+  } finally { w.store.close() }
+})
+
+test('pinned: the characters cap stops before a lesson that would pass 400', () => {
+  const w = world({ ...ON, maxPinned: 10 })
+  try {
+    w.call('make build')
+    const ids = [1, 2, 3].map(i => { const r = w.write(String(i).repeat(150)); return r.ok ? r.id : '' })
+    for (const id of ids) assert.equal(pinLesson(w.store, id, true, 10).ok, true)
+    w.state.pinnedDue = 'startup'
+    const text = textOf(w.step(1))
+    assert.ok(text.includes('1'.repeat(150)) && text.includes('2'.repeat(150)) && !text.includes('3'.repeat(150)))
+  } finally { w.store.close() }
+})
+
+test('pinned: a lowered maxPinned caps the load; a lesson pinned since the last start is still recalled until it is loaded', () => {
+  const w = world({ ...ON, maxPinned: 1, recallCooldownTurns: 1 })
+  try {
+    w.call('make build')
+    const [a, b] = ['先跑 make check。', '报错先看第一条。'].map(text => { const r = w.write(text); return r.ok ? r.id : '' }) as [string, string]
+    // Pinned while the limit was higher; the owner then lowered it to 1.
+    assert.equal(pinLesson(w.store, a, true, 5).ok, true)
+    assert.equal(pinLesson(w.store, b, true, 5).ok, true)
+    w.state.pinnedDue = 'startup'
+    const loaded = textOf(w.step(1))
+    assert.ok(loaded.includes('1. 先跑 make check。') && !loaded.includes('报错先看'), 'only maxPinned are loaded')
+    // b is pinned but not in the context: recall still brings it back.
+    w.call('make build')
+    assert.ok(textOf(w.step(2)).includes('【工坊·体会｜你之前写下的】报错先看第一条。'))
+  } finally { w.store.close() }
+})
+
 
 // ---- host wiring ----
 
@@ -229,14 +303,15 @@ const BASE = '/plugins/dsh-prompt-templates'
 interface Route { handler: (req: unknown, res: unknown) => void }
 type Tool = { execute(args: unknown, exec: unknown): Promise<Record<string, unknown>> }
 
-async function request(route: Route, url: string): Promise<{ status: number, body: any }> {
+async function request(route: Route, url: string, method = 'GET', payload?: unknown): Promise<{ status: number, body: any }> {
   const req = new EventEmitter() as EventEmitter & { method: string, url: string }
-  req.method = 'GET'
+  req.method = method
   req.url = url
   return await new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`no response for ${url}`)), 2000)
     const res = { status: 0, writeHead(code: number) { this.status = code; return this }, end(payload: string) { clearTimeout(timer); resolve({ status: this.status, body: payload ? JSON.parse(payload) : null }) } }
     route.handler(req, res)
+    if (payload !== undefined) req.emit('data', Buffer.from(JSON.stringify(payload)))
     req.emit('end')
   })
 }
@@ -275,7 +350,7 @@ async function preStep(ctx: Context, turn: number): Promise<Array<{ source?: Rec
 
 test('Config keeps lessons off by default', () => {
   const decoded = host.Config({ dbPath: '/tmp/x.sqlite3' }) as { lessons: Record<string, unknown> }
-  assert.deepEqual(decoded.lessons, { enabled: false, mode: 'inject', maxPerSession: 20, digestCooldownTurns: 10, recallCooldownTurns: 20, maxRecallChars: 300 })
+  assert.deepEqual(decoded.lessons, { enabled: false, mode: 'inject', maxPerSession: 20, digestCooldownTurns: 10, recallCooldownTurns: 20, maxRecallChars: 300, maxPinned: 3 })
   assert.throws(() => host.Config({ dbPath: '/tmp/x.sqlite3', lessons: { mode: 'loud' } }))
 })
 
@@ -312,5 +387,45 @@ test('host: prompt, write through the tool, recall in the visible channel; the r
     assert.ok(!JSON.stringify(read.body).includes('先看第一条报错'), 'the route carries no lesson text')
     assert.deepEqual(read.body.log.map((row: { kind: string }) => row.kind), ['prompted', 'written', 'recalled'])
     assert.equal((await request(route, `${BASE}/lessons`)).status, 400)
+  })
+})
+
+async function created(ctx: Context, source: string): Promise<void> {
+  await (ctx as unknown as { serial: (...args: unknown[]) => Promise<unknown> }).serial('agent/created', { agent: agentOf(S), source })
+}
+
+test('host (phase 2): the owner pins over PATCH; startup, resume and compact load the pinned lessons at the next step, clear does not', async () => {
+  await withHost({ lessons: { enabled: true, maxPinned: 1 } }, async (ctx, route, tools) => {
+    await result(ctx, 'c1', 'make test')
+    const first = await tools.get('lesson_write')?.execute({ text: '先看第一条报错。' }, { agent: agentOf(S) })
+    const second = await tools.get('lesson_write')?.execute({ text: '改配置前先备份。' }, { agent: agentOf(S) })
+    const id = String(first?.['id']), other = String(second?.['id'])
+    assert.equal((await request(route, `${BASE}/lessons/${id}`, 'PATCH', { pinned: 'yes' })).status, 400)
+    assert.equal((await request(route, `${BASE}/lessons/missing`, 'PATCH', { pinned: true })).status, 404)
+    assert.deepEqual((await request(route, `${BASE}/lessons/${id}`, 'PATCH', { pinned: true })).body, { id, pinned: true })
+    const full = await request(route, `${BASE}/lessons/${other}`, 'PATCH', { pinned: true })
+    assert.equal(full.status, 409)
+    assert.equal(full.body.error.code, 'pinned-full')
+    const read = await request(route, `${BASE}/lessons?session_id=${S}`)
+    assert.deepEqual(read.body.items.map((item: { pinned: boolean }) => item.pinned), [true, false])
+    await created(ctx, 'clear')
+    assert.deepEqual(await preStep(ctx, 1), [], 'clear is a fresh start: nothing loaded')
+    for (const [turn, source] of [[2, 'startup'], [4, 'resume'], [6, 'compact']] as const) {
+      await created(ctx, source)
+      const loaded = await preStep(ctx, turn)
+      assert.equal(loaded[0]?.source?.['kind'], 'prompt-template-lesson')
+      assert.ok((loaded[0]?.content?.[0]?.text ?? '').includes('1. 先看第一条报错。'), source)
+      assert.ok(!(loaded[0]?.content?.[0]?.text ?? '').includes('改配置前先备份'))
+      assert.deepEqual(await preStep(ctx, turn + 1), [], `${source}: once`)
+    }
+    const log = (await request(route, `${BASE}/lessons?session_id=${S}`)).body.log as Array<{ kind: string, origin: string }>
+    assert.deepEqual(log.filter(row => row.kind === 'pinned-loaded').map(row => row.origin), ['startup', 'resume', 'compact'])
+  })
+})
+
+test('host (phase 2): off, a start loads nothing', async () => {
+  await withHost({}, async ctx => {
+    await created(ctx, 'startup')
+    assert.deepEqual(await preStep(ctx, 1), [])
   })
 })
