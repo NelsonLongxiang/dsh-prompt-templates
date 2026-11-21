@@ -5,7 +5,7 @@ import { createTestDirectory } from './temp-dir.mjs'
  */
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { rmSync } from 'node:fs'
+import { readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import test from 'node:test'
@@ -481,6 +481,21 @@ test('host (B3b): the owner attaches an external verdict to the latest round; it
     const rewrite = await tools.get('lesson_write')?.execute({ text: '先看第一条报错并对照 CI 日志，再决定要不要重跑。', type: '找' }, { agent: agentOf(S) })
     assert.equal(rewrite?.['round'], 'updated')
   })
+})
+
+test('host (B5b): GET /version reports the loaded server version from the package manifest, the schema and the features', async () => {
+  const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { name: string, version: string }
+  await withHost({ lessons: { enabled: false }, cast: { enabled: true } }, async (_ctx, route) => {
+    const read = await request(route, `${BASE}/version`)
+    assert.equal(read.status, 200)
+    assert.equal(read.body.name, manifest.name)
+    assert.equal(read.body.version, manifest.version)
+    assert.equal(read.body.schema, 11)
+    assert.ok(!Number.isNaN(Date.parse(read.body.loaded_at)))
+    assert.deepEqual(read.body.features, { inject: true, lessons: false, selfCheck: true, cast: true, eventInject: false })
+    assert.equal((await request(route, `${BASE}/version`, 'POST', {})).status, 405)
+  })
+  assert.deepEqual(host.loadedPackage(new URL('file:///nonexistent/package.json')), { name: 'unknown', version: 'unknown' })
 })
 
 async function created(ctx: Context, source: string): Promise<void> {

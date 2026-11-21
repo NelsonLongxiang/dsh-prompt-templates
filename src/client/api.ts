@@ -285,6 +285,25 @@ export function decideLessonType(sessionId: string, name: string, approved: bool
 }
 
 /** The owner pins or unpins one lesson; a full pin quota settles as error code `pinned-full`. */
+/** B5b: what the server reports it loaded (version, schema, features); null when unavailable or an older host. */
+export interface ServerVersionWire {
+  readonly version: string
+  readonly schema: number | null
+  readonly loaded_at: string | null
+}
+
+export async function getServerVersion(): Promise<ServerVersionWire | null> {
+  try {
+    const response = await fetch(`${BASE}/version`, { cache: 'no-store' })
+    if (!response.ok) return null
+    const body = await response.json() as { version?: unknown; schema?: unknown; loaded_at?: unknown }
+    if (typeof body.version !== 'string' || body.version === '') return null
+    return { version: body.version, schema: typeof body.schema === 'number' ? body.schema : null, loaded_at: typeof body.loaded_at === 'string' ? body.loaded_at : null }
+  } catch {
+    return null
+  }
+}
+
 /** B3b: the owner attaches an external verdict (pass or fail, with a link) to the lesson's latest round. */
 export function attachLessonVerdict(templateId: string, verdict: 'pass' | 'fail', ref: string): Promise<TemplateActionResult> {
   return mutate('POST', `/lessons/${encodeURIComponent(templateId)}/verdict`, { verdict, ref })

@@ -316,3 +316,13 @@ lessons:
 - **路由：** `POST /plugins/dsh-prompt-templates/lessons/:template_id/verdict`，体 `{ verdict, ref }`，返回 `{ id, round, verdict, ref }`；400 参数不对，404 没有这条体会，409 没被唤起过。
 - **不做的事：** 不把外部结论写进唤起提示（要不要让模型在唤起时直接看到上一轮的结论，交属主另定）；卡片轮次暂不挂外部结论。
 - **测试：** `tests/lessons.test.ts`（宿主路由：409/400/404、单行化、轮次计数不变、时间线条目、之后改写仍闭合该轮；反向验证：把这行记成 `round-closed` 时该测试失败）、`tests/client-lesson-pin.test.ts`（解析与 POST 形状）。
+
+## 5.14 宿主实际加载的版本（系统 RSI 回路图断点 B5b，属主 2026-11-21「按顺序来」）
+
+- **问题：** 插件发版之后，宿主有没有真的加载新版本，以前只能靠人在文档里写发布状态句。面板页脚的版本号来自客户端包，构建时写死，看不出宿主进程加载的服务端是哪一版。
+- **服务端：** 插件被宿主加载（apply）时读一次自己包里的 `package.json`（`src/` 和 `lib/` 都在包根下一层），记下名字、版本和加载时间。读不到时记 `unknown`。
+- **路由：** `GET /plugins/dsh-prompt-templates/version`，返回 `{ name, version, schema, loaded_at, features }`。`features` 写明哪些功能开着：`inject`、`lessons`、`selfCheck`、`cast`、`eventInject`（事件提醒总开关，由面板持有）。只读，其他方法返回 405。
+- **面板：** 页脚照旧显示客户端版本。服务端版本和它不一致时，旁边多一个「服务端 vX」徽标，悬停提示可能是宿主没重启或面板缓存了旧版。旧宿主没有这个路由时不显示。
+- **怎么用作证据：** 文档里写「已加载 X」之前，先看这个路由或面板徽标；`features` 同时回答「开没开」。会话自己读不到这个路由（没有模型工具），要不要加交属主定。
+- **不做的事：** 不上报到别处，不改 cordis 宿主，不查别的插件的版本。
+- **测试：** `tests/lessons.test.ts`（宿主路由返回的版本与包清单一致、features 随配置变化、POST 返回 405、清单读不到时为 unknown；反向验证：把版本写死时测试失败）、`tests/client-lesson-pin.test.ts`（`getServerVersion` 的解析与降级）。
