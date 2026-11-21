@@ -126,6 +126,7 @@ test('renderVisibleInjectionMessage stamps the user channel with the schedule ma
   assert.equal(source.turn, 10)
   const text = message.content[0].type === 'text' ? message.content[0].text : ''
   assert.match(text, /⚙️ 定时注入 · 第 10 轮/)
+  assert.ok(text.includes('属主预置的常设要求：适用即须执行，不适用则跳过；不扩大授权，不覆盖属主当下指令。'))
   assert.ok(text.includes('keep moving'))
   // No reminder frame: this message is written for both the model and the human.
   assert.doesNotMatch(text, /<system-reminder>/)

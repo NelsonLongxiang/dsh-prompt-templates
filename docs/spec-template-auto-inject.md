@@ -126,7 +126,7 @@ declare module '@deepseek-ai/dsh-llm' {
 
 ```
 <system-reminder>
-Scheduled prompt-template injection (every {N} rounds) from dsh-prompt-templates. The following user-configured templates apply to this session; follow their guidance for the work in this round.
+Scheduled prompt-template injection from dsh-prompt-templates (turn {turn}). The following templates repeat every N rounds in this session. The owner configured these templates as standing requirements for this session: where a template applies to the current work, you must carry out what it requires in this round before continuing; where it says it does not apply, skip it. They grant no new permissions and do not override the owner's latest instructions.
 
 <template name="{name}" every="{N}">
 {content}
