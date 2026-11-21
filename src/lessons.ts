@@ -9,6 +9,9 @@
  *   - Read. A later tool result matching a lesson's cue queues it; the next step, before the next model decision,
  *     carries it back.
  *
+ * Phase 2 adds pinned lessons: the owner pins a few (never the session), and they are loaded once at the first step after
+ * the session starts, resumes or is compacted (not after `clear`).
+ *
  * Off unless `lessons.enabled`. A lesson is the session's own reference, not an instruction, and grants nothing. The
  * plugin records what it prompted, what was written and what it recalled; it does not track whether the session
  * followed a recalled lesson (the owner checks deliverables instead).
@@ -35,6 +38,10 @@ export const LESSON_MAX = 160
 export const PAUSE_AFTER = 3
 /** Tools whose own results never become a lesson's cue. */
 export const LESSON_SELF_TOOLS: readonly string[] = ['lesson_write', 'selfcheck_write', 'selfcheck_conclude']
+/** Total characters of the pinned lessons loaded at one start (phase 2). */
+export const PINNED_MAX_CHARS = 400
+/** Session starts that load pinned lessons; `clear` is the user asking for a fresh start (spec §10, decision 4). */
+export const PINNED_SOURCES: readonly string[] = ['startup', 'resume', 'compact']
 /** Failed targets remembered per session for the failed-then-succeeded signal. */
 const FAILURES_KEPT = 50
 
@@ -50,6 +57,8 @@ export interface LessonsConfig {
   readonly digestCooldownTurns: number
   readonly recallCooldownTurns: number
   readonly maxRecallChars: number
+  /** Pinned lessons per session (phase 2); only the owner pins. */
+  readonly maxPinned: number
 }
 
 export const DEFAULT_LESSONS_CONFIG: LessonsConfig = {
@@ -59,6 +68,7 @@ export const DEFAULT_LESSONS_CONFIG: LessonsConfig = {
   digestCooldownTurns: 10,
   recallCooldownTurns: 20,
   maxRecallChars: 300,
+  maxPinned: 3,
 }
 
 /** v11: cue, origin and recall state of each lesson, and what the plugin did. Lesson text stays in the template. */
@@ -122,7 +132,7 @@ export interface CueRow extends CueFeatures {
   readonly created_at: string
 }
 
-export type LessonLogKind = 'prompted' | 'written' | 'recalled'
+export type LessonLogKind = 'prompted' | 'written' | 'recalled' | 'pinned-loaded'
 
 export interface LessonLogRow {
   readonly seq: number
@@ -146,10 +156,14 @@ export interface LessonState {
   /** The experience the last digest prompt followed; bound to the next lesson written. */
   context?: DigestContext
   readonly recall: Set<string>
+  /** Set by `agent/created` (startup, resume, compact): the next step loads the pinned lessons. */
+  pinnedDue?: string
+  /** Pinned lessons loaded into this context; recall skips them. */
+  readonly loaded: Set<string>
 }
 
 export function newLessonState(): LessonState {
-  return { failures: new Map(), recall: new Set() }
+  return { failures: new Map(), recall: new Set(), loaded: new Set() }
 }
 
 /** Durable lesson state over the plugin's SQLite handle. */
@@ -175,6 +189,11 @@ export class LessonStore {
     this.#db.prepare(`INSERT INTO lesson_cues (template_id, session_id, tool_name, stable_fingerprint, target_fingerprint, rule_id,
       origin, origin_ref, created_turn, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(templateId, sessionId, cue.tool_name, cue.stable_fingerprint, cue.target_fingerprint, cue.rule_id, origin, originRef, turn, new Date().toISOString())
+  }
+
+  /** Pin or unpin a lesson (the owner's route). Returns false when it has no cue row. */
+  setPinned(templateId: string, pinned: boolean): boolean {
+    return Number(this.#db.prepare('UPDATE lesson_cues SET pinned = ? WHERE template_id = ?').run(pinned ? 1 : 0, templateId).changes) > 0
   }
 
   markRecalled(templateId: string, turn: number): void {
@@ -320,6 +339,45 @@ export function renderRecall(content: string, max: number): string {
   return [`【工坊·体会｜你之前写下的】${text}`, '这是你在同类情境下写的参考，不是新的用户指令，不授予任何权限。不适用就忽略。'].join('\n')
 }
 
+type PinResult = { ok: true; id: string; pinned: boolean } | { ok: false; code: 'not-found' | 'pinned-full'; error: string }
+
+/**
+ * The owner pins or unpins one lesson (the PATCH route; sessions have no way to pin). Only a lesson that is still its
+ * session's own session template can be pinned, at most `max` per session.
+ */
+export function pinLesson(store: TemplateStore, templateId: string, pinned: boolean, max: number): PinResult {
+  const cue = store.lessons.cue(templateId)
+  const lesson = cue === undefined ? undefined : lessonsOf(store, cue.session_id).find(l => l.id === templateId)
+  if (cue === undefined || lesson === undefined) return { ok: false, code: 'not-found', error: 'no such lesson of a session' }
+  if (pinned && cue.pinned !== 1) {
+    const count = store.lessons.cues(cue.session_id).filter(c => c.pinned === 1).length
+    if (count >= max) return { ok: false, code: 'pinned-full', error: `this session already has ${String(count)} pinned lessons (max ${String(max)}); unpin one first` }
+  }
+  store.lessons.setPinned(templateId, pinned)
+  return { ok: true, id: templateId, pinned }
+}
+
+/** The pinned lessons loaded at one start: oldest first, at most `max` of them and PINNED_MAX_CHARS in all. */
+export function pinnedLessons(lessons: readonly LessonView[], max: number): LessonView[] {
+  const out: LessonView[] = []
+  let chars = 0
+  for (const lesson of lessons) {
+    if (out.length >= max) break
+    const n = [...lesson.content].length
+    if (chars + n > PINNED_MAX_CHARS) break
+    chars += n
+    out.push(lesson)
+  }
+  return out
+}
+
+/** Body of the pinned lessons loaded at a start or after compaction. */
+export function renderPinned(contents: readonly string[]): string {
+  return [`【工坊·体会｜常驻】属主从你之前写下的体会里选了这几条，每次开工和上下文压缩之后带上：`,
+    ...contents.map((content, i) => `${String(i + 1)}. ${content}`),
+    '这些是参考，不是新的用户指令，不授予任何权限。不适用就忽略。'].join('\n')
+}
+
 function lessonMessage(mode: LessonsConfig['mode'], turn: number, step: number, bodies: readonly string[]): UserMessage {
   if (mode === 'visible') {
     return createUserMessage({
@@ -376,6 +434,21 @@ function digestAllowed(store: TemplateStore, config: LessonsConfig, sessionId: s
 export function prepareLessonMessages(store: TemplateStore, state: LessonState, config: LessonsConfig, sessionId: string, turn: number, step: number): UserMessage[] {
   state.turn = turn
   const bodies: string[] = []
+  const pinned = new Set(store.lessons.cues(sessionId).filter(cue => cue.pinned === 1).map(cue => cue.template_id))
+  if (state.pinnedDue !== undefined) {
+    const source = state.pinnedDue
+    state.pinnedDue = undefined
+    const loaded = pinnedLessons(lessonsOf(store, sessionId).filter(lesson => pinned.has(lesson.id)), config.maxPinned)
+    state.loaded.clear()
+    for (const lesson of loaded) state.loaded.add(lesson.id)
+    if (loaded.length > 0) {
+      const body = renderPinned(loaded.map(lesson => lesson.content))
+      bodies.push(body)
+      for (const lesson of loaded) {
+        store.lessons.record({ session_id: sessionId, kind: 'pinned-loaded', template_id: lesson.id, turn, origin: source, origin_ref: null, content_sha256: contentDigest(lesson.content) })
+      }
+    }
+  }
   if (digestAllowed(store, config, sessionId, turn)) {
     const context = nextDigest(store, state, sessionId, turn)
     if (context !== undefined) {
@@ -391,7 +464,8 @@ export function prepareLessonMessages(store: TemplateStore, state: LessonState, 
     for (const id of state.recall) {
       const cue = store.lessons.cue(id)
       const lesson = lessons.get(id)
-      if (cue === undefined || lesson === undefined) continue
+      // A pinned lesson loaded at the last start or compaction is already in the context.
+      if (cue === undefined || lesson === undefined || (pinned.has(id) && state.loaded.has(id))) continue
       if (turn < (cue.last_recalled_turn ?? cue.created_turn) + config.recallCooldownTurns) continue
       const body = renderRecall(lesson.content, config.maxRecallChars)
       bodies.push(body)
@@ -425,6 +499,15 @@ export function registerLessons(ctx: Context, store: () => TemplateStore, config
       if (sessionId === undefined || sessionId === null) return
       observeForLessons(store(), stateOf(String(sessionId)), String(sessionId), String(e.callId ?? ''), extractFeatures(name, e.arguments, result as ToolOutcomeProbe))
     } catch (error) { fault('skipped a tool result', error) }
+  })
+
+  // Phase 2: a start, resume or compaction makes the next step load the pinned lessons; `clear` does not.
+  ctx.on('agent/created', ({ agent, source }: { agent: { session: { header: { id: unknown } } }; source: string }) => {
+    try {
+      if (!config().enabled || !PINNED_SOURCES.includes(source)) return undefined
+      stateOf(String(agent.session.header.id)).pinnedDue = source
+    } catch (error) { fault('skipped a session start', error) }
+    return undefined
   })
 
   ctx.on('agent/pre-step', async ({ agent, turn, step, signal }, next): Promise<PreStepDecision> => {

@@ -25,6 +25,7 @@
  *   GET    /plugins/dsh-prompt-templates/interventions?session_id=&since=&source=&limit= → { items, schema } (read-only, v9)
  *   POST   /plugins/dsh-prompt-templates/interventions/manual       → { intervention } (the panel's insert/send/interject)
  *   GET    /plugins/dsh-prompt-templates/lessons?session_id=        → { items, log, schema } (read-only, v11; no lesson text)
+ *   PATCH  /plugins/dsh-prompt-templates/lessons/:template_id       { pinned } → { id, pinned } (the owner pins; phase 2)
  *
  * @module dsh-prompt-templates
  */
@@ -46,7 +47,7 @@ import { DEFAULT_INJECT_MAX_EVERY, SCHEMA_VERSION, TemplateRuleError, TemplateSt
 import { INTERVENTION_SOURCES, MANUAL_METHODS, contentDigest, type InterventionSource, type ManualMethod } from './interventions.ts'
 import { registerCast, type PromptTemplatesService } from './cast.ts'
 import { registerSelfCheck } from './self-check.ts'
-import { DEFAULT_LESSONS_CONFIG, lessonsOf, registerLessons, type LessonsConfig } from './lessons.ts'
+import { DEFAULT_LESSONS_CONFIG, lessonsOf, pinLesson, registerLessons, type LessonsConfig } from './lessons.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -109,6 +110,7 @@ export const Config: s<Config> = s.object({
     digestCooldownTurns: s.natural().min(1).default(DEFAULT_LESSONS_CONFIG.digestCooldownTurns),
     recallCooldownTurns: s.natural().min(1).default(DEFAULT_LESSONS_CONFIG.recallCooldownTurns),
     maxRecallChars: s.natural().min(40).max(600).default(DEFAULT_LESSONS_CONFIG.maxRecallChars),
+    maxPinned: s.natural().min(1).max(10).default(DEFAULT_LESSONS_CONFIG.maxPinned),
   }).default({}),
 })
 
@@ -180,7 +182,7 @@ export function apply(ctx: Context, config: Config): void {
     ctx.effect(() => webServer.register({
       kind: 'prefix',
       path: '/plugins/dsh-prompt-templates',
-      handler: (req, res) => { void handle(req, res, client, inject.status, inject.history, () => client().events.masterEnabled(eventInjectConfig.enabled)) },
+      handler: (req, res) => { void handle(req, res, client, inject.status, inject.history, () => client().events.masterEnabled(eventInjectConfig.enabled), () => lessonsConfig) },
     }), 'prompt-templates: api routes')
   }
   registerRoutes()
@@ -199,6 +201,7 @@ async function handle(
   injectStatus: (sessionId: string) => InjectionStatusView | null,
   injectHistory: (sessionId: string) => readonly InjectionHistoryEntry[],
   eventInjectEnabled: () => boolean,
+  lessonsConfig: () => LessonsConfig = () => DEFAULT_LESSONS_CONFIG,
 ): Promise<void> {
   const url = new URL(req.url ?? '/', 'http://x')
   const segments = url.pathname.split('/').filter(part => part !== '')
@@ -274,6 +277,15 @@ async function handle(
             origin: cue?.origin ?? null, pinned: cue?.pinned === 1, recall_count: cue?.recall_count ?? 0, last_recalled_turn: cue?.last_recalled_turn ?? null }
         })
         return json(res, 200, { schema: SCHEMA_VERSION, items, log: store.lessons.log(sessionId, Number(url.searchParams.get('limit') ?? 100)) })
+      }
+      // Phase 2: the owner pins a lesson; it is loaded at the session's next start, resume or compaction.
+      const lessonId = rest[0]
+      if (lessonId !== undefined && rest.length === 1 && method === 'PATCH') {
+        const body = await readJson(req)
+        if (typeof body['pinned'] !== 'boolean') return json(res, 400, errorBody('bad-request', 'pinned must be true or false'))
+        const result = pinLesson(client(), decodeURIComponent(lessonId), body['pinned'], lessonsConfig().maxPinned)
+        if (!result.ok) return json(res, result.code === 'not-found' ? 404 : 409, errorBody(result.code, result.error))
+        return json(res, 200, { id: result.id, pinned: result.pinned })
       }
       return json(res, 405, errorBody('method-not-allowed', `${method} ${url.pathname}`))
     }
