@@ -23,7 +23,7 @@ DSH（DeepSeek Harness）的提示词模板库插件：悬浮面板 + 右侧栏 
 - 演化自评估默认模板（src/evolution-default.ts，0.15.0）：每个会话补一条「工坊·演化自评估」，默认每 100 用户轮次；见 docs/evolution-default.md。
 - 卡库版本与介入记录（0.16.0，schema v9）：模板带版本号，版本包导入默认只预演；`interventions` 记每次介入（src/interventions.ts）。见 docs/library-packs.md。
 - 收尾自查与投卡服务（src/self-check.ts、src/cast.ts，0.17.0，schema v10）：`selfCheck.enabled` 默认开（属主 2026-11-21 裁定），`cast.enabled` 仍默认关、开启要另外批准。见 docs/self-check.md。
-- 体会（src/lessons.ts，0.18.0，schema v11）：经历告一段落时给一句消化提示，会话用 `lesson_write` 把一两句体会写成自己的会话模板（「体会」分类），同类情境下在下一次模型决策前唤起。第二期加了常驻：属主经 `PATCH /lessons/:template_id` 标记，会话开始、恢复和压缩之后装载一次（面板按钮未做）。`lessons.enabled` 默认开（属主 2026-11-21 裁定），部署方写 false 关闭；压缩后 `agent/created` 仍 NOT_RUN。见 docs/spec-lesson-inject.md。
+- 体会（src/lessons.ts，0.18.0，schema v11）：经历告一段落时给一句消化提示，会话用 `lesson_write` 把一两句体会写成自己的会话模板（「体会」分类），同类情境下在下一次模型决策前唤起。第二期加了常驻：属主经 `PATCH /lessons/:template_id` 标记，会话开始、恢复和压缩之后装载一次；面板上该会话自己的体会行有 📌 按钮切换常驻（调同一路由，超额提示 pinned-full）。`lessons.enabled` 默认开（属主 2026-11-21 裁定），部署方写 false 关闭；压缩后 `agent/created` 仍 NOT_RUN。见 docs/spec-lesson-inject.md。
 - 模型工具注册（src/tool-registry.ts，#43）：`lesson_write`、`selfcheck_write`、`selfcheck_conclude` 经 `ctx.inject(['tools'], …)` 在宿主 tools 服务就绪后注册。0.17.0／0.18.0 在加载时直接 `ctx.get('tools')`，真实宿主上服务尚未激活时三者静默缺席（测试宿主 2026-11-21 实测）。插件不在顶层声明 `inject`：本版 cordis 没有可选依赖，声明了会让没有 tools 的宿主整个插件不加载。第二层（#46）：真实 ToolRuntime 要求每个定义带 `output { schema, render }`，缺了就抛错且被宿主吞掉；三处注册都经 `withOutput()` 补上，`tests/tool-contract.test.ts` 用真实 ToolRuntime 校验（单元测试里的假注册器接受任何形状，拦不住这类问题）。
 
 ## 3. 开发回路
@@ -52,7 +52,7 @@ DSH（DeepSeek Harness）的提示词模板库插件：悬浮面板 + 右侧栏 
 | 3 | 事件提醒 Phase C 整套（M01–M08、B01–B10） | 已发布（0.14.0 起，默认关闭）；真实宿主与模型行为仍 NOT_RUN，按 docs/test-plan-phase-c.md 执行 |
 | 4 | #14 剪贴板回退、#10 实验隔离 | 修复已合入，留现场核验项（真实浏览器 / 宿主），由提出者核后关闭 |
 | 5 | #31 Windows 发布脚本测试 | 同机已不再复现（环境问题），由提出者关闭 |
-| 6 | 体会常驻的面板按钮 | 未做；目前只能经 `PATCH /lessons/:template_id` 标记 |
+| 6 | 体会常驻的面板按钮 | 已落地（master，未发布）：本会话体会行的 📌 切换，调 `PATCH /lessons/:template_id`；真实浏览器点按 NOT_RUN |
 | 7 | drawio 类模板依赖外部技能 | 需要时另配工具 |
 
 已完成、不再列：注入历史 UI、模板变量（0.13.2）、畸形 JSON → 400、DSH 0.2.x 契约测试、gitee 旧分支（随 gitee 冻结消解）、面板手动发卡记录轮/步（#38 定为按设计不记，原因见 README 已知限制）。

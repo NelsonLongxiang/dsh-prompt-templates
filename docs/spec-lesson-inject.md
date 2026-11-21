@@ -225,6 +225,7 @@ lessons:
 
 ## 14. 第二期实现说明（2026-11-21）
 
+- 面板（2026-11-21）：`src/client/Library.tsx` 对本会话 `GET /lessons` 返回的体会行显示 📌 切换按钮（`aria-pressed` 表示是否常驻），调 `PATCH` 路由；409 `pinned-full` 显示上限提示。其他模板行不显示。
 - 实现：`src/lessons.ts`（`pinLesson`、`pinnedLessons`、`renderPinned`、`agent/created` 监听，`prepareLessonMessages` 开头装载常驻）；`src/index.ts`（`maxPinned` 配置、PATCH 路由）。不改表结构：`lesson_cues.pinned` 在 v11 已建好。
 - 只有属主能标：标记只经 PATCH 路由；`lesson_write` 不接受常驻参数。只能标仍是本会话会话模板的体会，「设为全局」之后既不能标也不装载。
 - 装载：`agent/created` 的 `source` 为 `startup`、`resume`、`compact` 时记下「待装载」，该会话下一次 `agent/pre-step` 把常驻体会合成一条消息带上（措辞同样写明不是指令、不授予权限），每条记一行 `pinned-loaded`，`origin` 记来源；`clear` 不装载（裁定 4）。只装一次，直到下一次开工或压缩。
