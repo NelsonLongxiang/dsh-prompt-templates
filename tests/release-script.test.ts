@@ -8,17 +8,22 @@
 import test from 'node:test'
 import { spawnSync } from 'node:child_process'
 
-const probe = spawnSync('bash', ['-c', 'uname -s; printf %s "${RELEASE_FIXTURE_ENV_PROBE:-}"'], {
-  encoding: 'utf8',
-  timeout: 10_000,
-  env: { ...process.env, RELEASE_FIXTURE_ENV_PROBE: 'pass-through' },
-})
-const banner = (probe.stdout.split('\n')[0] ?? '').trim()
-const usable = probe.status === 0 && /MINGW|MSYS|CYGWIN/.test(banner) && probe.stdout.includes('pass-through')
+// The guard applies on Windows only: on Linux/macOS (CI included) `uname -s` is Linux/Darwin and the
+// suite must always run — skipping there would silently drop the release regressions from CI.
+const onWindows = process.platform === 'win32'
+const probe = onWindows
+  ? spawnSync('bash', ['-c', 'uname -s; printf %s "${RELEASE_FIXTURE_ENV_PROBE:-}"'], {
+    encoding: 'utf8',
+    timeout: 10_000,
+    env: { ...process.env, RELEASE_FIXTURE_ENV_PROBE: 'pass-through' },
+  })
+  : undefined
+const banner = (probe?.stdout?.split('\n')[0] ?? '').trim()
+const usable = !onWindows || (probe?.status === 0 && /MINGW|MSYS|CYGWIN/.test(banner) && (probe?.stdout ?? '').includes('pass-through'))
 
 if (usable) {
   await import('./release-script.suite.ts')
 } else {
-  const reason = `offline release suite needs Git Bash (MSYS/Cygwin) with Windows env passthrough; this shell resolves bash to: ${banner || probe.error?.message || 'unknown'} — under WSL bash, Windows env vars like RELEASE_FIXTURE_STUBS are stripped (#31). On Windows run pnpm verify from Git Bash.`
+  const reason = `offline release suite needs Git Bash (MSYS/Cygwin) with Windows env passthrough; this shell resolves bash to: ${banner || probe?.error?.message || 'unknown'} — under WSL bash, Windows env vars like RELEASE_FIXTURE_STUBS are stripped (#31). On Windows run pnpm verify from Git Bash.`
   test('release-script offline suite (bash environment guard)', { skip: reason }, () => {})
 }
