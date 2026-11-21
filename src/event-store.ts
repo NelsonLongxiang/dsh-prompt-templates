@@ -11,6 +11,10 @@
  *     prepared again, failed after too many attempts, superseded when newer
  *     evidence replaces an undelivered reminder.
  *
+ * Once an episode's reminder budget is spent and the pattern still repeats,
+ * it gets one hand-off notice (its own outbox row, never superseded) instead
+ * of silence; the episode's own state and counts are left as they were.
+ *
  * @module dsh-prompt-templates/event-store
  */
 
@@ -241,6 +245,26 @@ export function dedupKeyFor(sessionId: string, episode: Pick<EpisodeView, 'episo
   return `${sessionId}|${episode.episode_id}|${revision}|${episode.rule_id}@${episode.rule_version}|notify`
 }
 
+/**
+ * Idempotence key of the one hand-off notice an episode may get. It carries no evidence revision on purpose: newer
+ * evidence neither re-sends nor supersedes it, so an episode gets at most one per rule version.
+ */
+export function handoffKeyFor(sessionId: string, episode: Pick<EpisodeView, 'episode_id' | 'rule_id' | 'rule_version'>): string {
+  return `${sessionId}|${episode.episode_id}|${episode.rule_id}@${episode.rule_version}|handoff`
+}
+
+/** Whether an outbox row is a hand-off notice rather than a reminder. */
+export function isHandoffKey(dedupKey: string): boolean {
+  return dedupKey.endsWith('|handoff')
+}
+
+/**
+ * Where an episode stands on hand-off: `due` once the per-episode reminder budget is spent and the pattern came back
+ * after the last reminder while nobody resolved it; `pending` while the notice awaits reconciliation; `sent` once it is
+ * in the durable log; `failed` after too many attempts.
+ */
+export type HandoffState = 'none' | 'due' | 'pending' | 'sent' | 'failed'
+
 function positiveInt(name: string, value: unknown, max: number): number {
   if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > max) {
     throw new EventRuleError(`${name} must be an integer between 1 and ${max}`)
@@ -398,6 +422,37 @@ export class EventStore {
     })
   }
 
+  /**
+   * Episodes due their one hand-off notice at `turn`. Reminding has run out: the policy's per-episode budget is spent,
+   * the pattern came back after the last reminder, and the episode is still only `notified` (nobody resolved it). Instead
+   * of falling silent, the plugin says once that this is now for the owner or a reviewer. Cooldown applies as for
+   * reminders; an episode that ever had a hand-off queued is never due again.
+   */
+  handoffDue(sessionId: string, turn: number): EpisodeView[] {
+    const enabled = new Map(this.policies().filter(policy => policy.enabled).map(policy => [policy.rule_id, policy]))
+    if (enabled.size === 0) return []
+    const rows = this.db.prepare(`SELECT * FROM event_episodes WHERE session_id = ? AND state = 'notified'
+      AND evidence_revision > notified_revision AND cooldown_until_turn <= ? ORDER BY created_at, episode_id`)
+      .all(sessionId, turn) as unknown as EpisodeRow[]
+    return rows.map(episodeView).filter(episode => {
+      const policy = enabled.get(episode.rule_id)
+      return policy !== undefined && episode.notify_count >= policy.max_per_episode && this.handoffRow(episode) === undefined
+    })
+  }
+
+  /** An episode's hand-off state, for the audit route and its readers. */
+  handoffState(episode: EpisodeView): HandoffState {
+    const row = this.handoffRow(episode)
+    if (row !== undefined) return row.state === 'persisted' ? 'sent' : row.state === 'failed' ? 'failed' : 'pending'
+    const policy = this.policy(episode.rule_id)
+    const exhausted = policy !== undefined && episode.notify_count >= policy.max_per_episode
+    return episode.state === 'notified' && exhausted && episode.evidence_revision > episode.notified_revision ? 'due' : 'none'
+  }
+
+  private handoffRow(episode: Pick<EpisodeView, 'session_id' | 'episode_id' | 'rule_id' | 'rule_version'>): OutboxView | undefined {
+    return this.db.prepare('SELECT * FROM event_outbox WHERE dedup_key = ?').get(handoffKeyFor(episode.session_id, episode)) as OutboxView | undefined
+  }
+
   /** Record a reminder as handed to the step (delivery `prepared`, episode `notified`). */
   prepare(sessionId: string, episode: EpisodeView, turn: number, step: number, fresh: boolean, dedupKey: string, cooldownTurns: number): void {
     const at = now()
@@ -419,6 +474,20 @@ export class EventStore {
       this.db.exec('ROLLBACK')
       throw error
     }
+  }
+
+  /**
+   * Record a hand-off notice as handed to the step (delivery `prepared`). The episode is left untouched: a hand-off is
+   * not another reminder, so its count, revision, signal and cooldown stay as they were.
+   */
+  prepareHandoff(sessionId: string, episode: EpisodeView, turn: number, step: number, dedupKey: string): void {
+    const at = now()
+    this.db.prepare(`INSERT INTO event_outbox
+      (dedup_key, session_id, episode_id, evidence_revision, state, attempts, turn, step, created_at, updated_at)
+      VALUES (?, ?, ?, ?, 'prepared', 1, ?, ?, ?, ?)
+      ON CONFLICT(dedup_key) DO UPDATE SET state = 'prepared', attempts = attempts + 1, turn = excluded.turn,
+        step = excluded.step, updated_at = excluded.updated_at`)
+      .run(dedupKey, sessionId, episode.episode_id, episode.evidence_revision, turn, step, at, at)
   }
 
   /** Outbox rows of a session in the given states, oldest first. */

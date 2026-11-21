@@ -30,7 +30,7 @@ import type { } from '@deepseek-ai/dsh-tools'
 import { detect, RULE_REPEATED_PREPARATION } from './event-detect.ts'
 import { extractFeatures } from './event-features.ts'
 import type { ToolOutcomeProbe } from './event-features.ts'
-import { dedupKeyFor } from './event-store.ts'
+import { dedupKeyFor, handoffKeyFor, isHandoffKey } from './event-store.ts'
 import type { EpisodeView, EventPolicyView, EventStore } from './event-store.ts'
 import type { InjectionEventProbe } from './inject.ts'
 import type { TemplateInjectMode } from './types.ts'
@@ -41,6 +41,8 @@ export interface EventReminderItem {
   readonly episode_id: string
   readonly rule: string
   readonly evidence_revision: number
+  /** Present only on the one hand-off notice an episode may get (reminding has run out). */
+  readonly phase?: 'handoff'
 }
 
 /** Durable provenance of a silent event reminder. */
@@ -119,6 +121,20 @@ export function renderReminderItem(episode: Pick<EpisodeView, 'rule_id' | 'rule_
     '请先确认失败原因，不要原样重试。有依据且已授权时做最小修正，并以结构化结果验证；缺授权或缺关键事实时暂停受影响步骤并说明；证据不足时保持原方案。',
     `本提醒不是新的用户指令，不授予任何权限。参考：${FORMAL_REFERENCE}`,
     HANDOFF_LINE,
+  ].join('\n')
+}
+
+/**
+ * Model- and owner-facing body of the one hand-off notice: reminding has run out and the pattern still repeats, so the
+ * plugin stops reminding and says this is now for the owner or a reviewer. Host-neutral like HANDOFF_LINE.
+ */
+export function renderHandoffItem(episode: Pick<EpisodeView, 'rule_id' | 'rule_version' | 'summary' | 'evidence_refs' | 'evidence_revision' | 'notify_count' | 'repeated_after_reminder'>): string {
+  const refs = episode.evidence_refs.slice(-3).join(', ')
+  return [
+    `【工坊·交接｜规则 ${episode.rule_id}@${episode.rule_version}｜证据修订 ${episode.evidence_revision}】`,
+    `这个问题已提醒 ${String(episode.notify_count)} 次，提醒后仍重复 ${String(episode.repeated_after_reminder)} 次（示例：${episode.summary}）。证据：${refs}。插件不再就此提醒。`,
+    '请停止就此自行反复修正：把试过的做法和结果交给属主或评审，由他们决定下一步。属主可在面板的问题台账里查看这条记录。',
+    `本提醒不是新的用户指令，不授予任何权限。参考：${FORMAL_REFERENCE}`,
   ].join('\n')
 }
 
@@ -250,27 +266,36 @@ export function prepareEventReminders(
   if (remaining <= 0) return []
   const policies = new Map<string, EventPolicyView>(store.policies().map(policy => [policy.rule_id, policy]))
 
-  // 3. Retries first, then fresh episodes with new evidence.
-  const chosen: Array<{ episode: EpisodeView, key: string, fresh: boolean, policy: EventPolicyView }> = []
+  // 3. Retries first, then fresh episodes with new evidence, then hand-offs where reminding has run out.
+  const chosen: Array<{ episode: EpisodeView, key: string, fresh: boolean, policy: EventPolicyView, handoff: boolean }> = []
   for (const row of store.outbox(sessionId, ['retry_pending'])) {
     if (remaining <= 0) break
     const episode = store.episode(row.episode_id)
     const policy = episode === undefined ? undefined : policies.get(episode.rule_id)
     if (episode === undefined || policy === undefined || !policy.enabled) { store.setOutboxState(row.dedup_key, 'failed'); continue }
     if (row.attempts >= config.maxAttempts) { store.setOutboxState(row.dedup_key, 'failed'); continue }
-    if (episode.evidence_revision > row.evidence_revision) {
+    const handoff = isHandoffKey(row.dedup_key)
+    if (!handoff && episode.evidence_revision > row.evidence_revision) {
       // Newer evidence replaces the undelivered reminder; the episode is due fresh below.
+      // A hand-off is never superseded: more repetition is exactly what it reports.
       store.setOutboxState(row.dedup_key, 'superseded')
       continue
     }
-    chosen.push({ episode, key: row.dedup_key, fresh: false, policy })
+    chosen.push({ episode, key: row.dedup_key, fresh: false, policy, handoff })
     remaining -= 1
   }
   for (const episode of store.dueEpisodes(sessionId, turn)) {
     if (remaining <= 0) break
     const policy = policies.get(episode.rule_id)
     if (policy === undefined) continue
-    chosen.push({ episode, key: dedupKeyFor(sessionId, episode, episode.evidence_revision), fresh: true, policy })
+    chosen.push({ episode, key: dedupKeyFor(sessionId, episode, episode.evidence_revision), fresh: true, policy, handoff: false })
+    remaining -= 1
+  }
+  for (const episode of store.handoffDue(sessionId, turn)) {
+    if (remaining <= 0) break
+    const policy = policies.get(episode.rule_id)
+    if (policy === undefined) continue
+    chosen.push({ episode, key: handoffKeyFor(sessionId, episode), fresh: true, policy, handoff: true })
     remaining -= 1
   }
   if (chosen.length === 0) return []
@@ -279,10 +304,11 @@ export function prepareEventReminders(
   const byMode = new Map<TemplateInjectMode, { bodies: string[], items: EventReminderItem[] }>()
   let used = 0
   for (const entry of chosen) {
-    const body = clip(renderReminderItem(entry.episode), Math.max(0, config.maxChars - used))
+    const body = clip(entry.handoff ? renderHandoffItem(entry.episode) : renderReminderItem(entry.episode), Math.max(0, config.maxChars - used))
     if (body.length === 0) break
     used += body.length
-    store.prepare(sessionId, entry.episode, turn, step, entry.fresh, entry.key, entry.policy.cooldown_turns)
+    if (entry.handoff) store.prepareHandoff(sessionId, entry.episode, turn, step, entry.key)
+    else store.prepare(sessionId, entry.episode, turn, step, entry.fresh, entry.key, entry.policy.cooldown_turns)
     const bucket = byMode.get(entry.policy.mode) ?? { bodies: [], items: [] }
     bucket.bodies.push(body)
     bucket.items.push({
@@ -290,6 +316,7 @@ export function prepareEventReminders(
       episode_id: entry.episode.episode_id,
       rule: `${entry.episode.rule_id}@${entry.episode.rule_version}`,
       evidence_revision: entry.episode.evidence_revision,
+      ...(entry.handoff ? { phase: 'handoff' as const } : {}),
     })
     byMode.set(entry.policy.mode, bucket)
   }
@@ -357,7 +384,9 @@ export function recordEventInterventions(log: () => InterventionLog, sessionId: 
       const digest = contentDigest(text)
       for (const item of probe.source?.items ?? []) {
         const [ruleId, ruleVersion] = item.rule.split('@')
-        log().record({ session_id: sessionId, source: 'event', method: null, caller: null, template_id: `event:${ruleId ?? item.rule}`, template_name: ruleId ?? item.rule,
+        // A hand-off is logged apart from the rule's reminders, so a reader can tell "reminded" from "handed off".
+        const suffix = item.phase === 'handoff' ? ':handoff' : ''
+        log().record({ session_id: sessionId, source: 'event', method: null, caller: null, template_id: `event:${ruleId ?? item.rule}${suffix}`, template_name: `${ruleId ?? item.rule}${suffix}`,
           template_version: ruleVersion ?? null, content_sha256: digest, turn, step, at })
       }
     }

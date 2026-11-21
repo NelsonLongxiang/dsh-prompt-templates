@@ -198,10 +198,114 @@ test('M04: a reminder is sent once per evidence revision, then cooldown and per-
     assert.equal(reminded?.repeated_after_reminder, 1)
     assert.notEqual(items(second)[0]?.dedup_key, item?.dedup_key)
     h.commit(second)
-    // max_per_episode = 2: more evidence no longer reminds.
+    // max_per_episode = 2: more evidence no longer reminds. It gets the one hand-off notice instead (see the T2 tests).
     h.call(PREP(5))
-    assert.deepEqual(h.step(10, 1), [])
+    const handoff = h.step(10, 1)
+    assert.equal(items(handoff).length, 1)
+    assert.ok(textOf(handoff[0]).includes('【工坊·交接'), 'a hand-off notice')
+    assert.ok(!textOf(handoff[0]).includes('【工坊·行动审视'), 'not a third reminder')
   } finally { h.store.close() }
+})
+
+function phaseOf(messages: ReturnType<typeof prepareEventReminders>): Array<string | undefined> {
+  return messages.flatMap(message => (message as unknown as { source: { items: Array<{ phase?: string }> } }).source.items.map(item => item.phase))
+}
+
+test('T2: once reminding has run out and the pattern still repeats, one hand-off notice goes out, then silence', () => {
+  const h = harness()
+  try {
+    enable(h.store, 'repeated-preparation', { cooldown_turns: 1 })
+    for (let n = 1; n <= 3; n += 1) h.call(PREP(n))
+    const first = h.step(1, 1)
+    h.commit(first)
+    const id = items(first)[0]?.episode_id ?? ''
+    h.call(PREP(4))
+    h.commit(h.step(2, 1))
+    const spent = h.store.events.episode(id)
+    assert.equal(spent?.notify_count, 2, 'the per-episode budget (2) is spent')
+    // Budget spent, but nothing repeated since the last reminder: nothing to hand off yet.
+    assert.equal(spent === undefined ? undefined : h.store.events.handoffState(spent), 'none')
+    assert.deepEqual(h.step(3, 1), [])
+    h.call(PREP(5))
+    const due = h.store.events.episode(id)
+    assert.equal(due === undefined ? undefined : h.store.events.handoffState(due), 'due')
+    const handoff = h.step(4, 1)
+    assert.equal(handoff.length, 1)
+    assert.deepEqual(phaseOf(handoff), ['handoff'])
+    assert.ok(items(handoff)[0]?.dedup_key.endsWith('|handoff'))
+    const text = textOf(handoff[0])
+    assert.match(text, /^⚙️ 事件提醒 · 第 4 轮第 1 步/)
+    assert.ok(text.includes('【工坊·交接｜规则 repeated-preparation@1'))
+    assert.ok(text.includes('已提醒 2 次，提醒后仍重复 2 次'))
+    assert.ok(text.includes('交给属主或评审'))
+    assert.ok(text.includes('插件不再就此提醒'))
+    assert.ok(text.includes('不授予任何权限'))
+    assert.ok(!text.includes('abc'), 'assignment values never reach the prompt')
+    assert.ok(!/a2a_/.test(text), 'the plugin does not bind to a2a')
+    // Not another reminder: the episode's own count, state and revision are untouched.
+    const after = h.store.events.episode(id)
+    assert.equal(after?.notify_count, 2)
+    assert.equal(after?.state, 'notified')
+    assert.equal(after?.notified_revision, spent?.notified_revision)
+    assert.equal(after === undefined ? undefined : h.store.events.handoffState(after), 'pending')
+    h.commit(handoff)
+    assert.deepEqual(h.step(4, 2), [], 'the turn budget counts the hand-off')
+    const sent = h.store.events.episode(id)
+    assert.equal(sent === undefined ? undefined : h.store.events.handoffState(sent), 'sent')
+    // More repetition afterwards: silence. Exactly one hand-off, ever.
+    h.call(PREP(6))
+    h.call(PREP(7))
+    assert.deepEqual(h.step(9, 1), [])
+    assert.equal(h.store.events.outbox(SESSION).filter(row => row.dedup_key.endsWith('|handoff')).length, 1)
+  } finally { h.store.close() }
+})
+
+test('T2: an undelivered hand-off is retried with the same key and never superseded; resolved episodes and disabled rules get none', () => {
+  const h = harness()
+  try {
+    enable(h.store, 'repeated-preparation', { cooldown_turns: 1, max_per_episode: 1 })
+    for (let n = 1; n <= 3; n += 1) h.call(PREP(n))
+    h.commit(h.step(1, 1))
+    h.call(PREP(4))
+    const handoff = items(h.step(2, 1))
+    assert.equal(handoff.length, 1)
+    assert.ok(handoff[0]?.dedup_key.endsWith('|handoff'))
+    // Not committed, and newer evidence arrives: the same hand-off is retried, not superseded.
+    h.call(PREP(5))
+    const retry = items(h.step(3, 1))
+    assert.deepEqual(retry.map(row => row.dedup_key), handoff.map(row => row.dedup_key))
+    const row = h.store.events.outbox(SESSION).find(entry => entry.dedup_key === handoff[0]?.dedup_key)
+    assert.equal(row?.attempts, 2)
+    assert.ok(!h.store.events.outbox(SESSION).some(entry => entry.state === 'superseded'))
+  } finally { h.store.close() }
+
+  const resolved = harness()
+  try {
+    enable(resolved.store, 'repeated-preparation', { cooldown_turns: 1, max_per_episode: 1 })
+    for (let n = 1; n <= 3; n += 1) resolved.call(PREP(n))
+    const first = resolved.step(1, 1)
+    resolved.commit(first)
+    const id = items(first)[0]?.episode_id ?? ''
+    resolved.store.events.resolveEpisode(id, 'deferred', ['call-3'], 'the owner takes it up later')
+    resolved.call(PREP(4))
+    assert.deepEqual(resolved.step(2, 1), [], 'someone already took it up')
+    const episode = resolved.store.events.episode(id)
+    assert.equal(episode === undefined ? undefined : resolved.store.events.handoffState(episode), 'none')
+  } finally { resolved.store.close() }
+
+  const disabled = harness()
+  try {
+    enable(disabled.store, 'repeated-preparation', { cooldown_turns: 1, max_per_episode: 1 })
+    for (let n = 1; n <= 3; n += 1) disabled.call(PREP(n))
+    const first = disabled.step(1, 1)
+    disabled.commit(first)
+    const id = items(first)[0]?.episode_id ?? ''
+    disabled.call(PREP(4))
+    disabled.store.events.updatePolicy('repeated-preparation', { enabled: false })
+    assert.deepEqual(disabled.step(2, 1), [], 'a disabled rule sends nothing, hand-off included')
+    const episode = disabled.store.events.episode(id)
+    assert.equal(episode === undefined ? undefined : disabled.store.events.handoffState(episode), 'due', 'the record still says it is due')
+  } finally { disabled.store.close() }
 })
 
 test('M05: a prepared reminder missing from the log is retried with the same key, then fails after maxAttempts', () => {

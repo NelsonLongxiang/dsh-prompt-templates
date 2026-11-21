@@ -140,6 +140,7 @@ src/
   - 提醒之后，下一次相关调用的稳定指纹变了 → `signal: changed`
   - 提醒之后同一模式又出现 → `signal: repeated`，修订号加 1
   - 0.16（schema v8）：同时 `repeated_after_reminder` 加 1，即「提醒后仍在重复」的次数。`signal` 在下一次提醒时清空，这个计数不清空，留给以后的观察者读；在 `GET …/event-episodes` 和面板的问题台账里都能看到。
+- 交接（未发布，见 9.4）：每问题的提醒次数用完、上次提醒后同一模式又出现、而且仍停在 `notified`（没人处置）时，插件不再沉默，而是发**一次**交接通知，说明已提醒几次、提醒后又重复几次，请把试过的做法和结果交给属主或评审。交接通知不算又一次提醒，不改问题的状态和计数。
 - `applied` / `verified` / `ineffective` / `reverted` / `rejected` / `deferred` / `awaiting_authorization` 只通过审计接口设置，并且必须附证据引用（call id 或会话事件序号）。Agent 的口头自述不是证据。
 - 宿主不能证明模型“读到”了提醒，所以不设 `consumed`；需要时在报告里写 UNKNOWN。
 
@@ -315,3 +316,23 @@ eventInject:
 - `src/event-inject.ts`：`tools/result` 观察器与 pre-step 消费者
 - `src/store.ts`：v4 → v5 迁移；`src/index.ts`：配置与审计路由
 - 测试：`tests/event-features.test.ts`、`tests/event-store.test.ts`、`tests/event-host.test.ts`，以及 `tests/dsh-contract.test.ts` 的两条护栏
+
+### 9.4 交接通知（未发布，分支 `feat/event-handoff`）
+
+**为什么。** 原来每问题最多提醒 `max_per_episode` 次（默认 2）。提醒用完后同一模式再出现，插件只把 `repeated_after_reminder` 加一，然后不再出声：Agent 被告知过「查过仍解不开就交出去」，但属主那边没有任何信号，问题就悬着。依据是 agent-atelier 的设计草案（`docs/design/rsi-transformation-policy.md` 的 T2：自修两次仍复发就停止，交给属主或评审；该草案在分支 `docs/experience-theory-design` 上，尚未合并，不是现行规则）。
+
+**什么时候发。** 同时满足：规则启用；问题仍是 `notified`（没被人工处置）；`notify_count` 已达 `max_per_episode`；上次提醒之后又有新证据（`evidence_revision > notified_revision`）；冷却已过；这个问题从没排过交接。
+
+**发什么。** 一条「【工坊·交接｜规则 …｜证据修订 …】」：已提醒几次、提醒后仍重复几次、示例与证据引用，「插件不再就此提醒」，「请停止就此自行反复修正，把试过的做法和结果交给属主或评审」，以及不授权声明。与提醒同一套措辞约束：不出现 a2a 工具名，赋值不进提示词。按规则配置的模式投递（默认可见，属主在对话里看得到）。
+
+**怎么记。**
+
+- 走同一个待发记录与对账机制，计入每轮条数和字符预算。去重键是 `<会话>|<问题>|<规则@版本>|handoff`，不带证据修订号：同一问题、同一规则版本只发一次。
+- 未送达时用同一个键重试，达到 `maxAttempts` 标 `failed`；**新证据不会把它标成 `superseded`**，因为后来的重复正是它要报告的事。
+- 交接不调用 `prepare`：问题的 `notify_count`、`notified_revision`、`signal`、冷却和状态都不变。
+- 审计路由 `GET …/event-episodes` 的每个问题多一个 `handoff` 字段：`none` / `due` / `pending` / `sent` / `failed`。`due` 只描述条件已满足；规则关着时不会发。
+- 介入记录里交接单独记成 `event:<规则>:handoff`，和这条规则的普通提醒分开，便于区分「提醒过」和「交接过」。
+
+**不做什么。** 不改问题终态（仍只由审计接口加证据设置），不自动起决策卡，不调用其他插件，不改模板；跟随事件提醒总开关和规则开关，默认关。面板问题台账暂不显示这个字段，留给后续。
+
+测试：`tests/event-store.test.ts` 的 M04（最后一步从「什么都不发」改为「只发交接，不是第三次提醒」）与两个 T2 用例；`tests/event-host.test.ts` 断言路由带 `handoff`。
