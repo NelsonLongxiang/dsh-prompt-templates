@@ -1,6 +1,6 @@
 # 收尾自查（第 2 期，PT-4）
 
-依据 workbench-market 第 18 篇「自查模板」一节（属主裁定 R103～R106）。部署配置 `selfCheck.enabled` 默认关，启用需另外批准。
+依据 workbench-market 第 18 篇「自查模板」一节（属主裁定 R103～R106）。部署配置 `selfCheck.enabled` **默认开**（属主 2026-11-21 裁定：初始化配置对所有安装者默认启用，取代此前「默认关，启用需另外批准」）；部署方写 `selfCheck.enabled: false` 关闭。
 
 ## 什么时候触发
 

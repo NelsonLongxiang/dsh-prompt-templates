@@ -35,3 +35,9 @@
         #     maxAttempts: 3        — delivery attempts before a reminder is marked failed
         #     observationWindow: 200 — redacted observations kept per session
         #     ignoreTools: []       — tool names never observed
+        # Wrap-up self-check and lessons (ON by default since the 2026-11-21
+        # owner decision; write false to turn one off):
+        #   selfCheck:
+        #     enabled: true         — selfcheck_write / selfcheck_conclude and the wrap-up check
+        #   lessons:
+        #     enabled: true         — lesson_write, digest prompts and situational recall
