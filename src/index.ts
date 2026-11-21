@@ -82,9 +82,9 @@ export interface Config {
   }
   /** Observer phase 2: other plugins may cast a card into a session (only a recognized caller); off by default. */
   readonly cast?: { readonly enabled?: boolean }
-  /** Observer phase 2: the wrap-up self-check and its two tools; off by default. */
+  /** Observer phase 2: the wrap-up self-check and its two tools; on by default (owner decision 2026-11-21), `enabled: false` turns it off. */
   readonly selfCheck?: { readonly enabled?: boolean }
-  /** 体会 (docs/spec-lesson-inject.md): digest prompts, lesson_write and situational recall; off by default. */
+  /** 体会 (docs/spec-lesson-inject.md): digest prompts, lesson_write and situational recall; on by default (owner decision 2026-11-21), `enabled: false` turns it off. */
   readonly lessons?: Partial<LessonsConfig>
 }
 
@@ -102,7 +102,7 @@ export const Config: s<Config> = s.object({
     ignoreTools: s.array(s.string()).default([]),
   }).default({}),
   cast: s.object({ enabled: s.boolean().default(false) }).default({}),
-  selfCheck: s.object({ enabled: s.boolean().default(false) }).default({}),
+  selfCheck: s.object({ enabled: s.boolean().default(true) }).default({}),
   lessons: s.object({
     enabled: s.boolean().default(DEFAULT_LESSONS_CONFIG.enabled),
     mode: s.union(['inject', 'visible'] as const).default(DEFAULT_LESSONS_CONFIG.mode),
@@ -164,10 +164,10 @@ export function apply(ctx: Context, config: Config): void {
   const eventInjectConfig = { ...DEFAULT_EVENT_INJECT_CONFIG, ...config.eventInject }
   // Observer phase 2 (PT-3): the service other plugins read (library, a session's templates, the log) and the cast,
   // which only a recognized caller may use and only while cast.enabled is on.
-  registerCast(ctx, client, () => config.cast?.enabled === true, () => config.selfCheck?.enabled === true)
-  // Observer phase 2 (PT-4): the wrap-up self-check, off unless selfCheck.enabled.
-  registerSelfCheck(ctx, client, () => config.selfCheck?.enabled === true)
-  // 体会 (docs/spec-lesson-inject.md, phase 1): off unless lessons.enabled.
+  registerCast(ctx, client, () => config.cast?.enabled === true, () => config.selfCheck?.enabled !== false)
+  // Observer phase 2 (PT-4): the wrap-up self-check, on unless selfCheck.enabled is false (owner decision 2026-11-21).
+  registerSelfCheck(ctx, client, () => config.selfCheck?.enabled !== false)
+  // 体会 (docs/spec-lesson-inject.md, phase 1): on unless lessons.enabled is false (owner decision 2026-11-21).
   const lessonsConfig: LessonsConfig = { ...DEFAULT_LESSONS_CONFIG, ...config.lessons }
   registerLessons(ctx, client, () => lessonsConfig)
   registerEventInject(ctx, eventInjectConfig, () => client().events, () => client().interventions)

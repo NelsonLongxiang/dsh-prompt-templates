@@ -21,8 +21,8 @@ DSH（DeepSeek Harness）的提示词模板库插件：悬浮面板 + 右侧栏 
 - 事件提醒（src/event-*.ts，0.14.0 首发，默认关）：识别重复准备、重复失败，在同轮下一次模型决策前追加一条短提醒；0.15.0 起总开关由面板 ⚙ 持有（`eventInject.enabled` 只在首次读取时当种子），0.16.0 起每条提醒带交接行，0.18.0 起提醒用完后仍重复时发一次交接通知。设计见 docs/spec-event-inject.md，失败分类见 docs/event-failure-contract.md。
 - 演化自评估默认模板（src/evolution-default.ts，0.15.0）：每个会话补一条「工坊·演化自评估」，默认每 100 用户轮次；见 docs/evolution-default.md。
 - 卡库版本与介入记录（0.16.0，schema v9）：模板带版本号，版本包导入默认只预演；`interventions` 记每次介入（src/interventions.ts）。见 docs/library-packs.md。
-- 收尾自查与投卡服务（src/self-check.ts、src/cast.ts，0.17.0，schema v10）：`selfCheck.enabled`、`cast.enabled` 都默认关，开启要另外批准。见 docs/self-check.md。
-- 体会（src/lessons.ts，0.18.0，schema v11）：经历告一段落时给一句消化提示，会话用 `lesson_write` 把一两句体会写成自己的会话模板（「体会」分类），同类情境下在下一次模型决策前唤起。第二期加了常驻：属主经 `PATCH /lessons/:template_id` 标记，会话开始、恢复和压缩之后装载一次（面板按钮未做）。`lessons.enabled` 默认关，开启要另外批准。见 docs/spec-lesson-inject.md。
+- 收尾自查与投卡服务（src/self-check.ts、src/cast.ts，0.17.0，schema v10）：`selfCheck.enabled` 默认开（属主 2026-11-21 裁定），`cast.enabled` 仍默认关、开启要另外批准。见 docs/self-check.md。
+- 体会（src/lessons.ts，0.18.0，schema v11）：经历告一段落时给一句消化提示，会话用 `lesson_write` 把一两句体会写成自己的会话模板（「体会」分类），同类情境下在下一次模型决策前唤起。第二期加了常驻：属主经 `PATCH /lessons/:template_id` 标记，会话开始、恢复和压缩之后装载一次（面板按钮未做）。`lessons.enabled` 默认开（属主 2026-11-21 裁定），部署方写 false 关闭；压缩后 `agent/created` 仍 NOT_RUN。见 docs/spec-lesson-inject.md。
 
 ## 3. 开发回路
 

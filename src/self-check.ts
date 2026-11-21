@@ -7,7 +7,7 @@
  * `selfcheck_write` (no owner confirmation; every write keeps the previous version; an owner's panel edit wins). The
  * session answers with `selfcheck_conclude` (done, waiting registered, continuing, or orphan stop, with evidence or wake
  * condition, deadline and ticket); a check it never concludes is logged as an orphan stop. A session without its domain
- * part is reminded visibly, every 30 turns, at most 3 times, then marked. Off unless `selfCheck.enabled`.
+ * part is reminded visibly, every 30 turns, at most 3 times, then marked. On unless `selfCheck.enabled` is false (owner decision 2026-11-21).
  *
  * Both tools act only on the calling session, taken from the runtime execution, never from a parameter.
  * @module @nelsonlongxiang/dsh-prompt-templates/self-check

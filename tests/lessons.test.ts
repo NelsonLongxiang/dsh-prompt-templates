@@ -348,14 +348,21 @@ async function preStep(ctx: Context, turn: number): Promise<Array<{ source?: Rec
   return decision.messages ?? []
 }
 
-test('Config keeps lessons off by default', () => {
+test('Config turns lessons on by default (owner decision 2026-11-21)', () => {
   const decoded = host.Config({ dbPath: '/tmp/x.sqlite3' }) as { lessons: Record<string, unknown> }
-  assert.deepEqual(decoded.lessons, { enabled: false, mode: 'inject', maxPerSession: 20, digestCooldownTurns: 10, recallCooldownTurns: 20, maxRecallChars: 300, maxPinned: 3 })
+  assert.deepEqual(decoded.lessons, { enabled: true, mode: 'inject', maxPerSession: 20, digestCooldownTurns: 10, recallCooldownTurns: 20, maxRecallChars: 300, maxPinned: 3 })
   assert.throws(() => host.Config({ dbPath: '/tmp/x.sqlite3', lessons: { mode: 'loud' } }))
 })
 
-test('host: off by default nothing is prompted, recalled or written', async () => {
-  await withHost({}, async (ctx, route, tools) => {
+test('host: with no lessons config the tool is live (on by default since 2026-11-21)', async () => {
+  await withHost({}, async (_ctx, _route, tools) => {
+    const written = await tools.get('lesson_write')?.execute({ text: '先看第一条报错，再决定要不要重跑。' }, { agent: agentOf(S) })
+    assert.equal(written?.['ok'], true)
+  })
+})
+
+test('host: with lessons.enabled false nothing is prompted, recalled or written', async () => {
+  await withHost({ lessons: { enabled: false } }, async (ctx, route, tools) => {
     await result(ctx, 'c1', 'make test', true)
     await result(ctx, 'c2', 'make test')
     assert.deepEqual(await preStep(ctx, 1), [])

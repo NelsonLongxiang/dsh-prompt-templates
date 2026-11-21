@@ -12,7 +12,7 @@
  * Phase 2 adds pinned lessons: the owner pins a few (never the session), and they are loaded once at the first step after
  * the session starts, resumes or is compacted (not after `clear`).
  *
- * Off unless `lessons.enabled`. A lesson is the session's own reference, not an instruction, and grants nothing. The
+ * On unless `lessons.enabled` is false (owner decision 2026-11-21). A lesson is the session's own reference, not an instruction, and grants nothing. The
  * plugin records what it prompted, what was written and what it recalled; it does not track whether the session
  * followed a recalled lesson (the owner checks deliverables instead).
  *
@@ -62,7 +62,7 @@ export interface LessonsConfig {
 }
 
 export const DEFAULT_LESSONS_CONFIG: LessonsConfig = {
-  enabled: false,
+  enabled: true,
   mode: 'inject',
   maxPerSession: 20,
   digestCooldownTurns: 10,

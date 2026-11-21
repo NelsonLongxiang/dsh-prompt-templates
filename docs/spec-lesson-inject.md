@@ -150,7 +150,7 @@ CREATE INDEX lesson_log_session ON lesson_log (session_id, seq);
 
 ```yaml
 lessons:
-  enabled: false            # 总开关，默认关；开启需另外批准
+  enabled: true             # 总开关，默认开（属主 2026-11-21 裁定）；写 false 关闭
   mode: inject              # 消化提示与唤起的交付方式：inject（静默）/ visible
   maxPerSession: 20
   digestCooldownTurns: 10
@@ -233,4 +233,4 @@ lessons:
 - 面板标记：**未做**。属主暂用 PATCH 路由标记；面板按钮要扩展 `TemplateLibraryFace`（公开的 slot 接口），留到下一步，在测试宿主上看过再上。
 - 测试：`tests/lessons.test.ts` 新增 5 个（标记与上限、装载一次、400 字截断、调小上限、已标未装照常唤起、宿主上的 PATCH 与四种 `source`、关闭时不装）。
 - 先红后绿：15 处变异中 14 处被测试拦住；剩下 1 处是等价变异（`agent/created` 监听不看总开关，`agent/pre-step` 那一侧也看，关闭时同样什么都不装）。
-- 真实宿主上压缩之后是否真的发 `agent/created`（`source: compact`）：NOT_RUN，只依据 `@deepseek-ai/dsh-agent` 的类型声明。在测试宿主实测之前，`lessons.enabled` 保持默认关。
+- 真实宿主上压缩之后是否真的发 `agent/created`（`source: compact`）：NOT_RUN，只依据 `@deepseek-ai/dsh-agent` 的类型声明。原计划在测试宿主实测之前保持默认关；属主 2026-11-21 裁定改为默认开，此项仍是 NOT_RUN 的已披露风险（压缩后常驻体会可能不装载，不影响写入与唤起）。

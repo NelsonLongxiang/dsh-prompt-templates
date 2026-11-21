@@ -27,7 +27,8 @@ async function harness(o: { enabled?: boolean; goal?: string; ticket?: boolean }
   ctx.provide('goals' as never, { get: () => goal } as never)
   if (o.ticket !== undefined) ctx.provide('a2aTickets' as never, { hasOpenTicket: () => o.ticket } as never)
   ctx.provide('tools' as never, { register: (tool: { name: string }) => { tools.set(tool.name, tool as never) } } as never)
-  const fiber = await ctx.plugin(host, { dbPath, selfCheck: { enabled: o.enabled ?? true } })
+  // No explicit switch exercises the shipped default (on since the 2026-11-21 owner decision).
+  const fiber = await ctx.plugin(host, { dbPath, ...(o.enabled === undefined ? {} : { selfCheck: { enabled: o.enabled } }) })
   const stop = async (turn: number, aborted = false) => { const ac = new AbortController(); if (aborted) ac.abort(); await ctx.serial('agent/turn-stopping' as never, { agent, turn, signal: ac.signal } as never) }
   const act = () => ctx.emit('tools/result' as never, { agent } as never, {} as never)
   const call = async (name: string, args: Record<string, unknown>, as = agent) => await tools.get(name)!.execute(args, { agent: as })
@@ -44,7 +45,13 @@ test('the fixed part fits its budget', () => {
   assert.ok(FIXED_PRESENT.length <= FIXED_MAX, `present ${FIXED_PRESENT.length}`)
 })
 
-test('off by default: no injection, tools refuse', async () => {
+test('Config turns the self-check on by default (owner decision 2026-11-21)', () => {
+  const decoded = host.Config({ dbPath: '/tmp/x.sqlite3' }) as { selfCheck: Record<string, unknown> }
+  assert.deepEqual(decoded.selfCheck, { enabled: true })
+  assert.deepEqual((host.Config({ dbPath: '/tmp/x.sqlite3', selfCheck: { enabled: false } }) as { selfCheck: Record<string, unknown> }).selfCheck, { enabled: false })
+})
+
+test('selfCheck.enabled false: no injection, tools refuse', async () => {
   const h = await harness({ enabled: false })
   try {
     h.act(); await h.stop(1)
