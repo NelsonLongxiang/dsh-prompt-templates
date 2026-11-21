@@ -184,14 +184,15 @@ M04/M05 验的是**原状态续接**：锁定数据库、session_id、会话日�
 
 ## 7. 交接通知与体会（0.18.0 起）
 
-0.18.0 发布的两项功能不在上面的 M/B 用例里，在同一测试宿主上按下面补测。边界、证据（§1.5）与收尾（§6）同上；每项用 §1.2 的新实验单元。两项默认都关，真实宿主与模型行为在取得证据前一律 NOT_RUN。依据：[spec-event-inject.md](spec-event-inject.md) §9.4、仓库中的 `docs/spec-lesson-inject.md` §11–§14 与 `docs/release-notes-0.18.0.md`（这两份不随 npm 包发布）。
+0.18.0 发布的两项功能不在上面的 M/B 用例里，在同一测试宿主上按下面补测。边界、证据（§1.5）与收尾（§6）同上；每项用 §1.2 的新实验单元。交接通知跟随事件提醒的开关，默认关；体会在 0.18.0 包里默认关，属主 2026-11-21 裁定（#40）后 master 上默认开，测哪个版本就按哪个版本的默认值。真实宿主与模型行为在取得证据前一律 NOT_RUN。依据：[spec-event-inject.md](spec-event-inject.md) §9.4、仓库中的 `docs/spec-lesson-inject.md` §11–§14 与 `docs/release-notes-0.18.0.md`（这两份不随 npm 包发布）。
 
 | ID | 操作 | 通过判据 | 失败或无法执行时 |
 |---|---|---|---|
 | H01 | 开事件提醒总开关与 `repeated-failure`；按 M02 的夹具让同一失败模式反复出现，直到该问题的提醒次数用完，过冷却后再出现一次 | 只发**一次**「【工坊·交接｜…】」通知；`GET …/event-episodes` 中该问题的 `handoff` 依次经 `due`、`pending` 到 `sent`；之后不再就此出声；问题的提醒计数、冷却与状态不因交接改变 | 记 FAIL，附日志 |
 | H02 | 同 H01，但在交接通知写入日志前停止宿主，再启动续接 | 重启后用同一个键重试并只送达一次；不重复发送 | 停机时机掌握不住记 NOT_RUN |
-| L01 | 在测试 profile 设 `lessons.enabled: true`；让同一目标先失败后成功 | 下一步出现消化提示；Agent 用 `lesson_write` 写下的「体会·N」出现在面板「体会」分类下，可见、可改、可删；不写也被允许 | 记 FAIL |
+| L01 | 测 0.18.0 包时在测试 profile 设 `lessons.enabled: true`（含 #40 的版本不写这一项即为开）；让同一目标先失败后成功 | 下一步出现消化提示；Agent 用 `lesson_write` 写下的「体会·N」出现在面板「体会」分类下，可见、可改、可删；不写也被允许 | 记 FAIL |
 | L02 | 接 L01，制造同一工具、同样准备或同一目标的情境 | 下一次模型决策前带回那条体会；冷却内不重复唤起；不命中时不注入 | 记 FAIL |
 | L03 | 用 `PATCH /plugins/dsh-prompt-templates/lessons/<template_id>`（`{"pinned": true}`）标常驻，再分别触发会话恢复与上下文压缩；最后用户主动清空上下文 | 恢复、压缩后各装载一次常驻体会（合计 ≤400 字、条数 ≤ `maxPinned`）；清空上下文时不装载。本项同时核实宿主压缩后是否真的发出 `agent/created`（`source: compact`），目前只有类型声明为据 | 宿主不发该事件时记 FAIL 并附证据，这会改变 `lessons.enabled` 的启用前提；没有压缩入口记 NOT_RUN |
-| D01 | 新单元，所有开关保持默认 | 交接通知、体会的表与日志零写入、零注入 | 记 FAIL |
+| D01 | 新单元，所有开关保持默认 | 交接通知零写入、零注入；0.18.0 包上体会也零写入、零注入（含 #40 的版本体会默认开，不在此判） | 记 FAIL |
+| D02 | 新单元，部署配置写 `lessons.enabled: false` 与 `selfCheck.enabled: false` | 体会与自查的表、日志零写入、零注入；如 Agent 仍能看到并调用 `lesson_write`、`selfcheck_write`、`selfcheck_conclude`，调用也不产生写入（记下工具是否可见） | 记 FAIL |
 
