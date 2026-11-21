@@ -220,7 +220,7 @@ export interface CueRow extends CueFeatures {
   readonly created_at: string
 }
 
-export type LessonLogKind = 'prompted' | 'written' | 'superseded' | 'recalled' | 'pinned-loaded' | 'card-injected' | 'round-closed' | 'round-missed' | 'type-proposed' | 'type-decided'
+export type LessonLogKind = 'prompted' | 'written' | 'superseded' | 'recalled' | 'pinned-loaded' | 'card-injected' | 'round-closed' | 'round-missed' | 'type-proposed' | 'type-decided' | 'round-verdict'
 
 /** How a recall round ended: the recalled lesson rewritten, a new lesson written, or nothing by the deadline. */
 export type RoundOutcome = 'updated' | 'written' | 'none'
@@ -419,6 +419,25 @@ export class LessonStore {
     return { opened: count('recalled'), closed: count('round-closed'), missed: count('round-missed'), kept }
   }
 
+  /** The lesson's latest recall row (open, closed or missed), if it was ever recalled. */
+  latestRecall(templateId: string): LessonLogRow | undefined {
+    return this.#db.prepare("SELECT * FROM lesson_log WHERE template_id = ? AND kind = 'recalled' ORDER BY seq DESC LIMIT 1").get(templateId) as unknown as LessonLogRow | undefined
+  }
+
+  /** B3b: external verdicts the owner attached to this lesson's rounds, and the latest one. */
+  verdicts(templateId: string): VerdictSummary {
+    const rows = this.#db.prepare("SELECT origin, at FROM lesson_log WHERE template_id = ? AND kind = 'round-verdict' ORDER BY seq").all(templateId) as Array<{ origin: string | null; at: string }>
+    let pass = 0, fail = 0
+    let latest: VerdictSummary['latest'] = null
+    for (const row of rows) {
+      const parsed = parseVerdict(row.origin)
+      if (parsed === null) continue
+      if (parsed.verdict === 'pass') pass += 1; else fail += 1
+      latest = { ...parsed, at: row.at }
+    }
+    return { pass, fail, latest }
+  }
+
   /** Note one call that matched a lesson's cue: whether it failed, and whether the lesson had been recalled by then. */
   recordHit(sessionId: string, templateId: string, callId: string, turn: number | null, failed: boolean, afterRecall: boolean): void {
     this.#db.prepare('INSERT INTO lesson_hits (session_id, template_id, call_id, turn, failed, after_recall, at) VALUES (?, ?, ?, ?, ?, ?, ?)')
@@ -532,11 +551,11 @@ export interface TimelineEntry {
   readonly type: string | null
   /** The lesson text at that point, when the entry wrote or soft-deleted one. */
   readonly text?: string
-  /** For round-closed: updated, written, kept or none. For type-decided: approved or rejected. */
+  /** For round-closed: updated, written, kept or none. For type-decided: approved or rejected. For round-verdict: pass or fail. */
   readonly outcome?: string
   /** For a no-entry: the stated reason. */
   readonly reason?: string
-  /** For a verified keep: how the session checked that the lesson still holds. For a write: the evidence attached to it. */
+  /** For a verified keep: how the session checked that the lesson still holds. For a write: the evidence attached to it. For a round-verdict: its reference. */
   readonly evidence?: string
   /** For card-injected: the workshop card's name. For a card round's ending: its key (card:<turn>). */
   readonly card?: string
@@ -583,6 +602,10 @@ export function lessonTimeline(store: TemplateStore, sessionId: string, limit = 
     if (row.kind === 'card-injected') { entry.card = (row.origin ?? '').split('@')[0]; entry.type = null }
     if ((row.kind === 'round-closed' || row.kind === 'round-missed') && (row.origin_ref ?? '').startsWith(CARD_KEY)) entry.card = row.origin_ref ?? undefined
     if (row.kind === 'type-decided') entry.outcome = row.origin_ref ?? undefined
+    if (row.kind === 'round-verdict') {
+      const parsed = parseVerdict(row.origin)
+      if (parsed !== null) { entry.outcome = parsed.verdict; entry.evidence = parsed.ref }
+    }
     out.push(entry)
     if (out.length >= max) break
   }
@@ -670,6 +693,42 @@ export function lessonKeep(store: TemplateStore, sessionId: string, type: unknow
   }
   store.lessons.record({ session_id: sessionId, kind: 'round-closed', template_id: lesson.id, turn, origin: `kept:${proof}`, origin_ref: String(round.seq), content_sha256: contentDigest(lesson.content) })
   return { ok: true, round: 'kept', type: kind }
+}
+
+/** B3b: an external verdict on a round — a review, CI or a receipt from another session; recorded by the owner. */
+export type Verdict = 'pass' | 'fail'
+/** A lesson's external verdicts: counts and the latest one with its reference. */
+export interface VerdictSummary {
+  readonly pass: number
+  readonly fail: number
+  readonly latest: { readonly verdict: Verdict; readonly ref: string; readonly at: string } | null
+}
+/** The reference of a verdict (a PR, CI or review link, a claim id): one line, at most this many characters. */
+export const VERDICT_REF_MAX = 200
+
+function parseVerdict(origin: string | null): { verdict: Verdict; ref: string } | null {
+  const m = /^(pass|fail):(.*)$/s.exec(origin ?? '')
+  return m === null ? null : { verdict: m[1] as Verdict, ref: m[2]! }
+}
+
+type VerdictResult = { ok: true; id: string; round: number; verdict: Verdict; ref: string } | { ok: false; code: 'not-found' | 'no-round' | 'bad-request'; error: string }
+
+/**
+ * The owner attaches an external verdict to a lesson's latest recall round (B3b, owner 2026-11-21). Only recorded:
+ * it never closes, reopens or misses a round, and the session has no tool to write one (the verdict comes from
+ * someone other than the session being judged).
+ */
+export function attachVerdict(store: TemplateStore, templateId: string, verdict: unknown, ref: unknown): VerdictResult {
+  if (verdict !== 'pass' && verdict !== 'fail') return { ok: false, code: 'bad-request', error: 'verdict must be pass or fail' }
+  const text = typeof ref === 'string' ? oneLineText(ref) : ''
+  const n = [...text].length
+  if (n === 0 || n > VERDICT_REF_MAX) return { ok: false, code: 'bad-request', error: `ref must be one line of 1..${String(VERDICT_REF_MAX)} characters: a PR, CI or review link, or a claim id` }
+  const cue = store.lessons.cue(templateId)
+  if (cue === undefined || !lessonsOf(store, cue.session_id).some(l => l.id === templateId)) return { ok: false, code: 'not-found', error: 'no such lesson of a session' }
+  const round = store.lessons.latestRecall(templateId)
+  if (round === undefined) return { ok: false, code: 'no-round', error: 'this lesson was never recalled, so it has no round to attach a verdict to' }
+  store.lessons.record({ session_id: cue.session_id, kind: 'round-verdict', template_id: templateId, turn: null, origin: `${verdict}:${text}`, origin_ref: String(round.seq), content_sha256: null })
+  return { ok: true, id: templateId, round: round.seq, verdict, ref: text }
 }
 
 /** Similarity of two lesson texts: Dice coefficient over character bigrams, ignoring whitespace and punctuation. */
@@ -1065,7 +1124,7 @@ export function registerLessons(ctx: Context, store: () => TemplateStore, config
     }))
     tools.register(withOutput({
       name: 'lesson_timeline',
-      description: 'Read your own session\'s recent lesson timeline across types, newest first: each lesson written, each old text soft-deleted when a type was overwritten (with the text), each recall and how its improvement round ended (closed by an update or a new lesson, or missed), and the owner\'s decisions on types you proposed. Optionally filter to one type. Read-only; acts only on the calling session.',
+      description: 'Read your own session\'s recent lesson timeline across types, newest first: each lesson written, each old text soft-deleted when a type was overwritten (with the text), each recall and how its improvement round ended (closed by an update or a new lesson, or missed), external verdicts the owner attached to a round (pass or fail with a link; they never close a round), and the owner\'s decisions on types you proposed. Optionally filter to one type. Read-only; acts only on the calling session.',
       parameters: objectParameters({
         limit: { type: 'number', description: 'How many entries, 1..100; default 20.' },
         type: { type: 'string', description: 'Optional: only this type.' },

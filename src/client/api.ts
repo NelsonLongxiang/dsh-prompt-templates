@@ -188,6 +188,15 @@ export interface LessonPinWire {
   readonly recurrence: RecurrenceWire
   /** B2b: the evidence attached to the lesson's current text, or null. */
   readonly evidence: string | null
+  /** B3b: external verdicts the owner attached to its rounds (zeros on an older host). */
+  readonly verdicts: VerdictsWire
+}
+
+/** B3b: a lesson's external verdicts. */
+export interface VerdictsWire {
+  readonly pass: number
+  readonly fail: number
+  readonly latest: { readonly verdict: 'pass' | 'fail'; readonly ref: string } | null
 }
 
 /** Matching calls and their failures, before a lesson's first recall and after it. */
@@ -201,7 +210,7 @@ export async function listLessonPins(sessionId: string): Promise<LessonPinWire[]
   try {
     const response = await fetch(`${BASE}/lessons?session_id=${encodeURIComponent(sessionId)}`, { cache: 'no-store' })
     if (!response.ok) return []
-    const body = await response.json() as { items?: Array<{ id?: unknown; pinned?: unknown; churn?: unknown; evidence?: unknown; recurrence?: { before?: { hits?: unknown; fails?: unknown }; after?: { hits?: unknown; fails?: unknown } }; rounds?: { opened?: unknown; closed?: unknown; missed?: unknown; kept?: unknown } }> }
+    const body = await response.json() as { items?: Array<{ id?: unknown; pinned?: unknown; churn?: unknown; evidence?: unknown; verdicts?: { pass?: unknown; fail?: unknown; latest?: { verdict?: unknown; ref?: unknown } | null }; recurrence?: { before?: { hits?: unknown; fails?: unknown }; after?: { hits?: unknown; fails?: unknown } }; rounds?: { opened?: unknown; closed?: unknown; missed?: unknown; kept?: unknown } }> }
     const n = (v: unknown): number => typeof v === 'number' && Number.isFinite(v) ? v : 0
     return (body.items ?? []).filter(item => typeof item.id === 'string').map(item => ({
       id: item.id as string, pinned: item.pinned === true,
@@ -212,6 +221,11 @@ export async function listLessonPins(sessionId: string): Promise<LessonPinWire[]
         after: { hits: n(item.recurrence?.after?.hits), fails: n(item.recurrence?.after?.fails) },
       },
       evidence: typeof item.evidence === 'string' && item.evidence !== '' ? item.evidence : null,
+      verdicts: {
+        pass: n(item.verdicts?.pass), fail: n(item.verdicts?.fail),
+        latest: (item.verdicts?.latest?.verdict === 'pass' || item.verdicts?.latest?.verdict === 'fail') && typeof item.verdicts.latest.ref === 'string'
+          ? { verdict: item.verdicts.latest.verdict, ref: item.verdicts.latest.ref } : null,
+      },
     }))
   } catch {
     return []
@@ -271,6 +285,11 @@ export function decideLessonType(sessionId: string, name: string, approved: bool
 }
 
 /** The owner pins or unpins one lesson; a full pin quota settles as error code `pinned-full`. */
+/** B3b: the owner attaches an external verdict (pass or fail, with a link) to the lesson's latest round. */
+export function attachLessonVerdict(templateId: string, verdict: 'pass' | 'fail', ref: string): Promise<TemplateActionResult> {
+  return mutate('POST', `/lessons/${encodeURIComponent(templateId)}/verdict`, { verdict, ref })
+}
+
 export function setLessonPinned(templateId: string, pinned: boolean): Promise<TemplateActionResult> {
   return mutate('PATCH', `/lessons/${encodeURIComponent(templateId)}`, { pinned })
 }
