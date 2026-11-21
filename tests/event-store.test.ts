@@ -127,7 +127,7 @@ test('v7 databases migrate to the current schema: existing episodes gain 提醒�
       assert.ok(store.library().every(card => card.active_version === null && card.stored_versions.length === 0))
     } finally { store.close() }
     const check = new DatabaseSync(path)
-    assert.equal((check.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, 10)
+    assert.equal((check.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, 11)
     check.close()
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })

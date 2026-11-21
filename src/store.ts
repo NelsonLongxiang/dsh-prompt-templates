@@ -25,6 +25,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { EVENT_MASTER_SQL, EVENT_REPEAT_AFTER_SQL, EVENT_SCHEMA_SQL, EventStore, seedDefaultPolicies } from './event-store.ts'
 import { INTERVENTIONS_SQL, InterventionLog, contentDigest } from './interventions.ts'
 import { SELF_CHECK_SQL, SelfCheckLog } from './self-check.ts'
+import { LESSONS_SQL, LessonStore } from './lessons.ts'
 
 /** v9: the version label of a template's text. */
 const TEMPLATE_VERSION_SQL = 'ALTER TABLE templates ADD COLUMN version TEXT'
@@ -48,9 +49,10 @@ import type { CategoryCreateRequest, CategoryView, PromptScope, TemplateCreateRe
  * v7 combines both migrations into one schema version,
  * v8 adds `event_episodes.repeated_after_reminder` (提醒后仍在重复, 0.16),
  * v9 adds `templates.version` and the durable `interventions` log (observer phase 1, 0.16),
- * v10 adds the wrap-up `self_check_log` (observer phase 2, PT-4).
+ * v10 adds the wrap-up `self_check_log` (observer phase 2, PT-4),
+ * v11 adds `lesson_cues` and `lesson_log` (体会, docs/spec-lesson-inject.md).
  */
-export const SCHEMA_VERSION = 10
+export const SCHEMA_VERSION = 11
 
 /** Upper bound of the inject interval when the deployment config omits one. */
 export const DEFAULT_INJECT_MAX_EVERY = 1000
@@ -128,6 +130,8 @@ export class TemplateStore {
   readonly interventions: InterventionLog
   /** The wrap-up self-check log (v10). */
   readonly selfChecks: SelfCheckLog
+  /** Lesson cues and log (v11). */
+  readonly lessons: LessonStore
 
   constructor(dbPath: string, options: TemplateStoreOptions = {}) {
     this.#injectMaxEvery = options.injectMaxEvery ?? DEFAULT_INJECT_MAX_EVERY
@@ -153,6 +157,7 @@ export class TemplateStore {
         this.db.exec(TEMPLATE_VERSIONS_SQL)
         this.db.exec(INTERVENTIONS_SQL)
         this.db.exec(SELF_CHECK_SQL)
+        this.db.exec(LESSONS_SQL)
         seedDefaultPolicies(this.db)
         this.db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`)
       } else if (onDisk >= 1 && onDisk < SCHEMA_VERSION) {
@@ -180,6 +185,7 @@ export class TemplateStore {
           this.db.exec(INTERVENTIONS_SQL)
         }
         if (onDisk <= 9) this.db.exec(SELF_CHECK_SQL)
+        if (onDisk <= 10) this.db.exec(LESSONS_SQL)
         this.db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`)
       } else if (onDisk !== SCHEMA_VERSION) {
         throw new Error(`${dbPath} has schema version ${onDisk}, incompatible with this build (expected ${SCHEMA_VERSION})`)
@@ -191,6 +197,7 @@ export class TemplateStore {
       this.events = new EventStore(this.db)
       this.interventions = new InterventionLog(this.db)
       this.selfChecks = new SelfCheckLog(this.db)
+      this.lessons = new LessonStore(this.db)
     } catch (error) {
       // A failed constructor has no owner to close it later. Preserve the
       // original fault even when initialization failed before BEGIN.
@@ -461,9 +468,18 @@ export class TemplateStore {
     return rowToView({ ...row, scope: 'global', session_id: null, updated_at: updated })
   }
 
-  /** Delete one template; `false` when absent. */
+  /** Delete one template; `false` when absent. A lesson's cue row goes with it (v11). */
   delete(id: string): boolean {
-    return this.db.prepare('DELETE FROM templates WHERE id = ?').run(id).changes > 0
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      const deleted = this.db.prepare('DELETE FROM templates WHERE id = ?').run(id).changes > 0
+      if (deleted) this.db.prepare('DELETE FROM lesson_cues WHERE template_id = ?').run(id)
+      this.db.exec('COMMIT')
+      return deleted
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
   }
 
   /** List user categories: global ones plus one session's, ordered by name. */
