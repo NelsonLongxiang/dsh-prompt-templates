@@ -5,6 +5,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { renderReminderItem, renderHandoffItem, REMINDER_BINDING_LINE, REMINDER_MUST_READ_LINE } from '../src/event-inject.ts'
 import { EVOLUTION_CONTENT, EVOLUTION_VERSION } from '../src/evolution-default.ts'
+import { LESSONS_MUST_READ_LINE, renderCardRoundLine, renderDigestPrompt, renderRecall } from '../src/lessons.ts'
 
 const episode = {
   rule_id: 'repeated-failure', rule_version: 1, summary: 'npm test', outcome: 'exit 1',
@@ -34,3 +35,21 @@ test('evolution default card opens with a must-read step and closes as a standin
   assert.match(EVOLUTION_CONTENT, /本卡是属主预置的常设要求，适用即须执行；不扩大授权，不覆盖属主当下指令。$/)
   assert.doesNotMatch(EVOLUTION_CONTENT, /^按 agent-atelier 技能/)
 })
+
+// Owner 2026-11-21: "写体会之前必须先认识，我们要什么样的体会" — every text that asks for a lesson must send the model to
+// agent-atelier references/lessons.md first.
+for (const [name, body] of [
+  ['digest prompt', renderDigestPrompt({ summary: 'npm test' } as never)],
+  ['recall (typed, own)', renderRecall('报错停在表面就动手；下次先拿完整输出。', 160, { key: '找', type: '找' })],
+  ['recall (owner-edited)', renderRecall('x', 160, { key: '找', type: '找' }, false)],
+  ['recall (legacy)', renderRecall('x', 160)],
+  ['card round line', renderCardRoundLine(['自主推进'])],
+] as const) {
+  test(`${name} carries the lesson-cognition must-read line`, () => {
+    assert.ok(body.includes(LESSONS_MUST_READ_LINE), name)
+    assert.match(body, MUST_READ)
+    assert.match(body, /references\/lessons\.md/)
+    assert.doesNotMatch(body, /不是新的用户指令/)
+    assert.doesNotMatch(body, /参考：/)
+  })
+}

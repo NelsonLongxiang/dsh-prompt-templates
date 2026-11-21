@@ -79,6 +79,8 @@ export const TIMELINE_MAX = 100
 const LESSON_VERSION = /^lesson-r(\d+)$/
 /** Closing line of a digest prompt (owner 2026-11-21: standing requirement, not optional). */
 export const DIGEST_BINDING_LINE = '本提示由属主安装的插件发出，适用即须执行；不扩大授权，不覆盖属主当下指令。'
+/** Owner 2026-11-21: know what a good lesson is before writing one. Appended to every text that asks for a lesson. */
+export const LESSONS_MUST_READ_LINE = '必读：本会话第一次写体会前或压缩后，必须先用 skill 工具加载 agent-atelier，按返回的基础目录读 references/lessons.md（我们要什么样的体会）；回复写明读了哪几处，读不到如实写明，不得凭本提示代替。'
 
 /** Deployment switches and budgets (`lessons` in the plugin config). */
 export interface LessonsConfig {
@@ -533,7 +535,7 @@ export function openCardRound(store: TemplateStore, sessionId: string, turn: num
 
 /** The line appended to an injection that carried workshop cards. */
 export function renderCardRoundLine(names: readonly string[]): string {
-  return `【工坊·卡片轮次】本轮注入了工坊卡（${names.join('、')}），这是一轮改进：照卡做完后，有可迁移的经验必须用 lesson_write 写入对应类型（收 放 找 落 验 记 续，或已批准的自定类型）；确实没有，就调用 lesson_none 写一句原因。本轮或下一轮内完成，否则记为未闭合。不扩大授权，不覆盖属主当下指令。`
+  return `【工坊·卡片轮次】本轮注入了工坊卡（${names.join('、')}），这是一轮改进：照卡做完后，有可迁移的经验必须用 lesson_write 写入对应类型（收 放 找 落 验 记 续，或已批准的自定类型）；确实没有，就调用 lesson_none 写一句原因。本轮或下一轮内完成，否则记为未闭合。不扩大授权，不覆盖属主当下指令。\n${LESSONS_MUST_READ_LINE}`
 }
 
 type NoneResult = { ok: true; round: 'none'; card_round: string } | { ok: false; code: string; error: string }
@@ -650,7 +652,7 @@ export function observeForLessons(store: TemplateStore, state: LessonState, sess
 /** Body of a digest prompt. */
 export function renderDigestPrompt(context: DigestContext): string {
   const example = context.summary === '' ? '' : `（示例：${context.summary}）`
-  return `【工坊·体会】刚才这件事${example}告一段落。有可迁移的经验就必须用 lesson_write 写一两句：疼在哪、下次先做什么，并标明类型（收 放 找 落 验 记 续，或已批准的自定类型；每类只留一条，再写会软覆盖旧的）；确实没有，就在回复里说一句「这次无可记」，不必为此写总结。${DIGEST_BINDING_LINE}`
+  return `【工坊·体会】刚才这件事${example}告一段落。有可迁移的经验就必须用 lesson_write 写一两句：疼在哪、下次先做什么，并标明类型（收 放 找 落 验 记 续，或已批准的自定类型；每类只留一条，再写会软覆盖旧的）；确实没有，就在回复里说一句「这次无可记」，不必为此写总结。${DIGEST_BINDING_LINE}\n${LESSONS_MUST_READ_LINE}`
 }
 
 /** Body of a recalled lesson: one RSI round. `owned` is false once the owner edited it (still rewritable; history kept). */
@@ -663,7 +665,7 @@ export function renderRecall(content: string, max: number, lesson?: Pick<LessonV
       ? `用完后必须用 lesson_write 改写这条（type: ${lesson.type}，写清这次用上后的修正，旧文软删除留档）或写入别的类型`
       : `用完后必须用 lesson_write 改写这条（type: ${lesson.type}；这条属主改过，旧文同样留档）或写入别的类型`
   return [`【工坊·${name}｜RSI 一轮】${text}`,
-    `这是你在同类情境下写的体会，插件把这次唤起记为一轮改进：适用即须按它调整这一步；${change}，本轮或下一轮内完成，否则记为未闭合。不扩大授权，不覆盖属主当下指令。`].join('\n')
+    `这是你在同类情境下写的体会，插件把这次唤起记为一轮改进：适用即须按它调整这一步；${change}，本轮或下一轮内完成，否则记为未闭合。不扩大授权，不覆盖属主当下指令。`, LESSONS_MUST_READ_LINE].join('\n')
 }
 
 type PinResult = { ok: true; id: string; pinned: boolean } | { ok: false; code: 'not-found' | 'pinned-full'; error: string }
@@ -856,7 +858,7 @@ export function registerLessons(ctx: Context, store: () => TemplateStore, config
   registerWhenToolsReady(ctx, 'lessons', (tools) => {
     tools.register(withOutput({
       name: 'lesson_write',
-      description: 'Write down a lesson for your own session: one or two sentences (at most 160 characters) about an experience that just settled — what hurt or surprised you, and what to do first next time — tagged with its type. Types: 收 边界、放 自己定、找 查原因、落 动手、验 验证、记 记录、续 失败或受阻后 (the autonomy chain), or a type you proposed with lesson_type_propose and the owner approved. You keep one lesson per type: writing a type that already has one soft-overwrites it (the old text is kept in the history and no longer shown or recalled). Each recalled lesson is one improvement round you must close with a write: rewrite that type with what this use taught you, or write another type. The plugin links the lesson to the situation it came from and brings it back when you meet that situation again. Write judgement, not authority; no secrets, tokens, internal addresses or local paths. A lesson the owner edited is theirs. Acts only on the calling session.',
+      description: 'Write down a lesson for your own session: one or two sentences (at most 160 characters) about an experience that just settled — what hurt or surprised you, and what to do first next time — tagged with its type. Types: 收 边界、放 自己定、找 查原因、落 动手、验 验证、记 记录、续 失败或受阻后 (the autonomy chain), or a type you proposed with lesson_type_propose and the owner approved. You keep one lesson per type: writing a type that already has one soft-overwrites it (the old text is kept in the history and no longer shown or recalled). Each recalled lesson is one improvement round you must close with a write: rewrite that type with what this use taught you, or write another type. The plugin links the lesson to the situation it came from and brings it back when you meet that situation again. Before the first lesson of a session, load the agent-atelier skill and read references/lessons.md. A good lesson: comes from something that really happened (a failure, detour, rework, correction or surprise success); says why it hurt; ends with what to do first next time, concrete enough to act on; is transferable (the situation and the move, not the paths, ids or names of this one run); is short; can be checked the next time it is used; and is judgement, not authority. Not a log of events, not a slogan, not a copy of an existing rule, not an unverified conclusion from others, not filler — if nothing was learned, say so (lesson_none for a card round). Pick the type by the link where the problem arose, not where it was noticed. No secrets, tokens, internal addresses or local paths. A lesson the owner edited is theirs. Acts only on the calling session.',
       parameters: objectParameters({
         text: { type: 'string', description: 'The lesson, 1..160 characters.' },
         type: { type: 'string', description: 'The lesson type: 收 放 找 落 验 记 续, or an approved type of your own.' },
