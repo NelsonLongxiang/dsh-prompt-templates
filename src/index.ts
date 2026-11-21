@@ -281,7 +281,7 @@ async function handle(
           const cue = store.lessons.cue(lesson.id)
           return { id: lesson.id, key: lesson.key, type: lesson.type, index: lesson.index, version: lesson.version, content_sha256: contentDigest(lesson.content),
             origin: cue?.origin ?? null, pinned: cue?.pinned === 1, recall_count: cue?.recall_count ?? 0, last_recalled_turn: cue?.last_recalled_turn ?? null,
-            rounds: store.lessons.rounds(lesson.id), churn: lessonChurn(store, lesson.id), recurrence: store.lessons.recurrence(lesson.id) }
+            rounds: store.lessons.rounds(lesson.id), churn: lessonChurn(store, lesson.id), recurrence: store.lessons.recurrence(lesson.id), evidence: store.lessons.evidence(lesson.id, contentDigest(lesson.content)) ?? null }
         })
         const types = [...BUILTIN_LESSON_TYPES.map(t => ({ name: t.name, description: t.description, builtin: true, status: 'approved' })),
           ...store.lessons.types(sessionId).map(t => ({ name: t.name, description: t.description, builtin: false, status: t.status, proposed_at: t.proposed_at, decided_at: t.decided_at }))]

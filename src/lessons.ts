@@ -156,6 +156,23 @@ export const LESSON_HITS_SQL = `CREATE TABLE IF NOT EXISTS lesson_hits (
 );
 CREATE INDEX IF NOT EXISTS lesson_hits_template ON lesson_hits (template_id, seq)`
 
+/**
+ * Evidence a session attached to one lesson write (B2b, owner 2026-11-21): a PR or CI link, a command and its result,
+ * a ygl claim id. Keyed by the lesson and the digest of the text it backs, so the timeline can show it next to that
+ * write. Created idempotently at every open (no schema bump).
+ */
+export const LESSON_EVIDENCE_SQL = `CREATE TABLE IF NOT EXISTS lesson_evidence (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT NOT NULL,
+  template_id TEXT NOT NULL,
+  content_sha256 TEXT NOT NULL,
+  evidence TEXT NOT NULL,
+  at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS lesson_evidence_template ON lesson_evidence (template_id, content_sha256)`
+/** Evidence on a lesson write: optional, one line, at most this many characters. */
+export const EVIDENCE_MAX = 200
+
 /** One side of a lesson's recurrence: calls in the same situation, and how many of them failed. */
 export interface HitCount { readonly hits: number; readonly fails: number }
 /** Recurrence of a lesson's situation before its first recall and after it (B4a). */
@@ -422,6 +439,18 @@ export class LessonStore {
     return { before: side(0), after: side(1) }
   }
 
+  /** Attach evidence to one lesson write (the text with this digest). */
+  addEvidence(sessionId: string, templateId: string, contentSha256: string, evidence: string): void {
+    this.#db.prepare('INSERT INTO lesson_evidence (session_id, template_id, content_sha256, evidence, at) VALUES (?, ?, ?, ?, ?)')
+      .run(sessionId, templateId, contentSha256, evidence, new Date().toISOString())
+  }
+
+  /** The evidence attached to the write of this text, if any (the latest when the same text was written again). */
+  evidence(templateId: string, contentSha256: string): string | undefined {
+    const row = this.#db.prepare('SELECT evidence FROM lesson_evidence WHERE template_id = ? AND content_sha256 = ? ORDER BY seq DESC LIMIT 1').get(templateId, contentSha256) as { evidence: string } | undefined
+    return row?.evidence
+  }
+
   /** Content digests of one lesson's writes, oldest first. */
   writtenDigests(templateId: string): string[] {
     return (this.#db.prepare("SELECT content_sha256 FROM lesson_log WHERE template_id = ? AND kind = 'written' ORDER BY seq").all(templateId) as Array<{ content_sha256: string | null }>)
@@ -507,7 +536,7 @@ export interface TimelineEntry {
   readonly outcome?: string
   /** For a no-entry: the stated reason. */
   readonly reason?: string
-  /** For a verified keep: how the session checked that the lesson still holds. */
+  /** For a verified keep: how the session checked that the lesson still holds. For a write: the evidence attached to it. */
   readonly evidence?: string
   /** For card-injected: the workshop card's name. For a card round's ending: its key (card:<turn>). */
   readonly card?: string
@@ -540,6 +569,10 @@ export function lessonTimeline(store: TemplateStore, sessionId: string, limit = 
     if (row.kind === 'written' || row.kind === 'superseded') {
       const text = textOf(row.template_id, row.content_sha256)
       if (text !== undefined) entry.text = text
+    }
+    if (row.kind === 'written' && row.template_id !== null && row.content_sha256 !== null) {
+      const evidence = store.lessons.evidence(row.template_id, row.content_sha256)
+      if (evidence !== undefined) entry.evidence = evidence
     }
     if (row.kind === 'round-closed') {
       const origin = row.origin ?? ''
@@ -691,8 +724,12 @@ export function expireRounds(store: TemplateStore, sessionId: string, turn: numb
  * followed, else from the session's last observed call; the session cannot name a cue. A lesson the owner edited on the
  * panel is the owner's: the session cannot overwrite it.
  */
-export function writeLesson(store: TemplateStore, state: LessonState, sessionId: string, text: string, type: unknown, _config?: LessonsConfig): WriteResult {
+export function writeLesson(store: TemplateStore, state: LessonState, sessionId: string, text: string, type: unknown, _config?: LessonsConfig, evidence?: unknown): WriteResult {
   const body = text.trim()
+  const proof = typeof evidence === 'string' ? oneLineText(evidence) : ''
+  if ([...proof].length > EVIDENCE_MAX) {
+    return { ok: false, code: 'evidence', error: `evidence is optional, one line, at most ${String(EVIDENCE_MAX)} characters: a PR or CI link, a command and its result, or a claim id` }
+  }
   if (body === '' || [...body].length > LESSON_MAX) {
     return { ok: false, code: 'length', error: `a lesson is 1..${String(LESSON_MAX)} characters: one or two sentences, what hurt and what to do first next time` }
   }
@@ -721,6 +758,7 @@ export function writeLesson(store: TemplateStore, state: LessonState, sessionId:
     if (store.lessons.cue(current.id) === undefined) store.lessons.addCue(current.id, sessionId, cue, origin, originRef, turn ?? 0)
     else store.lessons.updateCue(current.id, cue, origin, originRef, turn ?? 0)
     store.lessons.record({ session_id: sessionId, kind: 'written', template_id: current.id, turn, origin, origin_ref: originRef, content_sha256: contentDigest(body) })
+    if (proof !== '') store.lessons.addEvidence(sessionId, current.id, contentDigest(body), proof)
     state.context = undefined
     return { ok: true, id: current.id, type: kind, version: next, superseded: true, owner_edited: ownerEdited, round: closeRound(store, sessionId, current.id, turn, body) }
   }
@@ -734,6 +772,7 @@ export function writeLesson(store: TemplateStore, state: LessonState, sessionId:
   store.update(made.id, { content: body, version: 'lesson-r1' })
   store.lessons.addCue(made.id, sessionId, cue, origin, originRef, turn ?? 0)
   store.lessons.record({ session_id: sessionId, kind: 'written', template_id: made.id, turn, origin, origin_ref: originRef, content_sha256: contentDigest(body) })
+  if (proof !== '') store.lessons.addEvidence(sessionId, made.id, contentDigest(body), proof)
   state.context = undefined
   return { ok: true, id: made.id, type: kind, version: 'lesson-r1', superseded: false, round: closeRound(store, sessionId, made.id, turn, body) }
 }
@@ -982,16 +1021,17 @@ export function registerLessons(ctx: Context, store: () => TemplateStore, config
   registerWhenToolsReady(ctx, 'lessons', (tools) => {
     tools.register(withOutput({
       name: 'lesson_write',
-      description: 'Write down a lesson for your own session: one or two sentences (at most 160 characters) about an experience that just settled — what hurt or surprised you, and what to do first next time — tagged with its type. Types: 收 边界、放 自己定、找 查原因、落 动手、验 验证、记 记录、续 失败或受阻后 (the autonomy chain), or a type you proposed with lesson_type_propose and the owner approved. You keep one lesson per type: writing a type that already has one soft-overwrites it (the old text is kept in the history and no longer shown or recalled). Each recalled lesson is one improvement round you must close: rewrite that type with what this use taught you, write another type, or — if it held and nothing needs changing — keep it with lesson_keep and the evidence of how you checked. The plugin links the lesson to the situation it came from and brings it back when you meet that situation again. Before the first lesson of a session, load the agent-atelier skill and read references/lessons.md. A good lesson: comes from something that really happened (a failure, detour, rework, correction or surprise success); says why it hurt; ends with what to do first next time, concrete enough to act on; is transferable (the situation and the move, not the paths, ids or names of this one run); is short; can be checked the next time it is used; and is judgement, not authority. Not a log of events, not a slogan, not a copy of an existing rule, not an unverified conclusion from others, not filler — if nothing was learned, say so (lesson_none for a card round). Pick the type by the link where the problem arose, not where it was noticed. No secrets, tokens, internal addresses or local paths. A lesson the owner edited is theirs. Acts only on the calling session.',
+      description: 'Write down a lesson for your own session: one or two sentences (at most 160 characters) about an experience that just settled — what hurt or surprised you, and what to do first next time — tagged with its type. Types: 收 边界、放 自己定、找 查原因、落 动手、验 验证、记 记录、续 失败或受阻后 (the autonomy chain), or a type you proposed with lesson_type_propose and the owner approved. You keep one lesson per type: writing a type that already has one soft-overwrites it (the old text is kept in the history and no longer shown or recalled). Each recalled lesson is one improvement round you must close: rewrite that type with what this use taught you, write another type, or — if it held and nothing needs changing — keep it with lesson_keep and the evidence of how you checked. The plugin links the lesson to the situation it came from and brings it back when you meet that situation again. Before the first lesson of a session, load the agent-atelier skill and read references/lessons.md. A good lesson: comes from something that really happened (a failure, detour, rework, correction or surprise success); says why it hurt; ends with what to do first next time, concrete enough to act on; is transferable (the situation and the move, not the paths, ids or names of this one run); is short; can be checked the next time it is used; and is judgement, not authority. Not a log of events, not a slogan, not a copy of an existing rule, not an unverified conclusion from others, not filler — if nothing was learned, say so (lesson_none for a card round). Pick the type by the link where the problem arose, not where it was noticed. When something checkable backs it (a PR or CI link, a command and its result, a ygl claim id), add it as evidence; it is optional. No secrets, tokens, internal addresses or local paths. A lesson the owner edited is theirs. Acts only on the calling session.',
       parameters: objectParameters({
         text: { type: 'string', description: 'The lesson, 1..160 characters.' },
         type: { type: 'string', description: 'The lesson type: 收 放 找 落 验 记 续, or an approved type of your own.' },
+        evidence: { type: 'string', description: `Optional: what backs the lesson — a PR or CI link, a command and its result, a ygl claim id; one line, at most ${String(EVIDENCE_MAX)} characters.` },
       }, ['text', 'type']),
-      execute: async (args: { text?: unknown; type?: unknown }, exec: unknown) => {
+      execute: async (args: { text?: unknown; type?: unknown; evidence?: unknown }, exec: unknown) => {
         if (!config().enabled) return { ok: false, code: 'disabled', error: 'lessons are off on this host' }
         const sessionId = (exec as ExecLike).agent?.session.header.id
         if (sessionId === undefined || sessionId === null) return { ok: false, code: 'session', error: 'no calling session' }
-        return writeLesson(store(), stateOf(String(sessionId)), String(sessionId), String(args.text ?? ''), args.type, config())
+        return writeLesson(store(), stateOf(String(sessionId)), String(sessionId), String(args.text ?? ''), args.type, config(), args.evidence)
       },
     }))
     tools.register(withOutput({

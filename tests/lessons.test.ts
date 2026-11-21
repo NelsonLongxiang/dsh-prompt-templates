@@ -707,3 +707,23 @@ test('recurrence: calls matching a lesson are counted before and after its first
     assert.ok(!w.store.lessons.log(S).some(row => (row.kind as string) === 'cue-hit'))
   } finally { w.store.close() }
 })
+
+// B2b (owner 2026-11-21, system RSI loop map): a lesson may carry checkable evidence; it is optional and never a gate.
+test('evidence: optional on lesson_write, one line, at most 200 characters; tied to the text it backs; shown in the timeline', () => {
+  const w = world(ON)
+  try {
+    const plain = w.write('报错停在表面就动手会返工；下次先拿完整输出。', '找')
+    assert.ok(plain.ok, 'no evidence is fine')
+    const id = plain.ok ? plain.id : ''
+    const tooLong = writeLesson(w.store, w.state, S, 'CI 绿不等于测试跑了；先看测试数。', '验', ON, 'x'.repeat(201))
+    assert.equal(!tooLong.ok && tooLong.code, 'evidence')
+    assert.equal(lessonsOf(w.store, S).some(l => l.type === '验'), false, 'a refused write writes nothing')
+    const backed = writeLesson(w.store, w.state, S, '报错停在表面就动手会返工；下次先读到出错的那一层。', '找', ON, '  dsh-prompt-templates#50\n根因见 #52  ')
+    assert.ok(backed.ok)
+    const current = lessonsOf(w.store, S).find(l => l.id === id)!
+    assert.equal(w.store.lessons.evidence(id, contentDigest(current.content)), 'dsh-prompt-templates#50 根因见 #52', 'trimmed to one line')
+    const writes = lessonTimeline(w.store, S, 20).filter(e => e.kind === 'written')
+    assert.equal(writes.find(e => e.text === current.content)?.evidence, 'dsh-prompt-templates#50 根因见 #52')
+    assert.equal(writes.find(e => e.text === '报错停在表面就动手会返工；下次先拿完整输出。')?.evidence, undefined, 'the earlier write had none')
+  } finally { w.store.close() }
+})
