@@ -112,6 +112,7 @@ test('M02: an empty-message tool step receives the event reminder; scheduled inj
     assert.match(decision.messages?.[0]?.content?.[0]?.text ?? '', /repeated-failure@1/)
     const episodes = await request(route, 'GET', `${BASE}/event-episodes?session_id=s`)
     assert.equal(episodes.body.items[0].state, 'notified')
+    assert.equal(episodes.body.items[0].handoff, 'none', 'reminding has not run out: nothing to hand off')
     assert.equal(episodes.body.outbox[0].state, 'prepared')
   })
 })

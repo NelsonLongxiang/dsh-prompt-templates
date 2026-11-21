@@ -18,7 +18,7 @@
  *   GET    /plugins/dsh-prompt-templates/event-policies             → { items }
  *   PATCH  /plugins/dsh-prompt-templates/event-policies/master      → { config }
  *   PATCH  /plugins/dsh-prompt-templates/event-policies/:rule_id    → { policy } | 404
- *   GET    /plugins/dsh-prompt-templates/event-episodes?session_id=… → { items, outbox }
+ *   GET    /plugins/dsh-prompt-templates/event-episodes?session_id=… → { items, outbox } (each item carries `handoff`)
  *   PATCH  /plugins/dsh-prompt-templates/event-episodes/:id         → { episode } | 404 (evidence_refs required)
  *   GET    /plugins/dsh-prompt-templates/library[?session_id=]      → { items, schema } (read-only card library, v9; with session_id: that session's own templates)
  *   POST   /plugins/dsh-prompt-templates/library/import             → { plan } (versioned pack; dry run unless apply: true)
@@ -353,7 +353,8 @@ async function handle(
         const sessionId = url.searchParams.get('session_id')
         if (sessionId === null || sessionId === '') return json(res, 400, errorBody('bad-request', 'missing session_id'))
         const events = client().events
-        return json(res, 200, { items: events.episodes(sessionId), outbox: events.outbox(sessionId) })
+        // `handoff`: where the episode stands once reminding has run out (none / due / pending / sent / failed).
+        return json(res, 200, { items: events.episodes(sessionId).map(episode => ({ ...episode, handoff: events.handoffState(episode) })), outbox: events.outbox(sessionId) })
       }
       const episodeId = rest[0]
       if (episodeId !== undefined && rest.length === 1 && method === 'PATCH') {
