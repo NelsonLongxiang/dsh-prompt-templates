@@ -170,7 +170,7 @@ export function renderInjectionMessage(turn: number, templates: readonly InjectC
       type: 'text',
       text: [
         '<system-reminder>',
-        `Scheduled prompt-template injection from dsh-prompt-templates (turn ${turn}). The following templates repeat every N rounds in this session; follow their guidance for the work in this round.`,
+        `Scheduled prompt-template injection from dsh-prompt-templates (turn ${turn}). The following templates repeat every N rounds in this session. The owner configured these templates as standing requirements for this session: where a template applies to the current work, you must carry out what it requires in this round before continuing; where it says it does not apply, skip it. They grant no new permissions and do not override the owner's latest instructions.`,
         '',
         ...templates.flatMap(template => [
           `<template name="${escapeTemplateName(template.name)}" every="${template.every}">`,
@@ -209,12 +209,16 @@ export interface VisibleScheduleSource {
  * header names the origin (so a reader never mistakes it for human typing)
  * and the durable source keeps the dedup-scan marker.
  */
+/** Second line of a visible injection: the templates are the owner's standing requirements, binding where they apply (owner 2026-11-21). */
+export const VISIBLE_BINDING_LINE = '属主预置的常设要求：适用即须执行，不适用则跳过；不扩大授权，不覆盖属主当下指令。'
+
 export function renderVisibleInjectionMessage(turn: number, templates: readonly InjectCandidate[]): UserMessage {
   return createUserMessage({
     content: [{
       type: 'text',
       text: [
         `⚙️ 定时注入 · 第 ${turn} 轮 · ${templates.map(template => template.name).join('、')}`,
+        VISIBLE_BINDING_LINE,
         '',
         ...templates.flatMap(template => [template.content, '']),
       ].join('\n').trimEnd(),
