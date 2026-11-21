@@ -88,3 +88,27 @@ test('the plugin\'s own tools reach the model with an object parameter schema na
     await cleanup()
   }
 })
+
+test('lesson_write tells the model what a good lesson is, as the model sees it (owner 2026-11-21, agent-atelier references/lessons.md)', async () => {
+  const { ctx, cleanup } = await harness()
+  const { createTestDirectory } = await import('./temp-dir.mjs')
+  const { join } = await import('node:path')
+  const { rmSync } = await import('node:fs')
+  const host = await import('../src/index.ts')
+  const dir = createTestDirectory('pt-tool-desc-')
+  const fiber = await ctx.plugin(host as never, { dbPath: join(dir, 'db.sqlite3') } as never)
+  try {
+    await new Promise(resolve => setImmediate(resolve))
+    const tools = ctx.tools as unknown as { schemas: () => Array<{ name: string, description?: string }> }
+    const description = tools.schemas().find(s => s.name === 'lesson_write')?.description ?? ''
+    for (const phrase of ['read references/lessons.md', 'really happened', 'says why it hurt', 'what to do first next time',
+      'is transferable', 'is short', 'can be checked', 'judgement, not authority', 'not a slogan', 'not filler',
+      'by the link where the problem arose, not where it was noticed']) {
+      assert.ok(description.includes(phrase), `lesson_write description includes "${phrase}"`)
+    }
+  } finally {
+    await (fiber as unknown as { dispose: () => Promise<void> }).dispose()
+    rmSync(dir, { recursive: true, force: true })
+    await cleanup()
+  }
+})
