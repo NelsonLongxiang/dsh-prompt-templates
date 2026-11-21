@@ -587,7 +587,7 @@ test('listener faults stay inside the step, and dispose closes the store', async
 
     await withHost({}, { when: 'before' }, async (handle) => {
       const db = new DatabaseSync(handle.dbPath)
-      db.exec('PRAGMA user_version=11')
+      db.exec('PRAGMA user_version=12')
       db.close()
       const before = logged.length
       const decision = await preStep(handle.ctx, { sessionId: 'sess-a', turn: 1 })
@@ -601,7 +601,7 @@ test('listener faults stay inside the step, and dispose closes the store', async
       const response = await request(handle.handler(), 'GET', TEMPLATES)
       assert.equal(response.status, 500)
       assert.equal(response.body.error.code, 'store-error')
-      assert.match(response.body.error.message, /schema version 11/)
+      assert.match(response.body.error.message, /schema version 12/)
     })
   } finally {
     console.error = original
@@ -774,7 +774,7 @@ test('interventions: schedule, event, manual (insert, send, interject) and plugi
       const handler = handle.handler()
       const read = await request(handler, 'GET', '/plugins/dsh-prompt-templates/interventions?session_id=sess-i')
       assert.equal(read.status, 200)
-      assert.equal(read.body.schema, 10)
+      assert.equal(read.body.schema, 11)
       const items = read.body.items as Array<Record<string, unknown>>
       assert.deepEqual(items.map(i => `${String(i['source'])}:${String(i['method'])}:${String(i['caller'])}`), ['schedule:null:null', 'manual:insert:null', 'manual:send:null', 'manual:interject:null', 'event:null:null', 'plugin:null:@nelsonlongxiang/dsh-open-a2a-net'])
       assert.deepEqual([items[0]?.['turn'], items[0]?.['step'], items[0]?.['template_id']], [2, 3, templateId])
@@ -815,7 +815,7 @@ test('library: a versioned pack is stored beside the active text and never switc
     const card = (await request(handler, 'GET', `${TEMPLATES}/${id}`)).body.template
     assert.deepEqual([card.content, card.version, card.inject_enabled, card.inject_every, card.mode], ['old words', null, true, 2, 'inject'])
     const library = (await request(handler, 'GET', LIB)).body
-    assert.equal(library.schema, 10)
+    assert.equal(library.schema, 11)
     const active = library.items.find((c: { id: string }) => c.id === id)
     assert.equal(active.active_version, null)
     assert.equal(active.content_sha256, contentDigest('old words'))
@@ -843,7 +843,7 @@ test('library: a versioned pack is stored beside the active text and never switc
     await request(handler, 'POST', TEMPLATES, { name: '我的自查', content: 'check myself', scope: 'session', session_id: 'sess-own', inject_enabled: true, inject_every: 10 })
     await request(handler, 'POST', TEMPLATES, { name: '别人的', content: 'other', scope: 'session', session_id: 'sess-other' })
     const own = (await request(handler, 'GET', `${LIB}?session_id=sess-own`)).body
-    assert.equal(own.schema, 10)
+    assert.equal(own.schema, 11)
     assert.deepEqual(own.items.map((c: { name: string; scope: string; inject_every: number; active_version: null }) => [c.name, c.scope, c.inject_every, c.active_version]), [['我的自查', 'session', 10, null]])
     assert.equal(own.items[0].content, undefined)
     assert.deepEqual((await request(handler, 'GET', `${LIB}?session_id=sess-none`)).body.items, [])

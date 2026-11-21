@@ -1,6 +1,6 @@
 # 体会：消化写入与情境唤起（规格草案）
 
-状态：规格草案，2026-11-21，分支 `docs/lesson-inject-spec`。只有设计，没有实现；不改现有任何注入模式、开关或表结构。实现前需属主确认本文，尤其是第 10 节的待裁定点。
+状态：规格，2026-11-21，分支 `docs/lesson-inject-spec`。属主 2026-11-21 把第 10 节的五点交给实现方按推荐执行（见该节「裁定」列），第一期按本文实现；第二、三期未实现。不改现有注入模式的行为与开关。
 
 ## 1. 为什么
 
@@ -131,17 +131,19 @@ CREATE INDEX lesson_cues_session ON lesson_cues (session_id);
 CREATE TABLE lesson_log (
   seq INTEGER PRIMARY KEY AUTOINCREMENT,
   session_id TEXT NOT NULL,
-  kind TEXT NOT NULL,                    -- prompted / written / recalled / pinned-loaded / prompt-paused
+  kind TEXT NOT NULL,                    -- prompted / written / recalled（第二期加 pinned-loaded）
   template_id TEXT,
   turn INTEGER,
   origin TEXT,
+  origin_ref TEXT,                       -- 提示所针对的那次经历；同一来源只提示一次靠它判断
+  content_sha256 TEXT,                   -- 注入或写入的正文摘要
   at TEXT NOT NULL
 );
 CREATE INDEX lesson_log_session ON lesson_log (session_id, seq);
 ```
 
 - 迁移只新增两张表，不改旧表；与 v10 一样，旧版插件打开时不碰它们。退回 0.17 的步骤照 `docs/self-check.md`「v10 之后怎么退回旧版本」：停宿主、整组备份、`PRAGMA user_version=10;`，可选 `DROP TABLE` 两张新表。
-- 体会正文在会话模板里，不进 `lesson_log`；`lesson_log` 只记类型、模板 id、轮次和来源。
+- 体会正文在会话模板里，不进 `lesson_log`；`lesson_log` 只记类型、模板 id、轮次、来源和正文 sha256。
 - 删除会话模板时，同事务删除对应 `lesson_cues` 行。
 
 ## 7. 配置与接口
@@ -154,13 +156,14 @@ lessons:
   digestCooldownTurns: 10
   recallCooldownTurns: 20
   maxRecallChars: 300
-  maxPinned: 3
+  # 第二期再加：maxPinned（常驻上限，默认 3）
 ```
 
 - 工具：`lesson_write`（第 5.2 节）。
 - 只读路由：`GET /plugins/dsh-prompt-templates/lessons?session_id=` → 该会话的体会（模板 id、序号、正文摘要 sha256、版本、线索类型、是否常驻、唤起次数），不含正文以外的会话内容。
-- 写路由（属主）：`PATCH /plugins/dsh-prompt-templates/lessons/:template_id` → `{ pinned }`。
-- 介入记录：新增 `source: 'lesson'`，`method` 取 `digest` / `recall` / `pinned`，与现有记录同样只记模板标识、版本、正文 sha256、会话、轮、步。
+- 只读路由同时返回 `log`：该会话的 `lesson_log`（提示、写入、唤起）。
+- 写路由（属主，第二期）：`PATCH /plugins/dsh-prompt-templates/lessons/:template_id` → `{ pinned }`。
+- 介入记录：**第一期不写入 `interventions`**。该表的 `source` 列有 `CHECK (source IN ('schedule', 'event', 'manual', 'plugin'))` 约束，加新来源要重建整张表，和「只加表」的迁移原则冲突。提示、写入与唤起改记在 `lesson_log`，同样带正文 sha256、会话与轮次，可以追溯。以后若要并入介入记录，另做一次表重建迁移。
 - 给其他插件的服务：第一期不新增。
 
 ## 8. 风险与对策
@@ -181,9 +184,9 @@ lessons:
 2. **第二期**：常驻（会话开始与压缩之后）；`PATCH` 路由与面板标记。
 3. **第三期**：晋升后的体会是否跨会话唤起。
 
-## 10. 待属主裁定（附推荐）
+## 10. 裁定（属主 2026-11-21 交给实现方，全部按推荐）
 
-| # | 问题 | 推荐 | 理由 |
+| # | 问题 | 裁定 | 理由 |
 |---|---|---|---|
 | 1 | 消化提示与唤起默认静默（inject）还是可见（visible） | 静默 | 两者都是给会话自己的；属主看体会本身就在面板上，不必在对话流里多两类消息 |
 | 2 | 会话能否自己把体会标为常驻 | 不能，只有属主 | 常驻每次开工都进上下文，影响大，属于需要「他」把关的复体 |
@@ -206,4 +209,16 @@ lessons:
 - 默认关闭时零写入、零注入；现有五种模式的测试全部照过。
 - 体会在面板上作为「体会」分类下的会话模板可见、可改、可删。
 - 注入措辞、预算、冷却与本文一致；介入记录可查。
-- 第 10 节的裁定结果写回本文后再开始实现。
+- 第 10 节的裁定已写回本文（全部按推荐）。
+
+## 13. 第一期实现说明（2026-11-21）
+
+- 实现：`src/lessons.ts`（存储、`lesson_write`、消化提示、情境唤起、注册）；`src/store.ts`（v10 → v11 迁移，`lessons` 存储，删除模板时同事务删线索行）；`src/index.ts`（`lessons` 配置、注册、只读路由）；`src/cli/database.ts`（CLI 认 v11）。
+- 投递是尽力而为：消息在交给这一步时记日志，被拒的一步就丢了，不重试。体会是软提示，不需要事件提醒那样的待发记录与对账。
+- 运行时状态（最近一次调用、失败过的目标、待提示的「恢复」、待唤起的体会）只在内存里；宿主重启只会丢掉一次还没发出的提示或唤起。体会本身、线索和日志都持久化。
+- 这三类工具的结果不作为线索：`lesson_write`、`selfcheck_write`、`selfcheck_conclude`。
+- 消化提示的第 4 种时机（交接通知）未接，等 #33 合并后再接。
+- 第一期不跨会话：线索只在体会仍是本会话的会话模板时生效；属主「设为全局」之后，这条不再被唤起（第三期再定跨会话）。
+- 测试：`tests/lessons.test.ts`（写入、三种消化时机、预算、唤起、迁移、宿主接线、默认关闭）。表结构升到 11，原先写死 10 的断言同步改为 11；`host-apply` 里模拟「库比本版本新」的用例从 11 改为 12（当前 + 1），用意不变。
+- 先红后绿：16 处变异中 14 处被测试拦住；其余 2 处是等价变异（去掉线索查询里的「仍是本会话的会话模板」条件，唤起时另有一道只取本会话体会的过滤；去掉「每轮最多一条提示」的计数，冷却至少 1 轮已经保证），保留作为多一层的保险。
+- 真实宿主与模型行为：NOT_RUN。

@@ -24,6 +24,7 @@
  *   POST   /plugins/dsh-prompt-templates/library/import             → { plan } (versioned pack; dry run unless apply: true)
  *   GET    /plugins/dsh-prompt-templates/interventions?session_id=&since=&source=&limit= → { items, schema } (read-only, v9)
  *   POST   /plugins/dsh-prompt-templates/interventions/manual       → { intervention } (the panel's insert/send/interject)
+ *   GET    /plugins/dsh-prompt-templates/lessons?session_id=        → { items, log, schema } (read-only, v11; no lesson text)
  *
  * @module dsh-prompt-templates
  */
@@ -45,6 +46,7 @@ import { DEFAULT_INJECT_MAX_EVERY, SCHEMA_VERSION, TemplateRuleError, TemplateSt
 import { INTERVENTION_SOURCES, MANUAL_METHODS, contentDigest, type InterventionSource, type ManualMethod } from './interventions.ts'
 import { registerCast, type PromptTemplatesService } from './cast.ts'
 import { registerSelfCheck } from './self-check.ts'
+import { DEFAULT_LESSONS_CONFIG, lessonsOf, registerLessons, type LessonsConfig } from './lessons.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -81,6 +83,8 @@ export interface Config {
   readonly cast?: { readonly enabled?: boolean }
   /** Observer phase 2: the wrap-up self-check and its two tools; off by default. */
   readonly selfCheck?: { readonly enabled?: boolean }
+  /** 体会 (docs/spec-lesson-inject.md): digest prompts, lesson_write and situational recall; off by default. */
+  readonly lessons?: Partial<LessonsConfig>
 }
 
 export const Config: s<Config> = s.object({
@@ -98,6 +102,14 @@ export const Config: s<Config> = s.object({
   }).default({}),
   cast: s.object({ enabled: s.boolean().default(false) }).default({}),
   selfCheck: s.object({ enabled: s.boolean().default(false) }).default({}),
+  lessons: s.object({
+    enabled: s.boolean().default(DEFAULT_LESSONS_CONFIG.enabled),
+    mode: s.union(['inject', 'visible'] as const).default(DEFAULT_LESSONS_CONFIG.mode),
+    maxPerSession: s.natural().min(1).max(100).default(DEFAULT_LESSONS_CONFIG.maxPerSession),
+    digestCooldownTurns: s.natural().min(1).default(DEFAULT_LESSONS_CONFIG.digestCooldownTurns),
+    recallCooldownTurns: s.natural().min(1).default(DEFAULT_LESSONS_CONFIG.recallCooldownTurns),
+    maxRecallChars: s.natural().min(40).max(600).default(DEFAULT_LESSONS_CONFIG.maxRecallChars),
+  }).default({}),
 })
 
 /** Structural slice of the web-server service (route registration only). */
@@ -153,6 +165,9 @@ export function apply(ctx: Context, config: Config): void {
   registerCast(ctx, client, () => config.cast?.enabled === true, () => config.selfCheck?.enabled === true)
   // Observer phase 2 (PT-4): the wrap-up self-check, off unless selfCheck.enabled.
   registerSelfCheck(ctx, client, () => config.selfCheck?.enabled === true)
+  // 体会 (docs/spec-lesson-inject.md, phase 1): off unless lessons.enabled.
+  const lessonsConfig: LessonsConfig = { ...DEFAULT_LESSONS_CONFIG, ...config.lessons }
+  registerLessons(ctx, client, () => lessonsConfig)
   registerEventInject(ctx, eventInjectConfig, () => client().events, () => client().interventions)
 
   let routesRegistered = false
@@ -244,6 +259,21 @@ async function handle(
         const sessionId = url.searchParams.get('session_id')
         if (sessionId === null || sessionId === '') return json(res, 400, errorBody('bad-request', 'missing session_id'))
         return json(res, 200, { schema: SCHEMA_VERSION, items: client().selfChecks.list(sessionId, Number(url.searchParams.get('limit') ?? 100)) })
+      }
+      return json(res, 405, errorBody('method-not-allowed', `${method} ${url.pathname}`))
+    }
+    // 体会 (v11): one session's lessons and what the plugin did, read-only. No lesson text: the panel shows it as templates.
+    if (resource === 'lessons') {
+      if (rest.length === 0 && method === 'GET') {
+        const sessionId = url.searchParams.get('session_id')
+        if (sessionId === null || sessionId === '') return json(res, 400, errorBody('bad-request', 'missing session_id'))
+        const store = client()
+        const items = lessonsOf(store, sessionId).map(lesson => {
+          const cue = store.lessons.cue(lesson.id)
+          return { id: lesson.id, index: lesson.index, version: lesson.version, content_sha256: contentDigest(lesson.content),
+            origin: cue?.origin ?? null, pinned: cue?.pinned === 1, recall_count: cue?.recall_count ?? 0, last_recalled_turn: cue?.last_recalled_turn ?? null }
+        })
+        return json(res, 200, { schema: SCHEMA_VERSION, items, log: store.lessons.log(sessionId, Number(url.searchParams.get('limit') ?? 100)) })
       }
       return json(res, 405, errorBody('method-not-allowed', `${method} ${url.pathname}`))
     }

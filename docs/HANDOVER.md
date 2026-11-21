@@ -22,6 +22,7 @@ DSH（DeepSeek Harness）的提示词模板库插件：悬浮面板 + 右侧栏 
 - 演化自评估默认模板（src/evolution-default.ts，0.15.0）：每个会话补一条「工坊·演化自评估」，默认每 100 用户轮次；见 docs/evolution-default.md。
 - 卡库版本与介入记录（0.16.0，schema v9）：模板带版本号，版本包导入默认只预演；`interventions` 记每次介入（src/interventions.ts）。见 docs/library-packs.md。
 - 收尾自查与投卡服务（src/self-check.ts、src/cast.ts，0.17.0，schema v10）：`selfCheck.enabled`、`cast.enabled` 都默认关，开启要另外批准。见 docs/self-check.md。
+- 体会（src/lessons.ts，未发布，schema v11）：经历告一段落时给一句消化提示，会话用 `lesson_write` 把一两句体会写成自己的会话模板（「体会」分类），同类情境下在下一次模型决策前唤起。`lessons.enabled` 默认关，开启要另外批准。见 docs/spec-lesson-inject.md。
 
 ## 3. 开发回路
 
@@ -58,7 +59,7 @@ DSH（DeepSeek Harness）的提示词模板库插件：悬浮面板 + 右侧栏 
 - docs/spec-event-inject.md：事件触发提醒设计与实现差异（第 9 节）。
 - docs/test-plan-phase-c.md：事件提醒的真实宿主与行为验证流程（Phase C，尚未执行）。
 - docs/evolution-default.md、docs/library-packs.md、docs/self-check.md：0.15–0.17 各功能的合同、导入步骤与回退。
-- docs/spec-lesson-inject.md：体会（消化写入与情境唤起）的规格草案，未实现；实现前待属主裁定第 10 节。
+- docs/spec-lesson-inject.md：体会（消化写入与情境唤起）的规格，第一期已实现（未发布），第 13 节是实现说明。
 - docs/release-notes-<版本>.md：各版发布说明（同文进 GitHub Release）。
 - 技能目录：dsh-plugin-dev-test（开发回路）、双 registry 发布、开源隐私纪律相关技能。
 
