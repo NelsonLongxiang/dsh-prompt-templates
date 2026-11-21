@@ -1,6 +1,6 @@
 # dsh-prompt-templates 交接文档（HANDOVER）
 
-> 面向：接手本插件维护的下一个会话/开发者。状态截至 2026-11-21（0.18.0）；权威状态以 git log、npm registry 与 ygl-trees 台账为准，本文只是导航。
+> 面向：接手本插件维护的下一个会话/开发者。状态截至 2026-11-21（已发布 0.18.0；master 另有未发布改动，见第 5 节）；权威状态以 git log、npm registry 与 ygl-trees 台账为准，本文只是导航。
 
 ## 1. 项目一句话与当前状态
 
@@ -24,7 +24,7 @@ DSH（DeepSeek Harness）的提示词模板库插件：悬浮面板 + 右侧栏 
 - 卡库版本与介入记录（0.16.0，schema v9）：模板带版本号，版本包导入默认只预演；`interventions` 记每次介入（src/interventions.ts）。见 docs/library-packs.md。
 - 收尾自查与投卡服务（src/self-check.ts、src/cast.ts，0.17.0，schema v10）：`selfCheck.enabled` 默认开（属主 2026-11-21 裁定），`cast.enabled` 仍默认关、开启要另外批准。见 docs/self-check.md。
 - 体会（src/lessons.ts，0.18.0，schema v11）：经历告一段落时给一句消化提示，会话用 `lesson_write` 把一两句体会写成自己的会话模板（「体会」分类），同类情境下在下一次模型决策前唤起。第二期加了常驻：属主经 `PATCH /lessons/:template_id` 标记，会话开始、恢复和压缩之后装载一次（面板按钮未做）。`lessons.enabled` 默认开（属主 2026-11-21 裁定），部署方写 false 关闭；压缩后 `agent/created` 仍 NOT_RUN。见 docs/spec-lesson-inject.md。
-- 模型工具注册（src/tool-registry.ts，#43）：`lesson_write`、`selfcheck_write`、`selfcheck_conclude` 经 `ctx.inject(['tools'], …)` 在宿主 tools 服务就绪后注册。0.17.0／0.18.0 在加载时直接 `ctx.get('tools')`，真实宿主上服务尚未激活时三者静默缺席（测试宿主 2026-11-21 实测）。插件不在顶层声明 `inject`：本版 cordis 没有可选依赖，声明了会让没有 tools 的宿主整个插件不加载。
+- 模型工具注册（src/tool-registry.ts，#43）：`lesson_write`、`selfcheck_write`、`selfcheck_conclude` 经 `ctx.inject(['tools'], …)` 在宿主 tools 服务就绪后注册。0.17.0／0.18.0 在加载时直接 `ctx.get('tools')`，真实宿主上服务尚未激活时三者静默缺席（测试宿主 2026-11-21 实测）。插件不在顶层声明 `inject`：本版 cordis 没有可选依赖，声明了会让没有 tools 的宿主整个插件不加载。第二层（#46）：真实 ToolRuntime 要求每个定义带 `output { schema, render }`，缺了就抛错且被宿主吞掉；三处注册都经 `withOutput()` 补上，`tests/tool-contract.test.ts` 用真实 ToolRuntime 校验（单元测试里的假注册器接受任何形状，拦不住这类问题）。
 
 ## 3. 开发回路
 
@@ -41,18 +41,21 @@ DSH（DeepSeek Harness）的提示词模板库插件：悬浮面板 + 右侧栏 
 4. 推 master + tag 到 github（单端）；GitHub Release（gh release create）
 5. 隐私红线：公开面推送前过四层排查（跟踪文件/内容 grep 内网信息与机器路径/提交消息/Co-Authored-By 尾行）——历史为此做过一次全量改写。提交尾行不加 AI Co-Authored-By。
 
-## 5. 待办（2026-11-20 刷新）
+## 5. 待办（2026-11-21 刷新）
+
+**master 上未发布的改动（自 v0.18.0 起）**：收尾自查与体会改为默认开（#40，属主裁定）；工具等 tools 服务就绪再注册（#44）并补 `output` 契约（#46）——两层合起来才修好 #43；定时注入框架改为常设要求口吻（#47）；README 跟上 0.15–0.18（#41）、默认开说明与测试计划 D01/D02（#42）、面板手动发卡无轮/步的原因（#45）。
 
 | # | 事项 | 状态 |
 |---|---|---|
-| 1 | inject history UI（⟳N 徽标历史下拉） | 已落地 |
-| 2 | template variables 模板变量替换 | 已落地（0.13.2：`{{date}}` `{{time}}` `{{datetime}}` `{{weekday}}` `{{session}}` `{{turn}}`，投递时展开） |
-| 3 | 畸形 JSON → 400 bad-request | 已落地 |
-| 4 | DSH 0.2.x 契约测试护栏（原 PR#3） | 已落地 |
-| 5 | gitee 旧分支处置 | 随 gitee 冻结消解（2026-11-08 裁定） |
-| 6 | 下一版发布节奏 | 待属主裁决 |
+| 1 | 测试宿主重测（test-plan-phase-c §7：L01–L03 含压缩后 `agent/created`、D02 工具可见性；并看模型收到工坊卡后是否照做） | 待属主在独立 DSH_HOME 用含 #46 的构建执行；首轮（master `9192555`）：默认开引导、自查触发、体会提示 PASS，`lesson_write` 等不在工具数组 FAIL（→ #44、#46），L03 NOT_RUN |
+| 2 | 0.19.0 发版 | 待属主裁决；建议第 1 项通过后再发（本版把自查与体会默认开带给所有安装者） |
+| 3 | 事件提醒 Phase C 整套（M01–M08、B01–B10） | 已发布（0.14.0 起，默认关闭）；真实宿主与模型行为仍 NOT_RUN，按 docs/test-plan-phase-c.md 执行 |
+| 4 | #14 剪贴板回退、#10 实验隔离 | 修复已合入，留现场核验项（真实浏览器 / 宿主），由提出者核后关闭 |
+| 5 | #31 Windows 发布脚本测试 | 同机已不再复现（环境问题），由提出者关闭 |
+| 6 | 体会常驻的面板按钮 | 未做；目前只能经 `PATCH /lessons/:template_id` 标记 |
 | 7 | drawio 类模板依赖外部技能 | 需要时另配工具 |
-| 8 | 事件触发提醒（docs/spec-event-inject.md） | 已发布（0.14.0 首发，默认关闭）；真实宿主与模型行为的 Phase C 整套仍 NOT_RUN，待按 docs/test-plan-phase-c.md 在独立 DSH_HOME 测试宿主验证 |
+
+已完成、不再列：注入历史 UI、模板变量（0.13.2）、畸形 JSON → 400、DSH 0.2.x 契约测试、gitee 旧分支（随 gitee 冻结消解）、面板手动发卡记录轮/步（#38 定为按设计不记，原因见 README 已知限制）。
 
 ## 6. 知识沉淀在哪
 
