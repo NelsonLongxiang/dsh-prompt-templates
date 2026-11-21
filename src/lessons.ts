@@ -140,6 +140,27 @@ CREATE TABLE IF NOT EXISTS lesson_log (
 );
 CREATE INDEX IF NOT EXISTS lesson_log_session ON lesson_log (session_id, seq)`
 
+/**
+ * Calls that matched a lesson's cue and how they ended (B4a, owner 2026-11-21). Kept apart from lesson_log so frequent
+ * hits never crowd the round bookkeeping out of its windows. Created idempotently at every open (no schema bump).
+ */
+export const LESSON_HITS_SQL = `CREATE TABLE IF NOT EXISTS lesson_hits (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT NOT NULL,
+  template_id TEXT NOT NULL,
+  call_id TEXT,
+  turn INTEGER,
+  failed INTEGER NOT NULL,
+  after_recall INTEGER NOT NULL,
+  at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS lesson_hits_template ON lesson_hits (template_id, seq)`
+
+/** One side of a lesson's recurrence: calls in the same situation, and how many of them failed. */
+export interface HitCount { readonly hits: number; readonly fails: number }
+/** Recurrence of a lesson's situation before its first recall and after it (B4a). */
+export interface Recurrence { readonly before: HitCount; readonly after: HitCount }
+
 /** Session-proposed lesson types and the owner's decision. Created idempotently at every open (no schema bump). */
 export const LESSON_TYPES_SQL = `CREATE TABLE IF NOT EXISTS lesson_types (
   session_id TEXT NOT NULL,
@@ -350,22 +371,28 @@ export class LessonStore {
   }
 
   /** Per workshop card in a session: injections, and how their rounds ended (lesson written, no entry, missed). */
-  cardStats(sessionId: string): Array<{ template_id: string; name: string; injected: number; lessons: number; none: number; missed: number }> {
+  cardStats(sessionId: string): Array<{ template_id: string; name: string; injected: number; lessons: number; none: number; missed: number; recurrence: HitCount }> {
     const injected = this.#db.prepare("SELECT template_id, origin, origin_ref FROM lesson_log WHERE session_id = ? AND kind = 'card-injected' ORDER BY seq")
       .all(sessionId) as Array<{ template_id: string; origin: string | null; origin_ref: string }>
-    const endings = new Map((this.#db.prepare("SELECT kind, origin, origin_ref FROM lesson_log WHERE session_id = ? AND kind IN ('round-closed', 'round-missed') AND origin_ref LIKE 'card:%'")
-      .all(sessionId) as Array<{ kind: string; origin: string | null; origin_ref: string }>).map(row => [row.origin_ref, row]))
-    const out = new Map<string, { template_id: string; name: string; injected: number; lessons: number; none: number; missed: number }>()
+    const endings = new Map((this.#db.prepare("SELECT kind, template_id, origin, origin_ref FROM lesson_log WHERE session_id = ? AND kind IN ('round-closed', 'round-missed') AND origin_ref LIKE 'card:%'")
+      .all(sessionId) as Array<{ kind: string; template_id: string | null; origin: string | null; origin_ref: string }>).map(row => [row.origin_ref, row]))
+    type Stat = { template_id: string; name: string; injected: number; lessons: number; none: number; missed: number; recurrence: HitCount; lessonIds: Set<string> }
+    const out = new Map<string, Stat>()
     for (const row of injected) {
-      const stat = out.get(row.template_id) ?? { template_id: row.template_id, name: (row.origin ?? '').split('@')[0]!, injected: 0, lessons: 0, none: 0, missed: 0 }
+      const stat = out.get(row.template_id) ?? { template_id: row.template_id, name: (row.origin ?? '').split('@')[0]!, injected: 0, lessons: 0, none: 0, missed: 0, recurrence: { hits: 0, fails: 0 }, lessonIds: new Set<string>() }
       stat.injected += 1
       const end = endings.get(row.origin_ref)
       if (end?.kind === 'round-missed') stat.missed += 1
       else if (end !== undefined && (end.origin ?? '').startsWith('none')) stat.none += 1
-      else if (end !== undefined) stat.lessons += 1
+      else if (end !== undefined) { stat.lessons += 1; if (end.template_id !== null) stat.lessonIds.add(end.template_id) }
       out.set(row.template_id, stat)
     }
-    return [...out.values()]
+    // B4a: the card's yield seen through its lessons — how their situations went after they were recalled.
+    return [...out.values()].map(({ lessonIds, ...stat }) => {
+      let hits = 0, fails = 0
+      for (const id of lessonIds) { const after = this.recurrence(id).after; hits += after.hits; fails += after.fails }
+      return { ...stat, recurrence: { hits, fails } }
+    })
   }
 
   /** One lesson's recall rounds: how many were opened, closed by a write, and missed. */
@@ -373,6 +400,26 @@ export class LessonStore {
     const count = (kind: string): number => Number((this.#db.prepare('SELECT COUNT(*) AS n FROM lesson_log WHERE template_id = ? AND kind = ?').get(templateId, kind) as { n: number }).n)
     const kept = Number((this.#db.prepare("SELECT COUNT(*) AS n FROM lesson_log WHERE template_id = ? AND kind = 'round-closed' AND origin LIKE 'kept:%'").get(templateId) as { n: number }).n)
     return { opened: count('recalled'), closed: count('round-closed'), missed: count('round-missed'), kept }
+  }
+
+  /** Note one call that matched a lesson's cue: whether it failed, and whether the lesson had been recalled by then. */
+  recordHit(sessionId: string, templateId: string, callId: string, turn: number | null, failed: boolean, afterRecall: boolean): void {
+    this.#db.prepare('INSERT INTO lesson_hits (session_id, template_id, call_id, turn, failed, after_recall, at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(sessionId, templateId, callId, turn, failed ? 1 : 0, afterRecall ? 1 : 0, new Date().toISOString())
+  }
+
+  /**
+   * How the lesson's situation went before its first recall and after it: matching calls and failures. The call that
+   * triggers a recall is noted before the recall is delivered, so it counts as before.
+   */
+  recurrence(templateId: string): Recurrence {
+    const rows = this.#db.prepare('SELECT after_recall, COUNT(*) AS hits, COALESCE(SUM(failed), 0) AS fails FROM lesson_hits WHERE template_id = ? GROUP BY after_recall')
+      .all(templateId) as Array<{ after_recall: number; hits: number; fails: number }>
+    const side = (after: number): HitCount => {
+      const row = rows.find(r => Number(r.after_recall) === after)
+      return { hits: Number(row?.hits ?? 0), fails: Number(row?.fails ?? 0) }
+    }
+    return { before: side(0), after: side(1) }
   }
 
   /** Content digests of one lesson's writes, oldest first. */
@@ -717,7 +764,13 @@ export function observeForLessons(store: TemplateStore, state: LessonState, sess
     state.failures.delete(target)
     state.pending ??= { ...cueOf(features), origin: 'recovered', origin_ref: callId, summary: features.summary }
   }
-  for (const cue of store.lessons.cues(sessionId)) if (cueMatches(cue, features)) state.recall.add(cue.template_id)
+  const failed = features.outcome.startsWith('error')
+  for (const cue of store.lessons.cues(sessionId)) {
+    if (!cueMatches(cue, features)) continue
+    state.recall.add(cue.template_id)
+    // B4a: how the lesson's situation goes before and after it is recalled (ok and error only; unknown outcomes skipped).
+    if (failed || features.outcome === 'ok') store.lessons.recordHit(sessionId, cue.template_id, callId, state.turn ?? null, failed, cue.recall_count > 0)
+  }
 }
 
 /** Body of a digest prompt. */

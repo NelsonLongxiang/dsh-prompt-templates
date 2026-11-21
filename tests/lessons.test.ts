@@ -561,8 +561,8 @@ test('card rounds (option A): a workshop injection opens one round per turn; a l
     w.step(7)
     assert.equal(w.store.lessons.openCardRounds(S).length, 0)
     assert.deepEqual(w.store.lessons.cardStats(S), [
-      { template_id: 'c-review', name: '工坊-行动审视', injected: 2, lessons: 1, none: 1, missed: 0 },
-      { template_id: 'c-accept', name: '工坊-验收流程', injected: 2, lessons: 1, none: 0, missed: 1 },
+      { template_id: 'c-review', name: '工坊-行动审视', injected: 2, lessons: 1, none: 1, missed: 0, recurrence: { hits: 0, fails: 0 } },
+      { template_id: 'c-accept', name: '工坊-验收流程', injected: 2, lessons: 1, none: 0, missed: 1, recurrence: { hits: 0, fails: 0 } },
     ])
     const timeline = lessonTimeline(w.store, S, 50)
     const none = timeline.find(e => e.kind === 'round-closed' && e.outcome === 'none')
@@ -613,7 +613,7 @@ test('host: a scheduled workshop card carries the card-round line and opens the 
     const closed = await tools.get('lesson_none')?.execute({ reason: '照卡审视过，没有新问题' }, { agent: agentOf(S) })
     assert.deepEqual(closed, { ok: true, round: 'none', card_round: 'card:2' })
     const read = await request(route, `${BASE}/lessons?session_id=${S}`)
-    assert.deepEqual(read.body.cards, [{ template_id: card.id, name: '工坊-行动审视', injected: 1, lessons: 0, none: 1, missed: 0 }])
+    assert.deepEqual(read.body.cards, [{ template_id: card.id, name: '工坊-行动审视', injected: 1, lessons: 0, none: 1, missed: 0, recurrence: { hits: 0, fails: 0 } }])
   })
 })
 
@@ -676,5 +676,34 @@ test('churn hint: three rewrites in a row that change nothing of substance are f
     assert.equal(lessonChurn(w.store, id), true, 'three near-identical rewrites in a row')
     assert.ok(w.write('报错停在表面就动手会返工；下次先拿完整输出，读到出错的那一层再改。', '收').ok)
     assert.equal(lessonChurn(w.store, id), false, 'a substantive rewrite clears the hint')
+  } finally { w.store.close() }
+})
+
+// B4a (owner 2026-11-21, system RSI loop map): does the lesson's situation still fail after the lesson is recalled?
+test('recurrence: calls matching a lesson are counted before and after its first recall, with failures; a card sums its lessons; unknown outcomes are skipped', () => {
+  const w = world({ ...ON, recallCooldownTurns: 1 })
+  const failed = { isError: true, error: { info: { code: 'EXIT_1' } } }
+  try {
+    w.step(1)
+    w.call('TOKEN_X=abc /opt/py/bin/python build.py', failed)
+    openCardRound(w.store, S, 1, [{ id: 'c-push', name: '工坊-自主推进', version: 'v4' }])
+    const first = w.write('别手工带 TOKEN_X，先用 make 入口。', '收')
+    const id = first.ok ? first.id : ''
+    assert.equal(first.ok && first.round, 'written', 'the lesson closes the card round')
+    // Before the first recall: the call that triggers it fails.
+    w.call('TOKEN_X=abc /opt/py/bin/python lint.py', failed)
+    assert.deepEqual(w.store.lessons.recurrence(id), { before: { hits: 1, fails: 1 }, after: { hits: 0, fails: 0 } })
+    assert.ok(textOf(w.step(2)).includes('RSI 一轮'), 'recalled')
+    // After it: one more failure, then two successes in the same situation.
+    w.call('TOKEN_X=abc /opt/py/bin/python test.py', failed)
+    w.call('TOKEN_X=abc /opt/py/bin/python test.py')
+    w.call('TOKEN_X=abc /opt/py/bin/python deploy.py')
+    assert.deepEqual(w.store.lessons.recurrence(id), { before: { hits: 1, fails: 1 }, after: { hits: 3, fails: 1 } })
+    // A call in another situation is not counted.
+    w.call('ls -la')
+    assert.equal(w.store.lessons.recurrence(id).after.hits, 3)
+    assert.deepEqual(w.store.lessons.cardStats(S).map(card => card.recurrence), [{ hits: 3, fails: 1 }])
+    // Hits stay out of the lesson log, so they never crowd round bookkeeping or the timeline.
+    assert.ok(!w.store.lessons.log(S).some(row => (row.kind as string) === 'cue-hit'))
   } finally { w.store.close() }
 })
