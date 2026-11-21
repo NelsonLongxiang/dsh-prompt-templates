@@ -23,7 +23,7 @@
 
 schema v6 新增 `evolution_defaults(session_id, template_id, source, version, enrolled_turn, disposition)`，不记录任务内容、提示词历史或私密材料。`BEGIN IMMEDIATE` + 会话主键保证多连接补充幂等；模板创建与登记同事务。v1–v5 单事务迁移，原模板不改；初始化或迁移失败会回滚并关闭本次连接，保留原错误，避免失败对象泄漏数据库句柄。CLI 兼容 v6，但模板导出不包含 enrollment/tombstone。
 
-新默认项来源为 `agent-atelier/evolution-self-assessment@2`，写入登记及模板 description；v2 仅缩窄 A2A 角色／授权路由，不改变周期。旧 v1 登记与已有模板内容、启用状态、间隔、模式保持原样；新文案只用于未登记会话，绝不自动覆盖已有模板。日志继续沿用 `prompt-template-schedule` 的模板 ID/名称/间隔与 turn；描述可被用户改写，SQLite 登记才是来源事实。注入日志不是评估完成证据，更不是迁移成功证据。
+（2026-11-21 起为 `@3`：首行改为「必读：本会话首次执行本卡或压缩后，必须先用 skill 工具加载 agent-atelier，按返回的基础目录读 references/evolution-self-assessment.md，再按它执行演化自评估；回复写明读了哪几处……」，末行加「本卡是属主预置的常设要求，适用即须执行；不扩大授权，不覆盖属主当下指令。」。原因：插件注入的文字不经技能加载，模型拿不到技能目录，原来的「按 agent-atelier 技能 references/… 执行」找不到文件。只影响新登记；已有会话的模板原文不改。）新默认项来源为 `agent-atelier/evolution-self-assessment@2`，写入登记及模板 description；v2 仅缩窄 A2A 角色／授权路由，不改变周期。旧 v1 登记与已有模板内容、启用状态、间隔、模式保持原样；新文案只用于未登记会话，绝不自动覆盖已有模板。日志继续沿用 `prompt-template-schedule` 的模板 ID/名称/间隔与 turn；描述可被用户改写，SQLite 登记才是来源事实。注入日志不是评估完成证据，更不是迁移成功证据。
 
 相同 turn 的耐久日志去重与进程内去重沿用原注入器。**未支持同一 DSH 会话由两个独立宿主并发执行**：本次并发保证针对 SQLite 模板补充，不声称跨宿主注入 exactly-once。技能不可用时提示词要求明确报告缺失，不自动安装或杜撰通过；这属于模型遵守的指令，并非宿主检测器。
 
