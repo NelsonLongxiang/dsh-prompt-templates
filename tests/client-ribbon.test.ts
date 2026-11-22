@@ -147,5 +147,7 @@ test('text that does not fit scrolls, and the lane waits for one full pass', asy
   assert.match(src, /<Marquee text=\{lesson\.content\}/, 'the band text scrolls')
   assert.match(src, /<Marquee text=\{lesson\.evidence\}/, 'the evidence tab scrolls')
   const style = readFileSync(new URL('../src/client/Ribbon.module.css', import.meta.url), 'utf8')
-  assert.match(style, /prefers-reduced-motion[\s\S]*\.scrolling \.run[\s\S]*animation: none/, 'reduced motion: no scrolling')
+  // Owner 2026-11-22: the marquee stays under reduced motion (text completeness first; the hover pause satisfies the pause rule).
+  assert.doesNotMatch(style, /prefers-reduced-motion[\s\S]{0,200}\.scrolling \.run[\s\S]{0,80}animation: none/, 'reduced motion: the marquee still scrolls')
+  assert.match(style, /prefers-reduced-motion[\s\S]*\.ribbon, \.unfurl, \.face[\s\S]*animation: none/, 'reduced motion: decorative sway/unfurl/roll still off')
 })
