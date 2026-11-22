@@ -7,12 +7,21 @@
   --tail: #6b7080;
 }
 
+/* Lanes side by side; a lane wraps under the other when the header is narrow. */
+.lanes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-right: 24px;
+}
+
 .ribbon {
+  flex: 1 1 260px;
+  min-width: 0;
   pointer-events: auto;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  margin-right: 24px;
   animation: sway 3.2s ease-in-out infinite;
 }
 
@@ -142,25 +151,25 @@
 .hazard .band::after { bottom: 0; }
 .hazard .sign { background: #141414; color: #f2b705; clip-path: polygon(50% 0, 100% 100%, 0 100%); padding-top: 4px; }
 .hazard .tag { background: #141414; color: #f2b705; }
-.hazard .thin { background: repeating-linear-gradient(-45deg, #f2b705 0 6px, #141414 6px 12px); }
+.thin.hazard { background: repeating-linear-gradient(-45deg, #f2b705 0 6px, #141414 6px 12px); }
 
 /* Right: a sash. */
 .sash .band { background: linear-gradient(180deg, #3b7ce6, #2f6fd6 55%, #1f4fa6); color: #fff; }
 .sash .band::after { content: ""; position: absolute; inset: 4px 6px; border: 1px dashed rgba(255, 255, 255, 0.45); pointer-events: none; }
 .sash .sign { background: #fff; color: #1f4fa6; border-radius: 50%; }
 .sash .tag { background: #fff; color: #1f4fa6; }
-.sash .thin { background: #2f6fd6; }
+.thin.sash { background: #2f6fd6; }
 
 /* Untagged: plain. */
 .plain .band { background: #4a4f5c; color: #f1f2f5; }
 .plain .sign { background: rgba(255, 255, 255, 0.15); border-radius: 50%; }
 .plain .tag { background: rgba(255, 255, 255, 0.15); }
-.plain .thin { background: #6b7080; }
+.thin.plain { background: #6b7080; }
 
 .thin {
+  flex: 1 1 260px;
   pointer-events: auto;
   height: 6px;
-  margin-right: 24px;
 }
 
 .unfold {
@@ -170,6 +179,18 @@
   font-size: 11px;
   color: var(--dsw-alias-label-tertiary, #888);
 }
+
+/* Docked (owner 2026-11-22): part of the header, stacked under the tabs, in the page flow — no float, no shadow. */
+.docked {
+  position: relative;
+  z-index: auto;
+  padding: 6px 0 8px;
+}
+.docked .lanes { margin-right: 0; }
+.docked .band, .docked .tab { box-shadow: none; }
+.docked[data-lesson-ribbon="collapsed"] { display: flex; align-items: center; gap: 8px; }
+.docked[data-lesson-ribbon="collapsed"] .lanes { flex: 1; }
+.docked .unfold { position: static; }
 
 /* Header knot. */
 .knot, .knotEmpty {

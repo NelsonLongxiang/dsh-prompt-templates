@@ -5,11 +5,12 @@
  * plain; a tab hangs below with the latest evidence. It can be collapsed to a thin band, remembered per session in
  * this browser. Reduced motion: no sway, no roll, the text just changes.
  */
-import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
-import { changedLesson, clearTabStrips, FRESH_MS, measureTabStrips, nextIndex, orderRibbon, pickAnchor, POLL_MS, readCollapsed, ROTATE_MS, writeCollapsed, type RibbonAnchor, type RibbonBus, type RibbonLesson, type RibbonState } from './ribbon.ts'
+import { changedLesson, clearTabStrips, FRESH_MS, measureTabStrips, nextIndex, orderRibbon, splitLanes, pickAnchor, POLL_MS, readCollapsed, ROTATE_MS, writeCollapsed, type RibbonAnchor, type RibbonBus, type RibbonLesson, type RibbonState } from './ribbon.ts'
 import { loadRibbonLessons } from './ribbon-data.ts'
+import { DOCK_ATTR, findDock, placeDock } from './ribbon-dock.ts'
 import css from './Ribbon.module.css'
 
 export interface LessonRibbonFace {
@@ -66,33 +67,27 @@ function useRibbonState(bus: RibbonBus, targetSession: () => string | null, subs
   return { sessionId: fallback, lessons: own.lessons, anchor: picked.anchor, anchorSource: picked.source }
 }
 
-export function LessonRibbon({ bus, targetSession, subscribeTarget, t }: LessonRibbonProps) {
-  const state = useRibbonState(bus, targetSession, subscribeTarget)
-  const lessons = orderRibbon(state.lessons)
+interface Jump { readonly id: string; readonly seq: number }
+
+/**
+ * One lane: the lessons of one outcome, rolling on their own clock. Owner 2026-11-22: wrong and right hang side by side
+ * (the header is wide enough), each lane in its own colours; a lane wraps under the other when the header is narrow.
+ */
+function Lane({ lessons, jump, onFold, t }: { lessons: readonly RibbonLesson[]; jump: Jump | null; onFold: (() => void) | null } & Pick<LessonRibbonProps, 't'>) {
   const [index, setIndex] = useState(0)
   const [roll, setRoll] = useState(0)
   const [unfurl, setUnfurl] = useState(0)
   const [hover, setHover] = useState(false)
-  const [collapsed, setCollapsed] = useState(false)
   const holdUntil = useRef(0)
-  const previous = useRef<{ sessionId: string | null; lessons: readonly RibbonLesson[] | null }>({ sessionId: null, lessons: null })
 
-  // Per-session collapse choice.
-  useEffect(() => { setCollapsed(state.sessionId === null ? false : readCollapsed(storage(), state.sessionId)) }, [state.sessionId])
-
-  // A new or changed lesson jumps the queue; a session switch starts from the first lesson without a jump.
+  // A lesson just written, rewritten or kept in this lane jumps its queue.
   useEffect(() => {
-    const prev = previous.current
-    const sameSession = prev.sessionId === state.sessionId
-    const changed = changedLesson(sameSession ? prev.lessons : null, lessons)
-    previous.current = { sessionId: state.sessionId, lessons }
-    if (!sameSession) { setIndex(0); return }
-    if (changed !== null) {
-      const at = lessons.findIndex(l => l.id === changed)
-      if (at >= 0) { setIndex(at); holdUntil.current = Date.now() + FRESH_MS; setUnfurl(n => n + 1) }
-    } else if (index >= lessons.length) setIndex(0)
+    if (jump === null) return
+    const at = lessons.findIndex(l => l.id === jump.id)
+    if (at >= 0) { setIndex(at); holdUntil.current = Date.now() + FRESH_MS; setUnfurl(n => n + 1) }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state])
+  }, [jump?.seq])
+  useEffect(() => { if (index >= lessons.length) setIndex(0) }, [index, lessons.length])
 
   useEffect(() => {
     if (lessons.length < 2) return
@@ -104,23 +99,96 @@ export function LessonRibbon({ bus, targetSession, subscribeTarget, t }: LessonR
     return () => { clearInterval(timer) }
   }, [hover, lessons.length])
 
+  const at = Math.min(index, lessons.length - 1)
+  const lesson = lessons[at]!
+  const kind = lesson.outcome === 'wrong' ? css.hazard : lesson.outcome === 'right' ? css.sash : css.plain
+  const tag = lesson.outcome === 'wrong' ? t('panel.lessonWrong') : lesson.outcome === 'right' ? t('panel.lessonRight') : null
+  return (
+    <div className={`${css.ribbon} ${kind}`} data-lesson-ribbon-lane={lesson.outcome ?? 'plain'} onMouseEnter={() => { setHover(true) }} onMouseLeave={() => { setHover(false) }}>
+      <div key={`band-${String(unfurl)}`} className={unfurl > 0 ? `${css.band} ${css.unfurl}` : css.band} title={lesson.content}>
+        <div key={`face-${String(roll)}-${lesson.id}`} className={css.face}>
+          <span className={css.sign} aria-hidden="true">{lesson.outcome === 'wrong' ? '!' : lesson.outcome === 'right' ? '✓' : '·'}</span>
+          <span className={css.tag}>{tag === null ? lesson.key : `${lesson.key} · ${tag}`}</span>
+          <span className={css.text}>{lesson.content}</span>
+        </div>
+        {lessons.length > 1 && (
+          <span className={css.pager} aria-label={t('ribbon.position').replace('{i}', String(at + 1)).replace('{n}', String(lessons.length))}>
+            {lessons.map((l, i) => <i key={l.id} className={i === at ? css.dotOn : css.dot} />)}
+            <span>{at + 1}/{lessons.length}</span>
+          </span>
+        )}
+        {onFold !== null && (
+          <button type="button" className={css.fold} onClick={onFold} aria-label={t('ribbon.collapse')} title={t('ribbon.collapse')} data-lesson-ribbon-fold>
+            ▴
+          </button>
+        )}
+      </div>
+      {lesson.evidence !== null && <div key={`tab-${lesson.id}-${String(roll)}`} className={css.tab}>{lesson.evidence}</div>}
+    </div>
+  )
+}
+
+export function LessonRibbon({ bus, targetSession, subscribeTarget, t }: LessonRibbonProps) {
+  const state = useRibbonState(bus, targetSession, subscribeTarget)
+  const lessons = orderRibbon(state.lessons)
+  const lanes = splitLanes(lessons)
+  const [collapsed, setCollapsed] = useState(false)
+  const [jump, setJump] = useState<Jump | null>(null)
+  const previous = useRef<{ sessionId: string | null; lessons: readonly RibbonLesson[] | null }>({ sessionId: null, lessons: null })
+
+  // Per-session collapse choice.
+  useEffect(() => { setCollapsed(state.sessionId === null ? false : readCollapsed(storage(), state.sessionId)) }, [state.sessionId])
+
+  // A new or changed lesson jumps its lane's queue; a session switch remounts the lanes without a jump.
+  useEffect(() => {
+    const prev = previous.current
+    const sameSession = prev.sessionId === state.sessionId
+    const changed = changedLesson(sameSession ? prev.lessons : null, lessons)
+    previous.current = { sessionId: state.sessionId, lessons }
+    if (sameSession && changed !== null) setJump(j => ({ id: changed, seq: (j?.seq ?? 0) + 1 }))
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state])
+
+  // Owner 2026-11-22: the ribbon is part of the header, stacked under the tabs. Dock our own container there every
+  // render (the header can re-render or move); without a header the floating ribbon below is the fallback.
+  const show = state.sessionId !== null && lessons.length > 0
+  const dockRef = useRef<HTMLDivElement | null>(null)
+  const [dock, setDock] = useState<HTMLDivElement | null>(null)
+  useLayoutEffect(() => {
+    const spot = show && typeof document !== 'undefined' ? findDock(state.origin, document) : null
+    if (spot === null) { dockRef.current?.remove(); if (dock !== null) setDock(null); return }
+    if (dockRef.current === null) {
+      const el = document.createElement('div')
+      el.setAttribute(DOCK_ATTR, '')
+      el.style.gridColumn = '1 / -1'
+      dockRef.current = el
+    }
+    placeDock(dockRef.current, spot)
+    if (dock !== dockRef.current) setDock(dockRef.current)
+  })
+  useEffect(() => () => { dockRef.current?.remove() }, [])
+
   // Nothing to show only when there is no session or no lesson; a missing anchor falls back to the viewport top.
-  if (state.sessionId === null || lessons.length === 0) return null
+  if (!show || state.sessionId === null) return null
   // Cleared again here: the knot's published anchor can be up to a second old, and the fallbacks never were.
   const anchor = clearTabStrips(state.anchor ?? pickAnchor([], window.innerWidth).anchor, measureTabStrips(document))
-  const lesson = lessons[Math.min(index, lessons.length - 1)]!
-  const kind = lesson.outcome === 'wrong' ? css.hazard : lesson.outcome === 'right' ? css.sash : css.plain
   const sessionId = state.sessionId
   const setFold = (value: boolean): void => { setCollapsed(value); writeCollapsed(storage(), sessionId, value) }
-  const tag = lesson.outcome === 'wrong' ? t('panel.lessonWrong') : lesson.outcome === 'right' ? t('panel.lessonRight') : null
-  const style = { left: anchor.left, top: anchor.top, width: anchor.width }
+  const docked = dock !== null
+  const style = docked ? undefined : { left: anchor.left, top: anchor.top, width: anchor.width }
+  const sky = `${css.sky}${docked ? ` ${css.docked}` : ''}`
+  const where = docked ? 'dock' : state.anchorSource ?? 'header'
+  const laneKind = (outcome: RibbonLesson['outcome']): string => (outcome === 'wrong' ? css.hazard : outcome === 'right' ? css.sash : css.plain) ?? ''
 
-  // Hung on the document body: a transformed or clipping overlay ancestor must not trap a fixed-position ribbon.
-  const hang = (node: ReactNode): ReactNode => (typeof document === 'undefined' ? node : createPortal(node, document.body))
+  // Floating: hung on the document body so a transformed or clipping overlay ancestor cannot trap it.
+  // Docked: into our container inside the header.
+  const hang = (node: ReactNode): ReactNode => (typeof document === 'undefined' ? node : createPortal(node, dock ?? document.body))
   if (collapsed) {
     return hang(
-      <div className={`${css.sky} ${kind}`} style={style} data-lesson-ribbon="collapsed" data-lesson-ribbon-anchor={state.anchorSource ?? 'header'}>
-        <div className={css.thin} />
+      <div className={sky} style={style} data-lesson-ribbon="collapsed" data-lesson-ribbon-anchor={where}>
+        <div className={css.lanes}>
+          {lanes.map(lane => <div key={lane.outcome ?? 'plain'} className={`${css.thin} ${laneKind(lane.outcome)}`} />)}
+        </div>
         <button type="button" className={css.unfold} onClick={() => { setFold(false) }} data-lesson-ribbon-unfold>
           {t('ribbon.expand')} ▾
         </button>
@@ -128,25 +196,17 @@ export function LessonRibbon({ bus, targetSession, subscribeTarget, t }: LessonR
     )
   }
   return hang(
-    <div className={`${css.sky} ${kind}`} style={style} data-lesson-ribbon="open" data-lesson-ribbon-anchor={state.anchorSource ?? 'header'} aria-label={t('ribbon.title')}>
-      <div className={css.ribbon} onMouseEnter={() => { setHover(true) }} onMouseLeave={() => { setHover(false) }}>
-        <div key={`band-${String(unfurl)}`} className={unfurl > 0 ? `${css.band} ${css.unfurl}` : css.band} title={lesson.content}>
-          <div key={`face-${String(roll)}-${lesson.id}`} className={css.face}>
-            <span className={css.sign} aria-hidden="true">{lesson.outcome === 'wrong' ? '!' : lesson.outcome === 'right' ? '✓' : '·'}</span>
-            <span className={css.tag}>{tag === null ? lesson.key : `${lesson.key} · ${tag}`}</span>
-            <span className={css.text}>{lesson.content}</span>
-          </div>
-          {lessons.length > 1 && (
-            <span className={css.pager} aria-label={t('ribbon.position').replace('{i}', String(index + 1)).replace('{n}', String(lessons.length))}>
-              {lessons.map((l, i) => <i key={l.id} className={i === index ? css.dotOn : css.dot} />)}
-              <span>{index + 1}/{lessons.length}</span>
-            </span>
-          )}
-          <button type="button" className={css.fold} onClick={() => { setFold(true) }} aria-label={t('ribbon.collapse')} title={t('ribbon.collapse')} data-lesson-ribbon-fold>
-            ▴
-          </button>
-        </div>
-        {lesson.evidence !== null && <div key={`tab-${lesson.id}-${String(roll)}`} className={css.tab}>{lesson.evidence}</div>}
+    <div className={sky} style={style} data-lesson-ribbon="open" data-lesson-ribbon-anchor={where} aria-label={t('ribbon.title')}>
+      <div className={css.lanes}>
+        {lanes.map((lane, i) => (
+          <Lane
+            key={`${sessionId}-${lane.outcome ?? 'plain'}`}
+            lessons={lane.lessons}
+            jump={jump}
+            onFold={i === lanes.length - 1 ? () => { setFold(true) } : null}
+            t={t}
+          />
+        ))}
       </div>
     </div>
   )

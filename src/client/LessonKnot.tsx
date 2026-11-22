@@ -77,7 +77,7 @@ export function LessonKnot({ bus, openPanel, sessionId, t }: LessonKnotProps) {
         { source: 'knot', anchor: el === null ? null : knotAnchor(el) },
       ], window.innerWidth)
       // Below the view tabs, never over them (real-host 2026-11-22: the ribbon covered 对话｜轨迹).
-      bus.publish({ sessionId, lessons, anchor: clearTabStrips(picked.anchor, measureTabStrips(document)), anchorSource: picked.source })
+      bus.publish({ sessionId, lessons, anchor: clearTabStrips(picked.anchor, measureTabStrips(document)), anchorSource: picked.source, origin: el })
     }
     publish()
     window.addEventListener('resize', publish)

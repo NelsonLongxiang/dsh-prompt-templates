@@ -33,6 +33,8 @@ export interface RibbonState {
   readonly anchor: RibbonAnchor | null
   /** Where the anchor came from (shown as a data attribute for real-host checks). */
   readonly anchorSource?: AnchorSource
+  /** The knot's element: the ribbon docks into the conversation header it sits in. */
+  readonly origin?: Element | null
 }
 
 /** One candidate position, in order of preference; null when it could not be measured. */
@@ -92,6 +94,17 @@ export function measureTabStrips(doc: Pick<Document, 'querySelectorAll'>): Box[]
   return Array.from(doc.querySelectorAll('[data-conversation-tabs], [role="tablist"]'), el => el.getBoundingClientRect())
 }
 
+/**
+ * Where the docked ribbon goes (owner 2026-11-22: the ribbon is part of the header, stacked under it, not a separate
+ * floating area). 'append' puts it last inside the header (the header already holds the view tabs, or no tab row
+ * follows it); 'afterNext' puts it right after the header's next sibling, when that sibling is the tab row (older hosts
+ * render the tabs outside the header) and starts within TAB_CLEARANCE_PX of the header's bottom.
+ */
+export function planDock(input: { headerHoldsTabs: boolean; nextHoldsTabs: boolean; gapToNext: number }): 'append' | 'afterNext' {
+  if (input.headerHoldsTabs) return 'append'
+  return input.nextHoldsTabs && Number.isFinite(input.gapToNext) && input.gapToNext < TAB_CLEARANCE_PX ? 'afterNext' : 'append'
+}
+
 /** Each lesson stays this long before the next one rolls up. */
 export const ROTATE_MS = 6000
 /** A lesson just written, rewritten or kept jumps the queue and stays this long first. */
@@ -121,6 +134,21 @@ export function changedLesson(previous: readonly RibbonLesson[] | null, next: re
   let changed: string | null = null
   for (const lesson of next) if (before.get(lesson.id) !== lesson.stamp) changed = lesson.id
   return changed
+}
+
+/** One lane of the ribbon: the lessons of one outcome, in ribbon order. */
+export interface RibbonLane {
+  readonly outcome: RibbonLesson['outcome']
+  readonly lessons: readonly RibbonLesson[]
+}
+
+/**
+ * The lanes side by side (owner 2026-11-22: wrong and right at the same time, the header is wide enough): wrong, then
+ * right, then untagged (older lessons without an outcome); empty lanes are left out, so one kind fills the width.
+ */
+export function splitLanes(lessons: readonly RibbonLesson[]): RibbonLane[] {
+  const order: RibbonLesson['outcome'][] = ['wrong', 'right', null]
+  return order.map(outcome => ({ outcome, lessons: lessons.filter(l => l.outcome === outcome) })).filter(lane => lane.lessons.length > 0)
 }
 
 /** Counts for the header knot. */
