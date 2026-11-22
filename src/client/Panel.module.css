@@ -795,3 +795,53 @@
   padding: 4px;
   color: var(--dsw-alias-label-primary);
 }
+
+/* §5.16: a lesson row in the 会话模板 tab — full text first, a label, one line of effect. */
+.lessonRow {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
+  border: 1px solid var(--dsw-alias-border-inverted);
+  border-left: 3px solid var(--dsw-alias-label-tertiary);
+  border-radius: 6px;
+}
+
+.lessonRow[data-lesson-outcome='wrong'] {
+  border-left-color: #f2b705;
+}
+
+.lessonRow[data-lesson-outcome='right'] {
+  border-left-color: #2f6fd6;
+}
+
+.lessonHead {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.lessonLabel {
+  flex: 1;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.lessonActions {
+  display: flex;
+  gap: 2px;
+}
+
+.lessonText {
+  font-size: 12px;
+  color: var(--dsw-alias-label-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.lessonEffect {
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary);
+  word-break: break-word;
+}

@@ -179,7 +179,15 @@ export async function eventEpisodes(sessionId: string): Promise<EventEpisodeWire
 /** One lesson's pin state as the panel needs it (体会, schema v11). */
 export interface LessonPinWire {
   readonly id: string
+  /** What follows 体会·: the type, or the number of a legacy lesson. */
+  readonly key: string
+  /** lesson-rN: N-1 rewrites; null when the owner edited it. */
+  readonly version: string | null
   readonly pinned: boolean
+  /** §5.16: wrong or right as the session tagged the current text; null when untagged or on an older host. */
+  readonly outcome: 'wrong' | 'right' | null
+  /** §5.16: the latest keep's evidence after the last write, else the write's evidence; null when none. */
+  readonly latestEvidence: string | null
   /** Recall rounds (RSI): opened by a recall, closed by a write, or missed. Zeros on a host that predates rounds. */
   readonly rounds: { readonly opened: number; readonly closed: number; readonly missed: number; readonly kept: number }
   /** The last rewrites of this lesson changed nothing of substance (owner 2026-11-21: shown, never blocked). */
@@ -210,10 +218,12 @@ export async function listLessonPins(sessionId: string): Promise<LessonPinWire[]
   try {
     const response = await fetch(`${BASE}/lessons?session_id=${encodeURIComponent(sessionId)}`, { cache: 'no-store' })
     if (!response.ok) return []
-    const body = await response.json() as { items?: Array<{ id?: unknown; pinned?: unknown; churn?: unknown; evidence?: unknown; verdicts?: { pass?: unknown; fail?: unknown; latest?: { verdict?: unknown; ref?: unknown } | null }; recurrence?: { before?: { hits?: unknown; fails?: unknown }; after?: { hits?: unknown; fails?: unknown } }; rounds?: { opened?: unknown; closed?: unknown; missed?: unknown; kept?: unknown } }> }
+    const body = await response.json() as { items?: Array<{ id?: unknown; key?: unknown; version?: unknown; outcome?: unknown; latest_evidence?: unknown; pinned?: unknown; churn?: unknown; evidence?: unknown; verdicts?: { pass?: unknown; fail?: unknown; latest?: { verdict?: unknown; ref?: unknown } | null }; recurrence?: { before?: { hits?: unknown; fails?: unknown }; after?: { hits?: unknown; fails?: unknown } }; rounds?: { opened?: unknown; closed?: unknown; missed?: unknown; kept?: unknown } }> }
     const n = (v: unknown): number => typeof v === 'number' && Number.isFinite(v) ? v : 0
     return (body.items ?? []).filter(item => typeof item.id === 'string').map(item => ({
-      id: item.id as string, pinned: item.pinned === true,
+      id: item.id as string, key: typeof item.key === 'string' ? item.key : '', version: typeof item.version === 'string' ? item.version : null, pinned: item.pinned === true,
+      outcome: item.outcome === 'wrong' || item.outcome === 'right' ? item.outcome : null,
+      latestEvidence: typeof item.latest_evidence === 'string' && item.latest_evidence !== '' ? item.latest_evidence : null,
       rounds: { opened: n(item.rounds?.opened), closed: n(item.rounds?.closed), missed: n(item.rounds?.missed), kept: n(item.rounds?.kept) },
       churn: item.churn === true,
       recurrence: {

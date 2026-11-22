@@ -11,7 +11,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { IconCopyOutlineRegular, IconDownloadOutlineRegular, IconEditOutlineRegular, IconGlobeOutlineRegular, IconPlusOutlineRegular, IconQueueOutlineRegular, IconSendOutlineRegular, IconTrashOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { CategoryView, InjectionHistoryEntry, InjectionStatusView, TemplateInjectMode, TemplateView } from '../types.ts'
 import type { EventEpisodeWire, EventPolicyWire } from './api.ts'
-import { decideLessonType, listCardStats, listLessonPins, listPendingLessonTypes, recordManualIntervention, setLessonPinned, type CardStatWire, type LessonPinWire, type PendingLessonTypeWire, type RecurrenceWire, type VerdictsWire, attachLessonVerdict, getServerVersion } from './api.ts'
+import { decideLessonType, listCardStats, listLessonPins, listPendingLessonTypes, recordManualIntervention, type CardStatWire, type LessonPinWire, type PendingLessonTypeWire, type RecurrenceWire, type VerdictsWire, attachLessonVerdict, getServerVersion } from './api.ts'
 import type { TemplateLibraryFace } from './slots.ts'
 import { filterTemplateRows, searchableTemplateRows } from './filter.ts'
 import { buildSharePayload, parseSharePayload, planShareImport } from './share.ts'
@@ -38,8 +38,8 @@ interface RowProps {
   /** Copy the row as a one-template clipboard share payload. */
   onShare: (template: TemplateView, trigger: HTMLButtonElement) => void
   onMakeGlobal?: (id: string) => void
-  /** Present only for the session's own lessons (体会): the owner pins them. */
-  pin?: { readonly pinned: boolean; readonly onToggle: () => void; readonly onTasteAsk?: () => void; readonly onVerdict?: () => void; readonly verdicts?: VerdictsWire; readonly rounds?: { readonly opened: number; readonly closed: number; readonly missed: number; readonly kept?: number }; readonly churn?: boolean; readonly recurrence?: RecurrenceWire; readonly evidence?: string | null }
+  /** Present only for the session's own lessons (体会) outside the 会话模板 tab: their badges, ⚖ and the verdict entry. */
+  pin?: { readonly onTasteAsk?: () => void; readonly onVerdict?: () => void; readonly verdicts?: VerdictsWire; readonly rounds?: { readonly opened: number; readonly closed: number; readonly missed: number; readonly kept?: number }; readonly churn?: boolean; readonly recurrence?: RecurrenceWire; readonly evidence?: string | null }
   /** Present for a workshop card injected in this session: its card-round yield. */
   cardYield?: CardStatWire
   /** Flip the row's auto-inject switch (rows without an interval route to the edit form). */
@@ -48,9 +48,13 @@ interface RowProps {
   onDragStart: (id: string) => void
   onDropOn: (id: string) => void
   t: (key: PromptTemplateKey) => string
+  /** §5.16 会话模板 tab: only insert, send, edit and delete show; the rest wait behind ⋯. */
+  compact?: boolean
 }
 
-function TemplateRow({ template, onInsert, onSend, onInterject, onEdit, onDelete, onShare, onMakeGlobal, pin, cardYield, onToggleInject, sortable, onDragStart, onDropOn, t }: RowProps) {
+function TemplateRow({ template, onInsert, onSend, onInterject, onEdit, onDelete, onShare, onMakeGlobal, pin, cardYield, onToggleInject, sortable, onDragStart, onDropOn, t, compact = false }: RowProps) {
+  const [more, setMore] = useState(false)
+  const full = !compact || more
   const injectTitle = template.inject_enabled && template.inject_every !== null
     ? `${t('panel.inject')} · ${template.inject_every}${template.mode === 'visible' ? ' · ' + t('panel.modeVisible') : ''}`
     : t('panel.inject')
@@ -73,25 +77,29 @@ function TemplateRow({ template, onInsert, onSend, onInterject, onEdit, onDelete
         <span className={css.name}>{template.name}</span>
         <span className={css.preview}>{template.content}</span>
       </button>
-      <button
-        type="button"
-        className={template.inject_enabled ? css.injectBtnActive : css.injectBtn}
-        onClick={() => { onToggleInject(template) }}
-        aria-label={t('panel.inject')}
-        aria-pressed={template.inject_enabled}
-        title={injectTitle}
-      >
-        ⟳{template.inject_enabled && template.inject_every !== null ? template.inject_every : ''}
-      </button>
-      <button
-        type="button"
-        className={css.interjectBtn}
-        onClick={() => { onInterject(template) }}
-        aria-label={t('panel.interject')}
-        title={t('panel.interject')}
-      >
-        <IconQueueOutlineRegular size={12} />
-      </button>
+      {full && (
+        <button
+          type="button"
+          className={template.inject_enabled ? css.injectBtnActive : css.injectBtn}
+          onClick={() => { onToggleInject(template) }}
+          aria-label={t('panel.inject')}
+          aria-pressed={template.inject_enabled}
+          title={injectTitle}
+        >
+          ⟳{template.inject_enabled && template.inject_every !== null ? template.inject_every : ''}
+        </button>
+      )}
+      {full && (
+        <button
+          type="button"
+          className={css.interjectBtn}
+          onClick={() => { onInterject(template) }}
+          aria-label={t('panel.interject')}
+          title={t('panel.interject')}
+        >
+          <IconQueueOutlineRegular size={12} />
+        </button>
+      )}
       <button
         type="button"
         className={css.sendBtn}
@@ -101,16 +109,18 @@ function TemplateRow({ template, onInsert, onSend, onInterject, onEdit, onDelete
       >
         <IconSendOutlineRegular size={12} />
       </button>
-      <button
-        type="button"
-        className={css.shareBtn}
-        onClick={(event) => { onShare(template, event.currentTarget) }}
-        aria-label={t('panel.share')}
-        title={t('panel.share')}
-      >
-        <IconCopyOutlineRegular size={12} />
-      </button>
-      {onMakeGlobal !== undefined && (
+      {full && (
+        <button
+          type="button"
+          className={css.shareBtn}
+          onClick={(event) => { onShare(template, event.currentTarget) }}
+          aria-label={t('panel.share')}
+          title={t('panel.share')}
+        >
+          <IconCopyOutlineRegular size={12} />
+        </button>
+      )}
+      {full && onMakeGlobal !== undefined && (
         <button
           type="button"
           className={css.globalBtn}
@@ -121,19 +131,7 @@ function TemplateRow({ template, onInsert, onSend, onInterject, onEdit, onDelete
           <IconGlobeOutlineRegular size={12} />
         </button>
       )}
-      {pin !== undefined && (
-        <button
-          type="button"
-          className={pin.pinned ? css.injectBtnActive : css.injectBtn}
-          onClick={() => { pin.onToggle() }}
-          aria-label={pin.pinned ? t('panel.unpin') : t('panel.pin')}
-          aria-pressed={pin.pinned}
-          title={pin.pinned ? t('panel.unpin') : t('panel.pin')}
-        >
-          📌
-        </button>
-      )}
-      {pin !== undefined && pin.onTasteAsk !== undefined && (pin.pinned || (pin.rounds?.closed ?? 0) > 0) && (
+      {pin !== undefined && pin.onTasteAsk !== undefined && (
         <button
           type="button"
           className={css.injectBtn}
@@ -194,7 +192,7 @@ function TemplateRow({ template, onInsert, onSend, onInterject, onEdit, onDelete
           {t('panel.verdictShort')} ✓{pin.verdicts.pass} ✗{pin.verdicts.fail}
         </span>
       )}
-      {pin?.onVerdict !== undefined && pin.rounds !== undefined && pin.rounds.opened > 0 && (
+      {pin?.onVerdict !== undefined && (
         <button
           type="button"
           className={css.injectBtn}
@@ -228,6 +226,68 @@ function TemplateRow({ template, onInsert, onSend, onInterject, onEdit, onDelete
       >
         <IconTrashOutlineRegular size={12} />
       </button>
+      {compact && (
+        <button
+          type="button"
+          className={css.injectBtn}
+          onClick={() => { setMore(v => !v) }}
+          aria-label={t('panel.more')}
+          aria-expanded={more}
+          title={t('panel.more')}
+          data-prompt-row-more
+        >
+          ⋯
+        </button>
+      )}
+    </div>
+  )
+}
+
+/** The chain order a lesson type sorts by in the 会话模板 tab: built-ins first, approved ones after, legacy last. */
+const LESSON_CHAIN = ['收', '放', '找', '落', '验', '记', '续']
+
+/**
+ * §5.16: a lesson row in the 会话模板 tab — the full text first, a 「类型 · 做错／做对」 label, one line of effect,
+ * and only edit, delete and ⚖. No insert, send, interject, share, make-global, schedule or pin.
+ */
+function LessonRow({ template, info, onEdit, onDelete, onTasteAsk, t }: {
+  template: TemplateView
+  info: LessonPinWire
+  onEdit: (id: string) => void
+  onDelete: (id: string) => void
+  onTasteAsk: () => void
+  t: (key: PromptTemplateKey) => string
+}) {
+  const label = [info.key, info.outcome === 'wrong' ? t('panel.lessonWrong') : info.outcome === 'right' ? t('panel.lessonRight') : null].filter(Boolean).join(' · ')
+  const rewrites = Math.max(0, Number(/^lesson-r(\d+)$/.exec(info.version ?? '')?.[1] ?? 1) - 1)
+  const effect: string[] = []
+  if (info.rounds.kept > 0) effect.push(t('panel.lessonKept').replace('{n}', String(info.rounds.kept)))
+  if (info.latestEvidence !== null) effect.push(t('panel.lessonEvidence').replace('{evidence}', info.latestEvidence))
+  if (rewrites > 0) effect.push(t('panel.lessonRewrites').replace('{n}', String(rewrites)))
+  if (info.recurrence.after.hits > 0) {
+    effect.push(info.recurrence.after.fails > 0
+      ? t('panel.lessonAfter').replace('{fails}', String(info.recurrence.after.fails)).replace('{hits}', String(info.recurrence.after.hits))
+      : t('panel.lessonAfterClean'))
+  }
+  if (info.churn) effect.push(t('panel.churnShort'))
+  return (
+    <div className={css.lessonRow} data-prompt-template data-lesson-row data-lesson-outcome={info.outcome ?? 'none'} onMouseDown={(e) => { e.preventDefault() }}>
+      <div className={css.lessonHead}>
+        <span className={css.lessonLabel}>{label}</span>
+        <span className={css.lessonActions}>
+          <button type="button" className={css.editBtn} onClick={() => { onEdit(template.id) }} aria-label={t('panel.edit')} title={t('panel.edit')}>
+            <IconEditOutlineRegular size={12} />
+          </button>
+          <button type="button" className={css.deleteBtn} onClick={() => { onDelete(template.id) }} aria-label={t('panel.delete')}>
+            <IconTrashOutlineRegular size={12} />
+          </button>
+          <button type="button" className={css.injectBtn} onClick={onTasteAsk} aria-label={t('panel.tasteAsk')} title={t('panel.tasteAsk')} data-lesson-taste-ask>
+            ⚖
+          </button>
+        </span>
+      </div>
+      <div className={css.lessonText}>{template.content}</div>
+      <div className={css.lessonEffect} data-lesson-effect>{effect.length > 0 ? effect.join(' · ') : t('panel.lessonFresh')}</div>
     </div>
   )
 }
@@ -609,7 +669,7 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
     return () => { shareRequest.current += 1 }
   }, [sessionId])
   // 体会 pins (phase 2): only the session's own lessons get the toggle; the host enforces the quota.
-  const [lessonPins, setLessonPins] = useState<ReadonlyMap<string, boolean>>(new Map())
+  const [lessonInfo, setLessonInfo] = useState<ReadonlyMap<string, LessonPinWire>>(new Map())
   const [lessonRounds, setLessonRounds] = useState<ReadonlyMap<string, LessonPinWire['rounds']>>(new Map())
   const [lessonChurn, setLessonChurn] = useState<ReadonlySet<string>>(new Set())
   const [lessonRecurrence, setLessonRecurrence] = useState<ReadonlyMap<string, RecurrenceWire>>(new Map())
@@ -623,9 +683,9 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
   const [verdictRef, setVerdictRef] = useState('')
   const [verdictBusy, setVerdictBusy] = useState(false)
   const loadLessonPins = useCallback(async () => {
-    if (sessionId === null) { setLessonPins(new Map()); setLessonRounds(new Map()); setLessonChurn(new Set()); setLessonRecurrence(new Map()); setLessonEvidence(new Map()); setLessonVerdicts(new Map()); return }
+    if (sessionId === null) { setLessonInfo(new Map()); setLessonRounds(new Map()); setLessonChurn(new Set()); setLessonRecurrence(new Map()); setLessonEvidence(new Map()); setLessonVerdicts(new Map()); return }
     const items = await listLessonPins(sessionId)
-    setLessonPins(new Map(items.map(item => [item.id, item.pinned])))
+    setLessonInfo(new Map(items.map(item => [item.id, item])))
     setLessonRounds(new Map(items.map(item => [item.id, item.rounds])))
     setLessonChurn(new Set(items.filter(item => item.churn).map(item => item.id)))
     setLessonRecurrence(new Map(items.map(item => [item.id, item.recurrence])))
@@ -653,11 +713,6 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
     if (!result.ok) setNotice(result.error.message)
     await loadPendingTypes()
   }, [sessionId, loadPendingTypes])
-  const handleTogglePin = useCallback(async (id: string) => {
-    const result = await setLessonPinned(id, lessonPins.get(id) !== true)
-    if (!result.ok) setNotice(result.error.code === 'pinned-full' ? t('panel.pinFull') : result.error.message)
-    await loadLessonPins()
-  }, [lessonPins, loadLessonPins, t])
   useEffect(() => {
     if (notice === null) return
     const timer = setTimeout(() => { setNotice(null) }, 3000)
@@ -853,7 +908,17 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
   // With no query the active tab owns the list. A query searches across every
   // category, but never leaks another session's private templates.
   const needle = query.trim().toLowerCase()
-  const tabRows = filterTemplateRows(templates, query, effectiveTab, activeCategory, sessionId)
+  const filteredRows = filterTemplateRows(templates, query, effectiveTab, activeCategory, sessionId)
+  // §5.16: in the 会话模板 tab the session's lessons come first, in the chain order; plain session templates follow.
+  const lessonRank = (row: TemplateView): number => {
+    const info = lessonInfo.get(row.id)
+    if (info === undefined) return 10_000
+    const chain = LESSON_CHAIN.indexOf(info.key)
+    return chain >= 0 ? chain : /^\d+$/.test(info.key) ? 1_000 : 100
+  }
+  const tabRows = effectiveTab === 'session'
+    ? filteredRows.map((row, index) => ({ row, index })).sort((a, b) => lessonRank(a.row) - lessonRank(b.row) || a.index - b.index).map(({ row }) => row)
+    : filteredRows
   const searchableCount = searchableTemplateRows(templates, sessionId).length
   const countLabel = templateCountLabel(tabRows.length, searchableCount, needle !== '')
 
@@ -901,6 +966,18 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
           onCancel={() => { setEditingId(null) }}
         />
       )
+      : lessonInfo.has(row.id) && effectiveTab === 'session'
+      ? (
+        <LessonRow
+          key={row.id}
+          template={row}
+          info={lessonInfo.get(row.id)!}
+          onEdit={(id) => { setEditingId(id) }}
+          onDelete={(id) => { void handleRemove(id) }}
+          onTasteAsk={() => { handleTasteAsk(row) }}
+          t={t}
+        />
+      )
       : (
         <TemplateRow
           key={row.id}
@@ -912,7 +989,8 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
           onDelete={(id) => { void handleRemove(id) }}
           onShare={(tpl, trigger) => { void handleShareTemplate(tpl, trigger) }}
           onMakeGlobal={row.scope === 'session' ? (id) => { void handleMakeGlobal(id) } : undefined}
-          pin={lessonPins.has(row.id) ? { pinned: lessonPins.get(row.id) === true, onToggle: () => { void handleTogglePin(row.id) }, onTasteAsk: () => { handleTasteAsk(row) }, onVerdict: () => { setVerdictFor(row); setVerdictRef('') }, verdicts: lessonVerdicts.get(row.id), rounds: lessonRounds.get(row.id), churn: lessonChurn.has(row.id), recurrence: lessonRecurrence.get(row.id), evidence: lessonEvidence.get(row.id) ?? null } : undefined}
+          compact={effectiveTab === 'session'}
+          pin={lessonInfo.has(row.id) ? { onTasteAsk: () => { handleTasteAsk(row) }, onVerdict: () => { setVerdictFor(row); setVerdictRef('') }, verdicts: lessonVerdicts.get(row.id), rounds: lessonRounds.get(row.id), churn: lessonChurn.has(row.id), recurrence: lessonRecurrence.get(row.id), evidence: lessonEvidence.get(row.id) ?? null } : undefined}
           cardYield={cardYields.get(row.id)}
           onToggleInject={(tpl) => { void handleToggleInject(tpl) }}
           sortable={needle === ''}
