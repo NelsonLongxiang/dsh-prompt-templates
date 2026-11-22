@@ -152,3 +152,15 @@ test('text that does not fit scrolls, and the lane waits for one full pass', asy
   assert.match(style, /prefers-reduced-motion[\s\S]*\.ribbon, \.unfurl, \.face[\s\S]*animation: none/, 'reduced motion: decorative sway/unfurl/roll still off')
   assert.match(style, /\.ribbon:hover \.run \{ animation-play-state: paused; \}/, 'hovering a lane pauses its scrolling text, so moving text can be stopped')
 })
+
+// Owner 2026-11-22: untagged lessons hang as plain paper, not a disabled-looking grey.
+test('an untagged lesson is plain paper: off-white, dashed edge, an empty circle', async () => {
+  const { readFileSync } = await import('node:fs')
+  const style = readFileSync(new URL('../src/client/Ribbon.module.css', import.meta.url), 'utf8')
+  assert.match(style, /\.plain \.band \{[^}]*background: #EDE9DF;[^}]*color: #3A3A3A;[^}]*border: 1px dashed/)
+  assert.match(style, /\.plain \.sign \{[^}]*background: transparent;[^}]*border-radius: 50%/)
+  assert.match(style, /\.thin\.plain \{[^}]*background: #EDE9DF/)
+  assert.doesNotMatch(style, /#4a4f5c/, 'the old grey is gone')
+  const src = readFileSync(new URL('../src/client/LessonRibbon.tsx', import.meta.url), 'utf8')
+  assert.match(src, /'right' \? '✓' : ''\}/, 'the empty circle carries no glyph')
+})

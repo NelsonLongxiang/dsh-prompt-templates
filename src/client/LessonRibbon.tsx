@@ -146,7 +146,7 @@ function Lane({ lessons, jump, onFold, t }: { lessons: readonly RibbonLesson[]; 
     <div className={`${css.ribbon} ${kind}`} data-lesson-ribbon-lane={lesson.outcome ?? 'plain'} onMouseEnter={() => { setHover(true) }} onMouseLeave={() => { setHover(false) }}>
       <div key={`band-${String(unfurl)}`} className={unfurl > 0 ? `${css.band} ${css.unfurl}` : css.band} title={lesson.content}>
         <div key={`face-${String(roll)}-${lesson.id}`} className={css.face}>
-          <span className={css.sign} aria-hidden="true">{lesson.outcome === 'wrong' ? '!' : lesson.outcome === 'right' ? '✓' : '·'}</span>
+          <span className={css.sign} aria-hidden="true">{lesson.outcome === 'wrong' ? '!' : lesson.outcome === 'right' ? '✓' : ''}</span>
           <span className={css.tag}>{tag === null ? lesson.key : `${lesson.key} · ${tag}`}</span>
           <Marquee text={lesson.content} className={css.text} onPass={ms => { setScroll(v => (v.text === ms ? v : { ...v, text: ms })) }} />
         </div>

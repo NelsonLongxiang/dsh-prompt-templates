@@ -175,11 +175,11 @@
 .sash .tag { background: #fff; color: #1f4fa6; }
 .thin.sash { background: #2f6fd6; }
 
-/* Untagged: plain. */
-.plain .band { background: #4a4f5c; color: #f1f2f5; }
-.plain .sign { background: rgba(255, 255, 255, 0.15); border-radius: 50%; }
-.plain .tag { background: rgba(255, 255, 255, 0.15); }
-.thin.plain { background: #6b7080; }
+/* Untagged: plain paper (owner 2026-11-22) — a note with no verdict yet: off-white, dashed edge, an empty circle. */
+.plain .band { box-sizing: border-box; background: #EDE9DF; color: #3A3A3A; border: 1px dashed #9A9384; }
+.plain .sign { box-sizing: border-box; background: transparent; border: 1.5px solid #3A3A3A; border-radius: 50%; }
+.plain .tag { background: rgba(58, 58, 58, 0.1); color: #3A3A3A; }
+.thin.plain { box-sizing: border-box; background: #EDE9DF; border: 1px dashed #9A9384; }
 
 .thin {
   flex: 1 1 260px;
