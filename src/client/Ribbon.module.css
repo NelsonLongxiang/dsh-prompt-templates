@@ -234,6 +234,8 @@
 .knotRight { background: #2f6fd6; }
 
 @media (prefers-reduced-motion: reduce) {
-  .ribbon, .unfurl, .face, .scrolling .run { animation: none; }
-  .scrolling { text-overflow: ellipsis; }
+  /* Decorative motion off; the marquee stays (owner 2026-11-22: text that does not fit
+     must still scroll under reduced motion — the hover pause satisfies the pause rule). */
+  .ribbon, .unfurl, .face { animation: none; }
+  .scrolling { text-overflow: clip; }
 }
