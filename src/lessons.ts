@@ -45,9 +45,11 @@ export const LESSON_MAX = 160
 /** Consecutive unanswered digest prompts after which prompting slows down. */
 export const PAUSE_AFTER = 3
 /** Tools whose own results never become a lesson's cue. */
-export const LESSON_SELF_TOOLS: readonly string[] = ['lesson_write', 'lesson_none', 'lesson_keep', 'lesson_pin', 'lesson_timeline', 'lesson_type_propose', 'selfcheck_write', 'selfcheck_conclude']
+export const LESSON_SELF_TOOLS: readonly string[] = ['lesson_write', 'lesson_none', 'lesson_keep', 'lesson_timeline', 'lesson_type_propose', 'selfcheck_write', 'selfcheck_conclude']
 /** Total characters of the pinned lessons loaded at one start (phase 2). */
 export const PINNED_MAX_CHARS = 400
+/** §5.16: the lesson list handed over at a start, resume or compaction is at most this many characters. */
+export const LESSON_LIST_MAX_CHARS = 1600
 /** Session starts that load pinned lessons; `clear` is the user asking for a fresh start (spec §10, decision 4). */
 export const PINNED_SOURCES: readonly string[] = ['startup', 'resume', 'compact']
 /** Failed targets remembered per session for the failed-then-succeeded signal. */
@@ -173,6 +175,17 @@ CREATE INDEX IF NOT EXISTS lesson_evidence_template ON lesson_evidence (template
 /** Evidence on a lesson write: optional, one line, at most this many characters. */
 export const EVIDENCE_MAX = 200
 
+/** §5.16: whether a lesson came from getting something wrong or right (optional on lesson_write). */
+export type LessonOutcomeTag = 'wrong' | 'right'
+/** The outcome the session gave one lesson write, keyed like its evidence. Created idempotently at every open. */
+export const LESSON_OUTCOME_SQL = `CREATE TABLE IF NOT EXISTS lesson_outcomes (
+  template_id TEXT NOT NULL,
+  content_sha256 TEXT NOT NULL,
+  outcome TEXT NOT NULL,
+  at TEXT NOT NULL,
+  PRIMARY KEY (template_id, content_sha256)
+)`
+
 /** One side of a lesson's recurrence: calls in the same situation, and how many of them failed. */
 export interface HitCount { readonly hits: number; readonly fails: number }
 /** Recurrence of a lesson's situation before its first recall and after it (B4a). */
@@ -220,7 +233,7 @@ export interface CueRow extends CueFeatures {
   readonly created_at: string
 }
 
-export type LessonLogKind = 'prompted' | 'written' | 'superseded' | 'recalled' | 'pinned-loaded' | 'card-injected' | 'round-closed' | 'round-missed' | 'type-proposed' | 'type-decided' | 'round-verdict' | 'self-pinned' | 'self-unpinned' | 'owner-unpinned'
+export type LessonLogKind = 'prompted' | 'written' | 'superseded' | 'recalled' | 'pinned-loaded' | 'card-injected' | 'round-closed' | 'round-missed' | 'type-proposed' | 'type-decided' | 'round-verdict' | 'self-pinned' | 'self-unpinned' | 'owner-unpinned' | 'delivered'
 
 /** How a recall round ended: the recalled lesson rewritten, a new lesson written, or nothing by the deadline. */
 export type RoundOutcome = 'updated' | 'written' | 'none'
@@ -259,15 +272,12 @@ export interface LessonState {
   pending?: DigestContext
   /** The experience the last digest prompt followed; bound to the next lesson written. */
   context?: DigestContext
-  readonly recall: Set<string>
-  /** Set by `agent/created` (startup, resume, compact): the next step loads the pinned lessons. */
-  pinnedDue?: string
-  /** Pinned lessons loaded into this context; recall skips them. */
-  readonly loaded: Set<string>
+  /** Set by `agent/created` (startup, resume, compact): the next step hands over the session's lessons (§5.16). */
+  deliverDue?: string
 }
 
 export function newLessonState(): LessonState {
-  return { failures: new Map(), recall: new Set(), loaded: new Set() }
+  return { failures: new Map() }
 }
 
 /** Durable lesson state over the plugin's SQLite handle. */
@@ -475,6 +485,25 @@ export class LessonStore {
     return row?.evidence
   }
 
+  /** Record the outcome the session gave one lesson write (§5.16). */
+  setOutcome(templateId: string, contentSha256: string, outcome: LessonOutcomeTag): void {
+    this.#db.prepare('INSERT INTO lesson_outcomes (template_id, content_sha256, outcome, at) VALUES (?, ?, ?, ?) ON CONFLICT(template_id, content_sha256) DO UPDATE SET outcome = excluded.outcome, at = excluded.at')
+      .run(templateId, contentSha256, outcome, new Date().toISOString())
+  }
+
+  /** The outcome of the write of this text, if the session gave one. */
+  outcome(templateId: string, contentSha256: string): LessonOutcomeTag | null {
+    const row = this.#db.prepare('SELECT outcome FROM lesson_outcomes WHERE template_id = ? AND content_sha256 = ?').get(templateId, contentSha256) as { outcome: string } | undefined
+    return row?.outcome === 'wrong' || row?.outcome === 'right' ? row.outcome : null
+  }
+
+  /** The latest verified keep of the current text (after its last write), if any: its evidence. */
+  latestKeep(templateId: string): string | undefined {
+    const row = this.#db.prepare(`SELECT origin FROM lesson_log WHERE template_id = ? AND kind = 'round-closed' AND origin LIKE 'kept:%'
+      AND seq > COALESCE((SELECT MAX(seq) FROM lesson_log WHERE template_id = ? AND kind = 'written'), 0) ORDER BY seq DESC LIMIT 1`).get(templateId, templateId) as { origin: string } | undefined
+    return row === undefined ? undefined : row.origin.slice(5)
+  }
+
   /** Content digests of one lesson's writes, oldest first. */
   writtenDigests(templateId: string): string[] {
     return (this.#db.prepare("SELECT content_sha256 FROM lesson_log WHERE template_id = ? AND kind = 'written' ORDER BY seq").all(templateId) as Array<{ content_sha256: string | null }>)
@@ -498,6 +527,8 @@ export interface LessonView {
   readonly index: number | null
   readonly content: string
   readonly version: string | null
+  /** §5.16: wrong or right as the session tagged the current text; null when untagged (and for old lessons). */
+  readonly outcome: LessonOutcomeTag | null
 }
 
 /** A session's lessons: its own session templates named 体会·<type> (built-in order, then proposed), then legacy 体会·N. */
@@ -512,7 +543,7 @@ export function lessonsOf(store: TemplateStore, sessionId: string): LessonView[]
     if (m === null) return []
     const key = m[1]!
     const legacy = LEGACY_INDEX.test(key)
-    return [{ id: t.id, key, type: legacy ? null : key, index: legacy ? Number(key) : null, content: t.content, version: t.version ?? null }]
+    return [{ id: t.id, key, type: legacy ? null : key, index: legacy ? Number(key) : null, content: t.content, version: t.version ?? null, outcome: store.lessons.outcome(t.id, contentDigest(t.content)) }]
   }).sort((a, b) => order(a) - order(b) || a.key.localeCompare(b.key))
 }
 
@@ -585,7 +616,7 @@ export function lessonTimeline(store: TemplateStore, sessionId: string, limit = 
   }
   const out: TimelineEntry[] = []
   for (const row of store.lessons.log(sessionId, 500).reverse()) {
-    if (row.kind === 'prompted' || row.kind === 'pinned-loaded') continue
+    if (row.kind === 'prompted' || row.kind === 'pinned-loaded' || row.kind === 'delivered') continue
     const isType = row.kind === 'type-proposed' || row.kind === 'type-decided'
     const key = isType ? row.origin : keyOf(row.template_id)
     if (type !== undefined && key !== type) continue
@@ -682,22 +713,22 @@ export function lessonNone(store: TemplateStore, sessionId: string, reason: stri
 type KeepResult = { ok: true; round: 'kept'; type: string } | { ok: false; code: string; error: string }
 
 /**
- * Close the open recall round of one lesson without rewriting it: a verified keep (owner 2026-11-21). The session used
- * the recalled lesson, it held, and nothing in it needs changing; it must say how it checked (a command and its result,
- * a PR or CI link, a claim id). A bare "still right" is not evidence: the round stays open and is missed in time.
+ * Keep one lesson without rewriting it: a verified keep (owner 2026-11-21). The session used the lesson, it held, and
+ * nothing in it needs changing; it must say how it checked (a command and its result, a PR or CI link, a claim id). A
+ * bare "still right" is not evidence. §5.16: no recall round is needed; a keep is allowed on any of the session's own
+ * lessons at any time (it still closes that lesson's open round from before, if one is left).
  */
 export function lessonKeep(store: TemplateStore, sessionId: string, type: unknown, evidence: string, turn: number | null): KeepResult {
   const kind = typeof type === 'string' ? type.trim() : ''
   const lesson = lessonsOf(store, sessionId).find(l => l.type === kind)
   if (lesson === undefined) return { ok: false, code: 'type', error: 'no lesson of that type in this session' }
   const round = store.lessons.openRounds(sessionId).filter(row => row.template_id === lesson.id).at(-1)
-  if (round === undefined) return { ok: false, code: 'no-recall-round', error: 'this lesson has no open recall round; a keep closes only the round its recall opened' }
   const proof = oneLineText(evidence)
   const n = [...proof].length
   if (n < KEEP_MIN || n > KEEP_MAX) {
     return { ok: false, code: 'evidence', error: `say in ${String(KEEP_MIN)}..${String(KEEP_MAX)} characters how you checked it still holds: the command and its result, a PR or CI link, or a claim id; "still right" alone is not evidence` }
   }
-  store.lessons.record({ session_id: sessionId, kind: 'round-closed', template_id: lesson.id, turn, origin: `kept:${proof}`, origin_ref: String(round.seq), content_sha256: contentDigest(lesson.content) })
+  store.lessons.record({ session_id: sessionId, kind: 'round-closed', template_id: lesson.id, turn, origin: `kept:${proof}`, origin_ref: round === undefined ? null : String(round.seq), content_sha256: contentDigest(lesson.content) })
   return { ok: true, round: 'kept', type: kind }
 }
 
@@ -717,12 +748,12 @@ function parseVerdict(origin: string | null): { verdict: Verdict; ref: string } 
   return m === null ? null : { verdict: m[1] as Verdict, ref: m[2]! }
 }
 
-type VerdictResult = { ok: true; id: string; round: number; verdict: Verdict; ref: string } | { ok: false; code: 'not-found' | 'no-round' | 'bad-request'; error: string }
+type VerdictResult = { ok: true; id: string; round: number | null; verdict: Verdict; ref: string } | { ok: false; code: 'not-found' | 'bad-request'; error: string }
 
 /**
- * The owner attaches an external verdict to a lesson's latest recall round (B3b, owner 2026-11-21). Only recorded:
- * it never closes, reopens or misses a round, and the session has no tool to write one (the verdict comes from
- * someone other than the session being judged).
+ * The owner attaches an external verdict to a lesson (B3b, owner 2026-11-21). Only recorded: it never closes, reopens or
+ * misses a round, and the session has no tool to write one (the verdict comes from someone other than the session being
+ * judged). §5.16: the lesson need not have been recalled; the verdict names its latest recall round when there is one.
  */
 export function attachVerdict(store: TemplateStore, templateId: string, verdict: unknown, ref: unknown): VerdictResult {
   if (verdict !== 'pass' && verdict !== 'fail') return { ok: false, code: 'bad-request', error: 'verdict must be pass or fail' }
@@ -732,9 +763,8 @@ export function attachVerdict(store: TemplateStore, templateId: string, verdict:
   const cue = store.lessons.cue(templateId)
   if (cue === undefined || !lessonsOf(store, cue.session_id).some(l => l.id === templateId)) return { ok: false, code: 'not-found', error: 'no such lesson of a session' }
   const round = store.lessons.latestRecall(templateId)
-  if (round === undefined) return { ok: false, code: 'no-round', error: 'this lesson was never recalled, so it has no round to attach a verdict to' }
-  store.lessons.record({ session_id: cue.session_id, kind: 'round-verdict', template_id: templateId, turn: null, origin: `${verdict}:${text}`, origin_ref: String(round.seq), content_sha256: null })
-  return { ok: true, id: templateId, round: round.seq, verdict, ref: text }
+  store.lessons.record({ session_id: cue.session_id, kind: 'round-verdict', template_id: templateId, turn: null, origin: `${verdict}:${text}`, origin_ref: round === undefined ? null : String(round.seq), content_sha256: null })
+  return { ok: true, id: templateId, round: round?.seq ?? null, verdict, ref: text }
 }
 
 /** Similarity of two lesson texts: Dice coefficient over character bigrams, ignoring whitespace and punctuation. */
@@ -770,12 +800,8 @@ export function lessonChurn(store: TemplateStore, templateId: string): boolean {
   return true
 }
 
-/** Mark every round still open past its grace turns as missed. */
+/** Mark every workshop-card round still open past its grace turns as missed. §5.16: recall rounds are no longer forced. */
 export function expireRounds(store: TemplateStore, sessionId: string, turn: number): void {
-  for (const row of store.lessons.openRounds(sessionId)) {
-    if (row.turn === null || turn <= row.turn + ROUND_GRACE_TURNS) continue
-    store.lessons.record({ session_id: sessionId, kind: 'round-missed', template_id: row.template_id, turn, origin: null, origin_ref: String(row.seq), content_sha256: null })
-  }
   for (const round of store.lessons.openCardRounds(sessionId)) {
     if (round.turn === null || turn <= round.turn + ROUND_GRACE_TURNS) continue
     store.lessons.record({ session_id: sessionId, kind: 'round-missed', template_id: null, turn, origin: null, origin_ref: round.key, content_sha256: null })
@@ -789,14 +815,18 @@ export function expireRounds(store: TemplateStore, sessionId: string, turn: numb
  * followed, else from the session's last observed call; the session cannot name a cue. A lesson the owner edited on the
  * panel is the owner's: the session cannot overwrite it.
  */
-export function writeLesson(store: TemplateStore, state: LessonState, sessionId: string, text: string, type: unknown, _config?: LessonsConfig, evidence?: unknown): WriteResult {
+export function writeLesson(store: TemplateStore, state: LessonState, sessionId: string, text: string, type: unknown, _config?: LessonsConfig, evidence?: unknown, outcome?: unknown): WriteResult {
   const body = text.trim()
+  if (outcome !== undefined && outcome !== null && outcome !== '' && outcome !== 'wrong' && outcome !== 'right') {
+    return { ok: false, code: 'outcome', error: 'outcome is optional: wrong (it came from getting something wrong) or right (from getting something right)' }
+  }
+  const tag: LessonOutcomeTag | null = outcome === 'wrong' || outcome === 'right' ? outcome : null
   const proof = typeof evidence === 'string' ? oneLineText(evidence) : ''
   if ([...proof].length > EVIDENCE_MAX) {
     return { ok: false, code: 'evidence', error: `evidence is optional, one line, at most ${String(EVIDENCE_MAX)} characters: a PR or CI link, a command and its result, or a claim id` }
   }
   if (body === '' || [...body].length > LESSON_MAX) {
-    return { ok: false, code: 'length', error: `a lesson is 1..${String(LESSON_MAX)} characters: one or two sentences, what hurt and what to do first next time` }
+    return { ok: false, code: 'length', error: `a lesson is 1..${String(LESSON_MAX)} characters: one or two sentences — when this happens, first do that, because why` }
   }
   const allowed = allowedTypes(store, sessionId)
   const kind = typeof type === 'string' ? type.trim() : ''
@@ -824,6 +854,7 @@ export function writeLesson(store: TemplateStore, state: LessonState, sessionId:
     else store.lessons.updateCue(current.id, cue, origin, originRef, turn ?? 0)
     store.lessons.record({ session_id: sessionId, kind: 'written', template_id: current.id, turn, origin, origin_ref: originRef, content_sha256: contentDigest(body) })
     if (proof !== '') store.lessons.addEvidence(sessionId, current.id, contentDigest(body), proof)
+    if (tag !== null) store.lessons.setOutcome(current.id, contentDigest(body), tag)
     state.context = undefined
     return { ok: true, id: current.id, type: kind, version: next, superseded: true, owner_edited: ownerEdited, round: closeRound(store, sessionId, current.id, turn, body) }
   }
@@ -832,12 +863,13 @@ export function writeLesson(store: TemplateStore, state: LessonState, sessionId:
   }
   const made = store.create({
     name: `${LESSON_PREFIX}${kind}`, content: body, scope: 'session', session_id: sessionId, category: LESSON_CATEGORY,
-    description: `会话自己写下的「${kind}」类体会：经历之后的一两句话，同类情境下会被唤起；每类只留一条，再写会软覆盖`,
+    description: `会话自己写下的「${kind}」类体会：做错或做对之后的一两句话，开工、恢复和压缩后交给模型；每类只留一条，再写会软覆盖`,
   })
   store.update(made.id, { content: body, version: 'lesson-r1' })
   store.lessons.addCue(made.id, sessionId, cue, origin, originRef, turn ?? 0)
   store.lessons.record({ session_id: sessionId, kind: 'written', template_id: made.id, turn, origin, origin_ref: originRef, content_sha256: contentDigest(body) })
   if (proof !== '') store.lessons.addEvidence(sessionId, made.id, contentDigest(body), proof)
+  if (tag !== null) store.lessons.setOutcome(made.id, contentDigest(body), tag)
   state.context = undefined
   return { ok: true, id: made.id, type: kind, version: 'lesson-r1', superseded: false, round: closeRound(store, sessionId, made.id, turn, body) }
 }
@@ -855,7 +887,7 @@ export function cueMatches(cue: CueFeatures, features: ObservationFeatures): boo
 
 /**
  * Note one tool result: remember it as the last call, notice a target that failed and now succeeded (a digest
- * signal), and queue every lesson whose cue it matches.
+ * signal), and count the call against every lesson whose situation it matches (background recurrence only, §5.16).
  */
 export function observeForLessons(store: TemplateStore, state: LessonState, sessionId: string, callId: string, features: ObservationFeatures): void {
   state.last = { features, callId }
@@ -871,8 +903,7 @@ export function observeForLessons(store: TemplateStore, state: LessonState, sess
   const failed = features.outcome.startsWith('error')
   for (const cue of store.lessons.cues(sessionId)) {
     if (!cueMatches(cue, features)) continue
-    state.recall.add(cue.template_id)
-    // B4a: how the lesson's situation goes before and after it is recalled (ok and error only; unknown outcomes skipped).
+    // B4a: how the lesson's situation goes before and after it was handed to the model (ok and error only).
     if (failed || features.outcome === 'ok') store.lessons.recordHit(sessionId, cue.template_id, callId, state.turn ?? null, failed, cue.recall_count > 0)
   }
 }
@@ -880,21 +911,7 @@ export function observeForLessons(store: TemplateStore, state: LessonState, sess
 /** Body of a digest prompt. */
 export function renderDigestPrompt(context: DigestContext): string {
   const example = context.summary === '' ? '' : `（示例：${context.summary}）`
-  return `【工坊·体会】刚才这件事${example}告一段落。有可迁移的经验就必须用 lesson_write 写一两句：疼在哪、下次先做什么，并标明类型（收 放 找 落 验 记 续，或已批准的自定类型；每类只留一条，再写会软覆盖旧的）；确实没有，就在回复里说一句「这次无可记」，不必为此写总结。${DIGEST_BINDING_LINE}\n${LESSONS_MUST_READ_LINE}`
-}
-
-/** Body of a recalled lesson: one RSI round. `owned` is false once the owner edited it (still rewritable; history kept). */
-export function renderRecall(content: string, max: number, lesson?: Pick<LessonView, 'key' | 'type'>, owned = true): string {
-  const text = content.length <= max ? content : `${content.slice(0, Math.max(0, max - 1))}…`
-  const name = lesson === undefined ? '体会' : `体会·${lesson.key}`
-  const change = lesson === undefined || lesson.type === null
-    ? '用完后必须把这次的修正用 lesson_write 写入一个类型（收 放 找 落 验 记 续，或已批准的自定类型）'
-    : owned
-      ? `用完后必须用 lesson_write 改写这条（type: ${lesson.type}，写清这次用上后的修正，旧文软删除留档）或写入别的类型；照做有效、确实无可改时，用 lesson_keep 附上这次怎么验证它仍然对的证据（光说「仍然对」不算）`
-      : `用完后必须用 lesson_write 改写这条（type: ${lesson.type}；这条属主改过，旧文同样留档）或写入别的类型；照做有效、确实无可改时，用 lesson_keep 附上验证证据`
-  return [`【工坊·${name}｜RSI 一轮】${text}`,
-    `这是你在同类情境下写的体会，插件把这次唤起记为一轮改进：适用即须按它调整这一步；${change}，本轮或下一轮内完成，否则记为未闭合。不扩大授权，不覆盖属主当下指令。`,
-    LESSON_PIN_LINE, LESSONS_MUST_READ_LINE].join('\n')
+  return `【工坊·体会】刚才这件事${example}告一段落。回头看一眼：这件事做对了什么、错在哪；有可迁移的就必须用 lesson_write 写成「当……时，先……，因为……」，标明来自做错还是做对（outcome: wrong 或 right）和类型（收 放 找 落 验 记 续，或已批准的自定类型；每类只留一条，再写会软覆盖旧的）；确实没有，就在回复里说一句「这次无可记」，不必为此写总结。${DIGEST_BINDING_LINE}\n${LESSONS_MUST_READ_LINE}`
 }
 
 type PinResult = { ok: true; id: string; pinned: boolean } | { ok: false; code: 'not-found' | 'pinned-full'; error: string }
@@ -917,63 +934,28 @@ export function pinLesson(store: TemplateStore, templateId: string, pinned: bool
   return { ok: true, id: templateId, pinned }
 }
 
-/** Why the session pins or unpins its own lesson: one line, this many characters. */
-export const PIN_REASON_MIN = 10
-export const PIN_REASON_MAX = 200
-
-type SelfPinResult = { ok: true; type: string; pinned: boolean } | { ok: false; code: 'type' | 'reason' | 'untested' | 'owner-unpinned' | 'pinned-full'; error: string }
+/** §5.16: how the session uses its lessons, said once with the list. */
+export const LESSON_USE_LINE = '这是你自己写下的体会。走到链路哪一环，就看那一类；适用即须照做。做完一件事，回头看一眼：哪里做对了，哪里做错了，值得记就用 lesson_write 写成「当……时，先……，因为……」（标明 outcome: wrong 或 right）；用上的那条，有效就用 lesson_keep 带证据保持，不对就用 lesson_write 改写。不扩大授权，不覆盖属主当下指令。'
 
 /**
- * The session manages its own pinned lessons (owner 2026-11-21: 「做个工具让他自己管理」 — hundreds of sessions are
- * too many to curate by hand). Pinning needs at least one closed round, so only a lesson that held when used is
- * loaded at every start; the quota still applies; a lesson the owner unpinned cannot be pinned back. Unpinning is
- * always allowed. Each change is logged with its reason.
+ * §5.16: the session's lessons, handed over at a start, resume or compaction. Pinned ones first (old data), then in
+ * the order of the chain and the approved types; at most LESSON_LIST_MAX_CHARS, the rest named by count.
  */
-export function lessonPin(store: TemplateStore, sessionId: string, type: unknown, pinned: unknown, reason: string, turn: number | null, max: number): SelfPinResult {
-  const kind = typeof type === 'string' ? type.trim() : ''
-  const lesson = lessonsOf(store, sessionId).find(l => l.type === kind)
-  if (lesson === undefined) return { ok: false, code: 'type', error: 'no lesson of that type in this session' }
-  const why = oneLineText(reason)
-  const n = [...why].length
-  if (n < PIN_REASON_MIN || n > PIN_REASON_MAX) return { ok: false, code: 'reason', error: `say in ${String(PIN_REASON_MIN)}..${String(PIN_REASON_MAX)} characters why: how it held in its rounds, or why it no longer applies` }
-  const want = pinned === true
-  const cue = store.lessons.cue(lesson.id)!
-  if (want && cue.pinned !== 1) {
-    if (store.lessons.rounds(lesson.id).closed < 1) return { ok: false, code: 'untested', error: 'pin a lesson only after at least one of its recall rounds closed (it was recalled, followed, then rewritten or kept with evidence)' }
-    if (store.lessons.ownerUnpinned(lesson.id)) return { ok: false, code: 'owner-unpinned', error: 'the owner unpinned this lesson; only the owner can pin it again' }
-    const count = store.lessons.cues(sessionId).filter(c => c.pinned === 1).length
-    if (count >= max) return { ok: false, code: 'pinned-full', error: `you already have ${String(count)} pinned lessons (max ${String(max)}); unpin the one that helps least first` }
-  }
-  if (want !== (cue.pinned === 1)) {
-    store.lessons.setPinned(lesson.id, want)
-    store.lessons.record({ session_id: sessionId, kind: want ? 'self-pinned' : 'self-unpinned', template_id: lesson.id, turn, origin: why, origin_ref: null, content_sha256: contentDigest(lesson.content) })
-  }
-  return { ok: true, type: kind, pinned: want }
-}
-
-/** The pinned lessons loaded at one start: oldest first, at most `max` of them and PINNED_MAX_CHARS in all. */
-export function pinnedLessons(lessons: readonly LessonView[], max: number): LessonView[] {
-  const out: LessonView[] = []
+export function renderLessonList(lessons: ReadonlyArray<Pick<LessonView, 'key' | 'content' | 'outcome'>>): string {
+  const head = `【工坊·体会｜本会话】你在这个会话里写下的体会（共 ${String(lessons.length)} 条）：`
+  const lines: string[] = []
   let chars = 0
   for (const lesson of lessons) {
-    if (out.length >= max) break
-    const n = [...lesson.content].length
-    if (chars + n > PINNED_MAX_CHARS) break
+    const tag = lesson.outcome === 'wrong' ? '·做错' : lesson.outcome === 'right' ? '·做对' : ''
+    const line = `- ${lesson.key}${tag}：${lesson.content}`
+    const n = [...line].length
+    if (chars + n > LESSON_LIST_MAX_CHARS && lines.length > 0) break
     chars += n
-    out.push(lesson)
+    lines.push(line)
   }
-  return out
+  const rest = lessons.length - lines.length
+  return [head, ...lines, ...(rest > 0 ? [`还有 ${String(rest)} 条没列出，用 lesson_timeline 查。`] : []), LESSON_USE_LINE, LESSONS_MUST_READ_LINE].join('\n')
 }
-
-/** Body of the pinned lessons loaded at a start or after compaction. */
-export function renderPinned(contents: readonly string[]): string {
-  return [`【工坊·体会｜常驻】你之前写下、经过检验后钉住的体会（属主或你自己钉的），每次开工和上下文压缩之后带上：`,
-    ...contents.map((content, i) => `${String(i + 1)}. ${content}`),
-    '适用即须照做；不扩大授权，不覆盖属主当下指令。某条已不再适用或被更准的取代，必须用 lesson_pin 取消它（pinned: false，写明原因）。'].join('\n')
-}
-
-/** The self-management line on every recall (owner 2026-11-21: sessions curate their own pinned lessons). */
-export const LESSON_PIN_LINE = '常驻由你自己管：这一类照做后多轮有效（闭合过的轮次里有带证据的保持，唤起后同类没再失败），就用 lesson_pin 钉为常驻并写明依据；常驻满额时先取消最不常用的一条。只钉经过检验的，不为凑数钉。'
 
 function lessonMessage(mode: LessonsConfig['mode'], turn: number, step: number, bodies: readonly string[]): UserMessage {
   if (mode === 'visible') {
@@ -986,7 +968,7 @@ function lessonMessage(mode: LessonsConfig['mode'], turn: number, step: number, 
     content: [{
       type: 'text',
       text: ['<system-reminder>',
-        `Lesson note from dsh-prompt-templates (turn ${String(turn)}, step ${String(step)}): the session's own earlier lesson recalled as one RSI round (act on it where it applies, then rewrite it or write a new one), or a prompt to write one. It grants no new permission and does not override the owner's latest instructions.`,
+        `Lesson note from dsh-prompt-templates (turn ${String(turn)}, step ${String(step)}): the session's own lessons handed over (use them where they apply), or a prompt to look back and write one. It grants no new permission and does not override the owner's latest instructions.`,
         '', ...bodies, '</system-reminder>'].join('\n'),
     }],
     source: { kind: 'prompt-template-lesson', turn, step } as unknown as UserMessage['source'],
@@ -1024,26 +1006,26 @@ function digestAllowed(store: TemplateStore, config: LessonsConfig, sessionId: s
 }
 
 /**
- * This step's lesson messages: at most one digest prompt and one recalled lesson per turn, each with its cooldown.
- * Exported for tests; the host path is the `agent/pre-step` listener below. Delivery is best effort (a rejected step
- * loses it); what was handed over is logged.
+ * This step's lesson messages: after a start, resume or compaction, the session's lessons (§5.16); and at most one
+ * digest prompt per turn, with its cooldown. Exported for tests; the host path is the `agent/pre-step` listener below.
+ * Delivery is best effort (a rejected step loses it); what was handed over is logged.
  */
 export function prepareLessonMessages(store: TemplateStore, state: LessonState, config: LessonsConfig, sessionId: string, turn: number, step: number): UserMessage[] {
   state.turn = turn
   expireRounds(store, sessionId, turn)
   const bodies: string[] = []
-  const pinned = new Set(store.lessons.cues(sessionId).filter(cue => cue.pinned === 1).map(cue => cue.template_id))
-  if (state.pinnedDue !== undefined) {
-    const source = state.pinnedDue
-    state.pinnedDue = undefined
-    const loaded = pinnedLessons(lessonsOf(store, sessionId).filter(lesson => pinned.has(lesson.id)), config.maxPinned)
-    state.loaded.clear()
-    for (const lesson of loaded) state.loaded.add(lesson.id)
-    if (loaded.length > 0) {
-      const body = renderPinned(loaded.map(lesson => lesson.content))
+  if (state.deliverDue !== undefined) {
+    const source = state.deliverDue
+    state.deliverDue = undefined
+    const pinned = new Set(store.lessons.cues(sessionId).filter(cue => cue.pinned === 1).map(cue => cue.template_id))
+    const all = lessonsOf(store, sessionId)
+    const lessons = [...all.filter(l => pinned.has(l.id)), ...all.filter(l => !pinned.has(l.id))]
+    if (lessons.length > 0) {
+      const body = renderLessonList(lessons)
       bodies.push(body)
-      for (const lesson of loaded) {
-        store.lessons.record({ session_id: sessionId, kind: 'pinned-loaded', template_id: lesson.id, turn, origin: source, origin_ref: null, content_sha256: contentDigest(lesson.content) })
+      for (const lesson of lessons) {
+        store.lessons.markRecalled(lesson.id, turn)
+        store.lessons.record({ session_id: sessionId, kind: 'delivered', template_id: lesson.id, turn, origin: source, origin_ref: null, content_sha256: contentDigest(lesson.content) })
       }
     }
   }
@@ -1057,22 +1039,6 @@ export function prepareLessonMessages(store: TemplateStore, state: LessonState, 
       if (state.pending === context) state.pending = undefined
       store.lessons.record({ session_id: sessionId, kind: 'prompted', template_id: null, turn, origin: context.origin, origin_ref: context.origin_ref, content_sha256: contentDigest(body) })
     }
-  }
-  if (state.recall.size > 0 && store.lessons.countAt(sessionId, 'recalled', turn) === 0) {
-    const lessons = new Map(lessonsOf(store, sessionId).map(lesson => [lesson.id, lesson]))
-    for (const id of state.recall) {
-      const cue = store.lessons.cue(id)
-      const lesson = lessons.get(id)
-      // A pinned lesson loaded at the last start or compaction is already in the context.
-      if (cue === undefined || lesson === undefined || (pinned.has(id) && state.loaded.has(id))) continue
-      if (turn < (cue.last_recalled_turn ?? cue.created_turn) + config.recallCooldownTurns) continue
-      const body = renderRecall(lesson.content, config.maxRecallChars, lesson, lesson.version !== null && LESSON_VERSION.test(lesson.version))
-      bodies.push(body)
-      store.lessons.markRecalled(id, turn)
-      store.lessons.record({ session_id: sessionId, kind: 'recalled', template_id: id, turn, origin: cue.origin, origin_ref: cue.origin_ref, content_sha256: contentDigest(body) })
-      break
-    }
-    state.recall.clear()
   }
   return bodies.length === 0 ? [] : [lessonMessage(config.mode, turn, step, bodies)]
 }
@@ -1100,11 +1066,11 @@ export function registerLessons(ctx: Context, store: () => TemplateStore, config
     } catch (error) { fault('skipped a tool result', error) }
   })
 
-  // Phase 2: a start, resume or compaction makes the next step load the pinned lessons; `clear` does not.
+  // §5.16: a start, resume or compaction makes the next step hand over the session's lessons; `clear` does not.
   ctx.on('agent/created', ({ agent, source }: { agent: { session: { header: { id: unknown } } }; source: string }) => {
     try {
       if (!config().enabled || !PINNED_SOURCES.includes(source)) return undefined
-      stateOf(String(agent.session.header.id)).pinnedDue = source
+      stateOf(String(agent.session.header.id)).deliverDue = source
     } catch (error) { fault('skipped a session start', error) }
     return undefined
   })
@@ -1126,22 +1092,23 @@ export function registerLessons(ctx: Context, store: () => TemplateStore, config
   registerWhenToolsReady(ctx, 'lessons', (tools) => {
     tools.register(withOutput({
       name: 'lesson_write',
-      description: 'Write down a lesson for your own session: one or two sentences (at most 160 characters) about an experience that just settled — what hurt or surprised you, and what to do first next time — tagged with its type. Types: 收 边界、放 自己定、找 查原因、落 动手、验 验证、记 记录、续 失败或受阻后 (the autonomy chain), or a type you proposed with lesson_type_propose and the owner approved. You keep one lesson per type: writing a type that already has one soft-overwrites it (the old text is kept in the history and no longer shown or recalled). Each recalled lesson is one improvement round you must close: rewrite that type with what this use taught you, write another type, or — if it held and nothing needs changing — keep it with lesson_keep and the evidence of how you checked. The plugin links the lesson to the situation it came from and brings it back when you meet that situation again. Before the first lesson of a session, load the agent-atelier skill and read references/lessons.md. A good lesson: comes from something that really happened (a failure, detour, rework, correction or surprise success); says why it hurt; ends with what to do first next time, concrete enough to act on; is transferable (the situation and the move, not the paths, ids or names of this one run); is short; can be checked the next time it is used; and is judgement, not authority. Not a log of events, not a slogan, not a copy of an existing rule, not an unverified conclusion from others, not filler — if nothing was learned, say so (lesson_none for a card round). Pick the type by the link where the problem arose, not where it was noticed. When something checkable backs it (a PR or CI link, a command and its result, a ygl claim id), add it as evidence; it is optional. No secrets, tokens, internal addresses or local paths. A lesson the owner edited is theirs. Acts only on the calling session.',
+      description: 'Write down a lesson for your own session: one or two sentences (at most 160 characters) about something that just happened — when you got something wrong, or when you got it right — written as "when this happens, first do that, because why", tagged with its type and, optionally, whether it came from getting it wrong or right (outcome). Types: 收 边界、放 自己定、找 查原因、落 动手、验 验证、记 记录、续 失败或受阻后 (the autonomy chain), or a type you proposed with lesson_type_propose and the owner approved. You keep one lesson per type: writing a type that already has one soft-overwrites it (the old text is kept in the history). Your lessons are handed back to you at every start, resume and after compaction; use them where they apply. When a lesson held, keep it with lesson_keep and the evidence; when it did not, rewrite it here. Before the first lesson of a session, load the agent-atelier skill and read references/lessons.md. A good lesson: comes from something that really happened; says why; names the situation so you recognise it and the first move concretely enough to act on; is transferable (not the paths, ids or names of this one run); is short; can be checked the next time it is used; and is judgement, not authority. Not a log of events, not a slogan, not a copy of an existing rule, not an unverified conclusion from others, not filler — if nothing was learned, say so (lesson_none for a card round). Pick the type by the link where it arose, not where it was noticed. When something checkable backs it (a PR or CI link, a command and its result, a ygl claim id), add it as evidence; it is optional. No secrets, tokens, internal addresses or local paths. Acts only on the calling session.',
       parameters: objectParameters({
         text: { type: 'string', description: 'The lesson, 1..160 characters.' },
         type: { type: 'string', description: 'The lesson type: 收 放 找 落 验 记 续, or an approved type of your own.' },
         evidence: { type: 'string', description: `Optional: what backs the lesson — a PR or CI link, a command and its result, a ygl claim id; one line, at most ${String(EVIDENCE_MAX)} characters.` },
+        outcome: { type: 'string', enum: ['wrong', 'right'], description: 'Optional: wrong if the lesson came from getting something wrong, right if it came from getting something right.' },
       }, ['text', 'type']),
-      execute: async (args: { text?: unknown; type?: unknown; evidence?: unknown }, exec: unknown) => {
+      execute: async (args: { text?: unknown; type?: unknown; evidence?: unknown; outcome?: unknown }, exec: unknown) => {
         if (!config().enabled) return { ok: false, code: 'disabled', error: 'lessons are off on this host' }
         const sessionId = (exec as ExecLike).agent?.session.header.id
         if (sessionId === undefined || sessionId === null) return { ok: false, code: 'session', error: 'no calling session' }
-        return writeLesson(store(), stateOf(String(sessionId)), String(sessionId), String(args.text ?? ''), args.type, config(), args.evidence)
+        return writeLesson(store(), stateOf(String(sessionId)), String(sessionId), String(args.text ?? ''), args.type, config(), args.evidence, args.outcome)
       },
     }))
     tools.register(withOutput({
       name: 'lesson_none',
-      description: 'Close the open workshop-card round of your own session without a lesson: say in one line why this round leaves nothing transferable (the card did not apply, or you followed it and learned nothing new). A workshop card injection opens a round that must end with a lesson (lesson_write) or this; a recalled lesson cannot be closed this way — it needs a rewrite or a new lesson. Acts only on the calling session.',
+      description: 'Close the open workshop-card round of your own session without a lesson: say in one line why this round leaves nothing transferable (the card did not apply, or you followed it and learned nothing new). A workshop card injection opens a round that must end with a lesson (lesson_write) or this. Acts only on the calling session.',
       parameters: objectParameters({
         reason: { type: 'string', description: 'Why there is no lesson this round, 1..120 characters.' },
       }, ['reason']),
@@ -1155,9 +1122,9 @@ export function registerLessons(ctx: Context, store: () => TemplateStore, config
     }))
     tools.register(withOutput({
       name: 'lesson_keep',
-      description: 'Close the open recall round of one of your own lessons without rewriting it — a verified keep: you followed the recalled lesson, it held, and nothing in it needs changing. Give the lesson type and the evidence of how you checked it still holds (the command and its result, a PR or CI link, a claim id). "Still right" alone is not evidence and is refused. Only a recall round can be kept; a workshop-card round ends with lesson_write or lesson_none. Acts only on the calling session.',
+      description: 'Keep one of your own lessons without rewriting it — a verified keep: you followed the lesson, it held, and nothing in it needs changing. Give the lesson type and the evidence of how you checked it still holds (the command and its result, a PR or CI link, a claim id). "Still right" alone is not evidence and is refused. Usable on any of your lessons at any time; a workshop-card round still ends with lesson_write or lesson_none. Acts only on the calling session.',
       parameters: objectParameters({
-        type: { type: 'string', description: 'The type of the recalled lesson you keep: 收 放 找 落 验 记 续, or an approved type of your own.' },
+        type: { type: 'string', description: 'The type of the lesson you keep: 收 放 找 落 验 记 续, or an approved type of your own.' },
         evidence: { type: 'string', description: `How you checked it still holds, ${String(KEEP_MIN)}..${String(KEEP_MAX)} characters, one line.` },
       }, ['type', 'evidence']),
       execute: async (args: { type?: unknown; evidence?: unknown }, exec: unknown) => {
@@ -1170,7 +1137,7 @@ export function registerLessons(ctx: Context, store: () => TemplateStore, config
     }))
     tools.register(withOutput({
       name: 'lesson_timeline',
-      description: 'Read your own session\'s recent lesson timeline across types, newest first: each lesson written, each old text soft-deleted when a type was overwritten (with the text), each recall and how its improvement round ended (closed by an update or a new lesson, or missed), external verdicts the owner attached to a round (pass or fail with a link; they never close a round), and the owner\'s decisions on types you proposed. Optionally filter to one type. Read-only; acts only on the calling session.',
+      description: 'Read your own session\'s recent lesson timeline across types, newest first: each lesson written, each old text soft-deleted when a type was overwritten (with the text), each verified keep with its evidence, workshop-card rounds and how they ended, external verdicts the owner attached to a round (pass or fail with a link; they never close a round), and the owner\'s decisions on types you proposed. Optionally filter to one type. Read-only; acts only on the calling session.',
       parameters: objectParameters({
         limit: { type: 'number', description: 'How many entries, 1..100; default 20.' },
         type: { type: 'string', description: 'Optional: only this type.' },
@@ -1182,22 +1149,6 @@ export function registerLessons(ctx: Context, store: () => TemplateStore, config
         const id = String(sessionId)
         const filter = typeof args.type === 'string' && args.type.trim() !== '' ? args.type.trim() : undefined
         return { ok: true, types: allowedTypes(store(), id), entries: lessonTimeline(store(), id, args.limit === undefined ? 20 : Number(args.limit), filter) }
-      },
-    }))
-    tools.register(withOutput({
-      name: 'lesson_pin',
-      description: 'Pin or unpin one of your own lessons. A pinned lesson is loaded at every session start, resume and after compaction (and is no longer recalled as a round). Pin only a lesson that held in use: at least one of its recall rounds must have closed, ideally with a verified keep and no failure in the same situation since. You hold at most a few pinned lessons; unpin the one that helps least to make room. Unpin a pinned lesson as soon as it no longer applies. A lesson the owner unpinned cannot be pinned back. Give the reason in one line. Acts only on the calling session.',
-      parameters: objectParameters({
-        type: { type: 'string', description: 'The type of your lesson: 收 放 找 落 验 记 续, or an approved type of your own.' },
-        pinned: { type: 'boolean', description: 'true to pin, false to unpin.' },
-        reason: { type: 'string', description: `Why, ${String(PIN_REASON_MIN)}..${String(PIN_REASON_MAX)} characters, one line: how it held in its rounds, or why it no longer applies.` },
-      }, ['type', 'pinned', 'reason']),
-      execute: async (args: { type?: unknown; pinned?: unknown; reason?: unknown }, exec: unknown) => {
-        if (!config().enabled) return { ok: false, code: 'disabled', error: 'lessons are off on this host' }
-        const sessionId = (exec as ExecLike).agent?.session.header.id
-        if (sessionId === undefined || sessionId === null) return { ok: false, code: 'session', error: 'no calling session' }
-        const id = String(sessionId)
-        return lessonPin(store(), id, args.type, args.pinned, String(args.reason ?? ''), stateOf(id).turn ?? null, config().maxPinned)
       },
     }))
     tools.register(withOutput({

@@ -329,7 +329,8 @@ async function handle(
           const cue = store.lessons.cue(lesson.id)
           return { id: lesson.id, key: lesson.key, type: lesson.type, index: lesson.index, version: lesson.version, content_sha256: contentDigest(lesson.content),
             origin: cue?.origin ?? null, pinned: cue?.pinned === 1, recall_count: cue?.recall_count ?? 0, last_recalled_turn: cue?.last_recalled_turn ?? null,
-            rounds: store.lessons.rounds(lesson.id), churn: lessonChurn(store, lesson.id), recurrence: store.lessons.recurrence(lesson.id), evidence: store.lessons.evidence(lesson.id, contentDigest(lesson.content)) ?? null, verdicts: store.lessons.verdicts(lesson.id) }
+            rounds: store.lessons.rounds(lesson.id), churn: lessonChurn(store, lesson.id), recurrence: store.lessons.recurrence(lesson.id), evidence: store.lessons.evidence(lesson.id, contentDigest(lesson.content)) ?? null, verdicts: store.lessons.verdicts(lesson.id),
+            outcome: lesson.outcome, latest_evidence: store.lessons.latestKeep(lesson.id) ?? store.lessons.evidence(lesson.id, contentDigest(lesson.content)) ?? null }
         })
         const types = [...BUILTIN_LESSON_TYPES.map(t => ({ name: t.name, description: t.description, builtin: true, status: 'approved' })),
           ...store.lessons.types(sessionId).map(t => ({ name: t.name, description: t.description, builtin: false, status: t.status, proposed_at: t.proposed_at, decided_at: t.decided_at }))]
@@ -348,7 +349,7 @@ async function handle(
       if (lessonId !== undefined && rest.length === 2 && rest[1] === 'verdict' && method === 'POST') {
         const body = await readJson(req)
         const result = attachVerdict(client(), decodeURIComponent(lessonId), body['verdict'], body['ref'])
-        if (!result.ok) return json(res, result.code === 'not-found' ? 404 : result.code === 'no-round' ? 409 : 400, errorBody(result.code, result.error))
+        if (!result.ok) return json(res, result.code === 'not-found' ? 404 : 400, errorBody(result.code, result.error))
         return json(res, 200, result)
       }
       return json(res, 405, errorBody('method-not-allowed', `${method} ${url.pathname}`))

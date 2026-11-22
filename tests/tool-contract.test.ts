@@ -72,7 +72,7 @@ test('the plugin\'s own tools reach the model with an object parameter schema na
     await new Promise(resolve => setImmediate(resolve))
     const tools = ctx.tools as unknown as { schemas: () => Array<{ name: string, parameters: { type?: string, properties?: Record<string, unknown>, required?: string[] } }> }
     const byName = new Map(tools.schemas().map(s => [s.name, s.parameters]))
-    const expected: Record<string, string[]> = { lesson_write: ['text', 'type'], lesson_none: ['reason'], lesson_keep: ['type', 'evidence'], lesson_pin: ['type', 'pinned', 'reason'], lesson_timeline: [], lesson_type_propose: ['name', 'description'], selfcheck_write: ['text'], selfcheck_conclude: ['conclusion'] }
+    const expected: Record<string, string[]> = { lesson_write: ['text', 'type'], lesson_none: ['reason'], lesson_keep: ['type', 'evidence'], lesson_timeline: [], lesson_type_propose: ['name', 'description'], selfcheck_write: ['text'], selfcheck_conclude: ['conclusion'] }
     for (const [name, required] of Object.entries(expected)) {
       const parameters = byName.get(name)
       assert.ok(parameters !== undefined, `${name} reaches the model`)
@@ -86,6 +86,10 @@ test('the plugin\'s own tools reach the model with an object parameter schema na
     const write = byName.get('lesson_write')!
     assert.ok(write.properties !== undefined && 'evidence' in write.properties, 'lesson_write declares evidence')
     assert.ok(!write.required?.includes('evidence'), 'evidence is optional')
+    // §5.16: outcome is a declared, optional property limited to wrong or right; lesson_pin is gone.
+    assert.deepEqual((write.properties?.['outcome'] as { enum?: string[] } | undefined)?.enum, ['wrong', 'right'])
+    assert.ok(!write.required?.includes('outcome'), 'outcome is optional')
+    assert.equal(byName.get('lesson_pin'), undefined)
   } finally {
     await (fiber as unknown as { dispose: () => Promise<void> }).dispose()
     rmSync(dir, { recursive: true, force: true })
@@ -105,9 +109,10 @@ test('lesson_write tells the model what a good lesson is, as the model sees it (
     await new Promise(resolve => setImmediate(resolve))
     const tools = ctx.tools as unknown as { schemas: () => Array<{ name: string, description?: string }> }
     const description = tools.schemas().find(s => s.name === 'lesson_write')?.description ?? ''
-    for (const phrase of ['read references/lessons.md', 'really happened', 'says why it hurt', 'what to do first next time',
+    for (const phrase of ['read references/lessons.md', 'really happened', 'says why', '"when this happens, first do that, because why"',
+      'when you got something wrong, or when you got it right', 'handed back to you at every start, resume and after compaction',
       'is transferable', 'is short', 'can be checked', 'judgement, not authority', 'not a slogan', 'not filler',
-      'by the link where the problem arose, not where it was noticed', 'add it as evidence; it is optional']) {
+      'by the link where it arose, not where it was noticed', 'add it as evidence; it is optional']) {
       assert.ok(description.includes(phrase), `lesson_write description includes "${phrase}"`)
     }
   } finally {

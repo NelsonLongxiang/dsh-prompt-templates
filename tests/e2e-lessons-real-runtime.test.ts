@@ -1,8 +1,8 @@
 /**
  * End-to-end on the REAL ToolRuntime (owner 2026-11-21: machine-side full-chain check before the next release).
  * Every model tool is called through ToolRuntime.execute, the way a host dispatches it, not through a fake registry:
- * workshop card injected → card round line → lesson_write (typed) closes it → recall opens an RSI round →
- * rewrite closes it → lesson_none on the next card round → type proposal → owner approval over the route →
+ * workshop card injected → card round line → lesson_write (typed, with outcome) closes it → compaction hands the
+ * lessons over (§5.16) → keep with evidence → rewrite → lesson_none on the next card round → type proposal → owner approval over the route →
  * custom-type write → lesson_timeline sees all of it → the route reports the card yield.
  */
 import test from 'node:test'
@@ -30,7 +30,7 @@ const S = 'e2e-session'
 const BASE = '/plugins/dsh-prompt-templates'
 const agent = { session: { header: { id: S }, snapshotEvents: () => [] } }
 
-test('real ToolRuntime: card round, typed lesson, RSI recall round, no-entry, owner-approved type, timeline, card yield', async () => {
+test('real ToolRuntime: card round, typed lesson, hand-over after compaction, keep, no-entry, owner-approved type, timeline, card yield', async () => {
   const ctx = new Context()
   await ctx.plugin(FakeSystemPrompt as never)
   await ctx.plugin(FakeWebServer as never)
@@ -75,13 +75,16 @@ test('real ToolRuntime: card round, typed lesson, RSI recall round, no-entry, ow
       await (ctx as unknown as { emit: (...args: unknown[]) => unknown }).emit('tools/result', exec, { isError: false, value: null, content: [] })
     }
     await bash('TOKEN_X=1 /opt/py/bin/python build.py')
-    const written = await call('lesson_write', { text: '先查已有入口，再写脚本。', type: '找' })
+    const written = await call('lesson_write', { text: '先查已有入口，再写脚本。', type: '找', outcome: 'right' })
     assert.deepEqual([written['ok'], written['type'], written['round']], [true, '找', 'written'])
-    // Turn 6: the same situation recalls the lesson as an RSI round; rewriting the type closes it (soft overwrite).
+    // Turn 6: a matching call recalls nothing; a compaction hands the lessons over at the next step (§5.16).
     await bash('TOKEN_X=1 /opt/py/bin/python lint.py')
-    assert.ok((await step(6)).includes('【工坊·体会·找｜RSI 一轮】先查已有入口，再写脚本。'))
+    assert.ok(!(await step(5)).includes('先查已有入口'))
+    await (ctx as unknown as { serial: (...args: unknown[]) => Promise<unknown> }).serial('agent/created', { agent, source: 'compact' })
+    assert.ok((await step(6)).includes('- 找·做对：先查已有入口，再写脚本。'))
+    assert.deepEqual(await call('lesson_keep', { type: '找', evidence: 'lint 走 make lint 一次过，退出 0' }), { ok: true, round: 'kept', type: '找' })
     const rewrite = await call('lesson_write', { text: '先查已有入口与 make 目标，再写脚本。', type: '找' })
-    assert.deepEqual([rewrite['superseded'], rewrite['round']], [true, 'updated'])
+    assert.deepEqual([rewrite['superseded'], rewrite['round']], [true, null])
     // Turn 8: the card again; this time nothing transferable — a stated no-entry closes the round.
     assert.ok((await step(8)).includes('卡片轮次'))
     assert.deepEqual(await call('lesson_none', { reason: '照卡审视过，没有新问题' }), { ok: true, round: 'none', card_round: 'card:8' })
@@ -92,11 +95,12 @@ test('real ToolRuntime: card round, typed lesson, RSI recall round, no-entry, ow
     assert.equal((await call('lesson_write', { text: '交接先写清缺口。', type: '协作' }))['ok'], true)
     const timeline = await call('lesson_timeline', { limit: 50 }) as { entries: Array<{ kind: string; type: string | null; text?: string; outcome?: string; card?: string }> }
     const kinds = timeline.entries.map(e => e.kind)
-    for (const kind of ['card-injected', 'written', 'recalled', 'superseded', 'round-closed', 'type-proposed', 'type-decided']) assert.ok(kinds.includes(kind), kind)
+    for (const kind of ['card-injected', 'written', 'superseded', 'round-closed', 'type-proposed', 'type-decided']) assert.ok(kinds.includes(kind), kind)
     assert.ok(timeline.entries.some(e => e.kind === 'superseded' && e.text === '先查已有入口，再写脚本。'))
     assert.ok(timeline.entries.some(e => e.kind === 'round-closed' && e.outcome === 'none'))
-    assert.ok(timeline.entries.some(e => e.kind === 'round-closed' && e.outcome === 'updated'))
-    // B4a: one more call in the recalled lesson's situation, through the real tools/result event, counts as after recall.
+    assert.ok(timeline.entries.some(e => e.kind === 'round-closed' && e.outcome === 'kept'))
+    assert.ok(!kinds.includes('recalled'), 'nothing is recalled any more')
+    // B4a: one more call in the lesson's situation, through the real tools/result event, counts as after the hand-over.
     await bash('TOKEN_X=1 /opt/py/bin/python deploy.py')
     // The route: lessons by type, the approved type, and the card yield (2 injections: 1 lesson, 1 no-entry).
     const read = await request(`${BASE}/lessons?session_id=${S}`)
