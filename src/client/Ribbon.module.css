@@ -1,7 +1,7 @@
 /* §5.16 lesson ribbon: hazard tape for wrong, a sash for right, plain for untagged; a tab hangs below with the evidence. */
 .sky {
   position: fixed;
-  z-index: 30;
+  z-index: 40; /* above the conversation, below the floating panel (50) */
   pointer-events: none;
   padding-top: 6px;
   --tail: #6b7080;

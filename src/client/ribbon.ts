@@ -24,10 +24,34 @@ export interface RibbonAnchor {
   readonly width: number
 }
 
+/** Which measurement the anchor came from: the conversation header, the knot's own header row, or the viewport top. */
+export type AnchorSource = 'header' | 'knot' | 'viewport'
+
 export interface RibbonState {
   readonly sessionId: string | null
   readonly lessons: readonly RibbonLesson[]
   readonly anchor: RibbonAnchor | null
+  /** Where the anchor came from (shown as a data attribute for real-host checks). */
+  readonly anchorSource?: AnchorSource
+}
+
+/** One candidate position, in order of preference; null when it could not be measured. */
+export interface AnchorCandidate {
+  readonly source: AnchorSource
+  readonly anchor: RibbonAnchor | null
+}
+
+const usable = (a: RibbonAnchor | null): a is RibbonAnchor =>
+  a !== null && Number.isFinite(a.left) && Number.isFinite(a.top) && Number.isFinite(a.width) && a.width > 0 && a.top >= 0
+
+/**
+ * The first usable anchor among the candidates (header, then the knot's row, then the viewport top). Real-host fix
+ * (owner 2026-11-22): the ribbon must render even when the header cannot be measured; the viewport top is the last
+ * resort and is always usable when the window has a width.
+ */
+export function pickAnchor(candidates: readonly AnchorCandidate[], viewportWidth: number): { anchor: RibbonAnchor; source: AnchorSource } {
+  for (const candidate of candidates) if (usable(candidate.anchor)) return { anchor: candidate.anchor, source: candidate.source }
+  return { anchor: { left: 0, top: 0, width: Math.max(1, viewportWidth) }, source: 'viewport' }
 }
 
 /** Each lesson stays this long before the next one rolls up. */

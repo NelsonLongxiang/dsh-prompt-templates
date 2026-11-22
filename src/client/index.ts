@@ -193,7 +193,11 @@ export function apply(ctx: ClientContext): void {
     id: 'prompt-templates-lesson-ribbon',
     order: 20,
     locale: NS,
-    inject: (): LessonRibbonFace => ({ bus: ribbonBus }),
+    inject: (): LessonRibbonFace => ({
+      bus: ribbonBus,
+      targetSession: () => controller.targetSession() ?? null,
+      subscribeTarget: (notify: () => void) => controller.subscribeTarget(notify),
+    }),
   }, LessonRibbon))
   ctx.slots.inject('conversation.session.header.utilities', () => ctx.slots.register({
     name: 'conversation.session.header.utilities',
