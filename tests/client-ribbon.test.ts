@@ -131,3 +131,21 @@ test('wrong and right roll in their own lanes, side by side', async () => {
   assert.deepEqual(splitLanes([l('r1', 'right')]).map(x => x.outcome), ['right'], 'one kind fills the width')
   assert.deepEqual(splitLanes([]), [])
 })
+
+// Owner 2026-11-22「文本显示不全时，需要滚动」.
+test('text that does not fit scrolls, and the lane waits for one full pass', async () => {
+  const { marqueeMs, dwellMs, ROTATE_MS } = await import('../src/client/ribbon.ts')
+  assert.equal(marqueeMs(0), 0, 'fits: no scrolling')
+  assert.equal(marqueeMs(1), 0, 'rounding noise is not overflow')
+  assert.equal(marqueeMs(Number.NaN), 0)
+  assert.equal(marqueeMs(20), 2500, 'a short overflow still gets a readable pass')
+  assert.equal(marqueeMs(400), Math.round(400 / 40 * 1000 / 0.76), '40 px/s plus a pause at each end')
+  assert.equal(dwellMs([0, 0]), ROTATE_MS, 'text that fits keeps the 6 s rhythm')
+  assert.equal(dwellMs([13158, 3000]), 13158, 'a long lesson stays until it has scrolled through')
+  const { readFileSync } = await import('node:fs')
+  const src = readFileSync(new URL('../src/client/LessonRibbon.tsx', import.meta.url), 'utf8')
+  assert.match(src, /<Marquee text=\{lesson\.content\}/, 'the band text scrolls')
+  assert.match(src, /<Marquee text=\{lesson\.evidence\}/, 'the evidence tab scrolls')
+  const style = readFileSync(new URL('../src/client/Ribbon.module.css', import.meta.url), 'utf8')
+  assert.match(style, /prefers-reduced-motion[\s\S]*\.scrolling \.run[\s\S]*animation: none/, 'reduced motion: no scrolling')
+})

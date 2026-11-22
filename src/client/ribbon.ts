@@ -107,6 +107,25 @@ export function planDock(input: { headerHoldsTabs: boolean; nextHoldsTabs: boole
 
 /** Each lesson stays this long before the next one rolls up. */
 export const ROTATE_MS = 6000
+/** Marquee speed for text that does not fit (owner 2026-11-22「文本显示不全时，需要滚动」). */
+export const MARQUEE_PX_PER_S = 40
+/** Share of one marquee pass spent travelling; the rest is a pause at the start and at the end. */
+const MARQUEE_TRAVEL = 0.76
+
+/**
+ * How long one marquee pass takes for text that overflows its box by `overflowPx`: travel at MARQUEE_PX_PER_S plus a
+ * short pause at each end, at least 2.5 s. 0 when the text fits (no scrolling).
+ */
+export function marqueeMs(overflowPx: number): number {
+  if (!Number.isFinite(overflowPx) || overflowPx <= 1) return 0
+  return Math.max(2500, Math.round((overflowPx / MARQUEE_PX_PER_S) * 1000 / MARQUEE_TRAVEL))
+}
+
+/** How long a lesson stays: ROTATE_MS, or longer so its text and its evidence each scroll through once. */
+export function dwellMs(scrolls: readonly number[]): number {
+  return Math.max(ROTATE_MS, ...scrolls)
+}
+
 /** A lesson just written, rewritten or kept jumps the queue and stays this long first. */
 export const FRESH_MS = 10000
 /** How often the header knot refreshes the session's lessons. */

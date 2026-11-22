@@ -121,7 +121,20 @@
   pointer-events: auto;
 }
 
+.tabRow { display: flex; max-width: 100%; }
+
+/* Text that does not fit scrolls sideways (owner 2026-11-22「文本显示不全时，需要滚动」). */
+.run { display: inline-block; }
+.scrolling { text-overflow: clip; }
+.scrolling .run { animation: marquee var(--marquee-ms) linear infinite; }
+
+@keyframes marquee {
+  0%, 12% { transform: translateX(0); }
+  88%, 100% { transform: translateX(var(--marquee-shift)); }
+}
+
 .tab {
+  display: block;
   margin-left: 40px;
   max-width: calc(100% - 80px);
   padding: 3px 10px;
@@ -221,5 +234,6 @@
 .knotRight { background: #2f6fd6; }
 
 @media (prefers-reduced-motion: reduce) {
-  .ribbon, .unfurl, .face { animation: none; }
+  .ribbon, .unfurl, .face, .scrolling .run { animation: none; }
+  .scrolling { text-overflow: ellipsis; }
 }

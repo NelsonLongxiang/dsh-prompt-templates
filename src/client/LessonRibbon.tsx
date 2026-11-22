@@ -8,7 +8,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
-import { changedLesson, clearTabStrips, FRESH_MS, measureTabStrips, nextIndex, orderRibbon, splitLanes, pickAnchor, POLL_MS, readCollapsed, ROTATE_MS, writeCollapsed, type RibbonAnchor, type RibbonBus, type RibbonLesson, type RibbonState } from './ribbon.ts'
+import { changedLesson, clearTabStrips, FRESH_MS, measureTabStrips, dwellMs, marqueeMs, nextIndex, orderRibbon, splitLanes, pickAnchor, POLL_MS, readCollapsed, writeCollapsed, type RibbonAnchor, type RibbonBus, type RibbonLesson, type RibbonState } from './ribbon.ts'
 import { loadRibbonLessons } from './ribbon-data.ts'
 import { DOCK_ATTR, findDock, placeDock } from './ribbon-dock.ts'
 import css from './Ribbon.module.css'
@@ -67,6 +67,39 @@ function useRibbonState(bus: RibbonBus, targetSession: () => string | null, subs
   return { sessionId: fallback, lessons: own.lessons, anchor: picked.anchor, anchorSource: picked.source }
 }
 
+/**
+ * Text that scrolls sideways when it does not fit (owner 2026-11-22「文本显示不全时，需要滚动」): pause, scroll to the
+ * end, pause, back; it reports one pass's length so the lane waits for it. Text that fits stays still. Reduced motion:
+ * no scrolling, the ellipsis and the hover title remain.
+ */
+function Marquee({ text, className, onPass }: { text: string; className: string | undefined; onPass: (ms: number) => void }) {
+  const box = useRef<HTMLSpanElement>(null)
+  const run = useRef<HTMLSpanElement>(null)
+  const [shift, setShift] = useState(0)
+  useLayoutEffect(() => {
+    const measure = (): void => {
+      const outer = box.current, inner = run.current
+      if (outer === null || inner === null) return
+      const overflow = inner.offsetWidth - outer.clientWidth
+      setShift(overflow > 1 ? overflow : 0)
+      onPass(marqueeMs(overflow))
+    }
+    measure()
+    if (typeof ResizeObserver === 'undefined' || box.current === null) return
+    const observer = new ResizeObserver(measure)
+    observer.observe(box.current)
+    return () => { observer.disconnect() }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [text])
+  const ms = marqueeMs(shift)
+  const style = ms > 0 ? { ['--marquee-shift' as string]: `-${String(shift)}px`, ['--marquee-ms' as string]: `${String(ms)}ms` } : undefined
+  return (
+    <span ref={box} className={ms > 0 ? `${className ?? ''} ${css.scrolling ?? ''}` : className} style={style} data-lesson-ribbon-marquee={ms > 0 ? 'on' : 'off'}>
+      <span ref={run} className={css.run}>{text}</span>
+    </span>
+  )
+}
+
 interface Jump { readonly id: string; readonly seq: number }
 
 /**
@@ -89,27 +122,32 @@ function Lane({ lessons, jump, onFold, t }: { lessons: readonly RibbonLesson[]; 
   }, [jump?.seq])
   useEffect(() => { if (index >= lessons.length) setIndex(0) }, [index, lessons.length])
 
+  // Each lesson stays ROTATE_MS, or until its text and evidence have scrolled through once; a fresh one holds FRESH_MS.
+  const [scroll, setScroll] = useState<{ text: number; tab: number }>({ text: 0, tab: 0 })
+  const dwell = dwellMs([scroll.text, scroll.tab])
   useEffect(() => {
-    if (lessons.length < 2) return
-    const timer = setInterval(() => {
-      if (hover || Date.now() < holdUntil.current) return
+    if (lessons.length < 2 || hover) return
+    const timer = setTimeout(() => {
       setIndex(i => nextIndex(i, lessons.length))
       setRoll(n => n + 1)
-    }, ROTATE_MS)
-    return () => { clearInterval(timer) }
-  }, [hover, lessons.length])
+    }, Math.max(dwell, holdUntil.current - Date.now()))
+    return () => { clearTimeout(timer) }
+  }, [hover, lessons.length, dwell, roll, unfurl])
 
   const at = Math.min(index, lessons.length - 1)
   const lesson = lessons[at]!
   const kind = lesson.outcome === 'wrong' ? css.hazard : lesson.outcome === 'right' ? css.sash : css.plain
   const tag = lesson.outcome === 'wrong' ? t('panel.lessonWrong') : lesson.outcome === 'right' ? t('panel.lessonRight') : null
+  const noEvidence = lesson.evidence === null
+  // A lesson without evidence has no tab to wait for.
+  useEffect(() => { if (noEvidence) setScroll(v => (v.tab === 0 ? v : { ...v, tab: 0 })) }, [lesson.id, noEvidence])
   return (
     <div className={`${css.ribbon} ${kind}`} data-lesson-ribbon-lane={lesson.outcome ?? 'plain'} onMouseEnter={() => { setHover(true) }} onMouseLeave={() => { setHover(false) }}>
       <div key={`band-${String(unfurl)}`} className={unfurl > 0 ? `${css.band} ${css.unfurl}` : css.band} title={lesson.content}>
         <div key={`face-${String(roll)}-${lesson.id}`} className={css.face}>
           <span className={css.sign} aria-hidden="true">{lesson.outcome === 'wrong' ? '!' : lesson.outcome === 'right' ? '✓' : '·'}</span>
           <span className={css.tag}>{tag === null ? lesson.key : `${lesson.key} · ${tag}`}</span>
-          <span className={css.text}>{lesson.content}</span>
+          <Marquee text={lesson.content} className={css.text} onPass={ms => { setScroll(v => (v.text === ms ? v : { ...v, text: ms })) }} />
         </div>
         {lessons.length > 1 && (
           <span className={css.pager} aria-label={t('ribbon.position').replace('{i}', String(at + 1)).replace('{n}', String(lessons.length))}>
@@ -123,7 +161,9 @@ function Lane({ lessons, jump, onFold, t }: { lessons: readonly RibbonLesson[]; 
           </button>
         )}
       </div>
-      {lesson.evidence !== null && <div key={`tab-${lesson.id}-${String(roll)}`} className={css.tab}>{lesson.evidence}</div>}
+      {lesson.evidence !== null
+        ? <div key={`tab-${lesson.id}-${String(roll)}`} className={css.tabRow}><Marquee text={lesson.evidence} className={css.tab} onPass={ms => { setScroll(v => (v.tab === ms ? v : { ...v, tab: ms })) }} /></div>
+        : null}
     </div>
   )
 }
