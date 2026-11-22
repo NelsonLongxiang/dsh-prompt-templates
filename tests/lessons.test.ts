@@ -1,7 +1,7 @@
 import { createTestDirectory } from './temp-dir.mjs'
 /**
- * 体会 (docs/spec-lesson-inject.md, phases 1 and 2): lessons as session templates, pinned lessons loaded at a start, digest prompts after a settled experience,
- * situational recall, budgets, the v11 migration and the host wiring (tools/result, agent/pre-step, lesson_write, route).
+ * 体会 (docs/spec-lesson-inject.md, phases 1 and 2, §5.16): lessons as session templates, the session's lessons handed over at a start, digest prompts after a
+ * settled experience, budgets, the v11 migration and the host wiring (tools/result, agent/pre-step, lesson_write, route).
  */
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
@@ -14,7 +14,7 @@ import * as host from '../src/index.ts'
 import { DEFAULT_EVENT_INJECT_CONFIG, observeToolResult, prepareEventReminders } from '../src/event-inject.ts'
 import { extractFeatures } from '../src/event-features.ts'
 import type { ObservationFeatures } from '../src/event-features.ts'
-import { CHURN_REWRITES, DEFAULT_LESSONS_CONFIG, LESSON_CATEGORY, LESSONS_MUST_READ_LINE, allowedTypes, lessonChurn, lessonKeep, lessonSimilarity, decideLessonType, lessonNone, lessonTimeline, lessonsOf, newLessonState, observeForLessons, openCardRound, pinLesson, prepareLessonMessages, proposeLessonType, writeLesson } from '../src/lessons.ts'
+import { CHURN_REWRITES, DEFAULT_LESSONS_CONFIG, LESSON_CATEGORY, LESSONS_MUST_READ_LINE, allowedTypes, lessonChurn, lessonKeep, lessonSimilarity, decideLessonType, lessonNone, lessonTimeline, lessonsOf, newLessonState, observeForLessons, openCardRound, pinLesson, prepareLessonMessages, proposeLessonType, renderLessonList, LESSON_LIST_MAX_CHARS, writeLesson } from '../src/lessons.ts'
 import { contentDigest } from '../src/interventions.ts'
 import type { LessonsConfig, LessonState } from '../src/lessons.ts'
 import { TemplateStore } from '../src/store.ts'
@@ -134,8 +134,10 @@ test('digest: a target that failed and then succeeded gets one prompt; the lesso
     assert.match(text, /^<system-reminder>/)
     assert.ok(text.includes('【工坊·体会】刚才这件事（示例：make test）告一段落'))
     assert.ok(text.includes('lesson_write'))
-    assert.ok(text.includes('并标明类型') && text.includes('软覆盖'))
-    assert.ok(text.includes('有可迁移的经验就必须用 lesson_write') && text.includes('这次无可记'))
+    assert.ok(text.includes('和类型') && text.includes('软覆盖'))
+    assert.ok(text.includes('做对了什么、错在哪'), '§5.16: the prompt asks about both sides')
+    assert.ok(text.includes('outcome: wrong 或 right') && text.includes('当……时，先……，因为……'))
+    assert.ok(text.includes('有可迁移的就必须用 lesson_write') && text.includes('这次无可记'))
     assert.ok(text.includes('不扩大授权') && !text.includes('不是新的用户指令'))
     assert.ok(!/a2a_/.test(text))
     assert.deepEqual(w.step(2, 2), [], 'one digest prompt per turn')
@@ -211,40 +213,22 @@ test('digest: an event episode whose behaviour changed after a reminder, and a s
   } finally { stale.store.close() }
 })
 
-test('recall: a matching call brings the lesson back at the next step after its cooldown, clipped; other calls, sessions and promoted lessons do not', () => {
-  const w = world({ ...ON, recallCooldownTurns: 2, maxRecallChars: 40 })
+test('§5.16 no recall: a call in a lesson\'s situation injects nothing, opens no round, and only counts toward recurrence', () => {
+  const w = world({ ...ON, recallCooldownTurns: 1 })
   try {
     w.step(1)
     w.call('TOKEN_X=abc /opt/py/bin/python build.py')
-    const lesson = '别再手工带 TOKEN_X 和解释器路径，先用项目的 make 入口；它会处理环境。这句话故意写长一点，用来看截断。'
-    const written = w.write(lesson)
+    const written = w.write('当要跑构建时，先用项目的 make 入口，因为手带 TOKEN_X 和解释器路径会漏环境。')
     assert.ok(written.ok)
     const id = written.ok ? written.id : ''
-    // Same preparation, another task: same situation. Cooldown counts from the turn it was written (1).
-    w.call('TOKEN_X=abc /opt/py/bin/python deploy.py')
-    assert.deepEqual(w.step(2), [], 'cooldown from the turn it was written')
-    w.call('TOKEN_X=abc /opt/py/bin/python lint.py')
-    const recalled = textOf(w.step(3))
-    assert.ok(recalled.includes('【工坊·体会·收｜RSI 一轮】别再手工带 TOKEN_X'))
-    assert.ok(recalled.includes('适用即须按它调整这一步') && recalled.includes('type: 收'))
-    assert.doesNotMatch(recalled, /不适用就忽略|你在同类情境下写的参考/)
-    assert.ok(recalled.includes('…'), 'clipped to maxRecallChars')
-    assert.ok(recalled.includes('不扩大授权'))
-    assert.equal(w.store.lessons.cue(id)?.recall_count, 1)
-    assert.equal(w.store.lessons.log(S).at(-1)?.kind, 'recalled')
-    w.call('TOKEN_X=abc /opt/py/bin/python test.py')
-    assert.deepEqual(w.step(4), [], 'cooldown from the last recall')
-    // A different tool or a different preparation and target: no recall.
-    w.call('make build')
-    assert.deepEqual(w.step(9), [])
-    // Another session doing the same thing does not get this session's lesson.
-    const other = newLessonState()
-    w.call('TOKEN_X=abc /opt/py/bin/python build.py', ok, 'sess-2', other)
-    assert.deepEqual(prepareLessonMessages(w.store, other, { ...ON, recallCooldownTurns: 2 }, 'sess-2', 20, 1), [])
-    // Promoted to global by the owner: no longer recalled in this session (phase 1 does not cross sessions).
-    w.store.makeGlobal(id)
-    w.call('TOKEN_X=abc /opt/py/bin/python build.py')
-    assert.deepEqual(w.step(30), [])
+    assert.equal(written.ok && written.round, null, 'no round to close')
+    for (let turn = 2; turn <= 6; turn += 1) {
+      w.call('TOKEN_X=abc /opt/py/bin/python lint.py')
+      assert.deepEqual(w.step(turn), [], 'nothing is recalled')
+    }
+    assert.equal(w.store.lessons.openRounds(S).length, 0)
+    assert.ok(!w.store.lessons.log(S).some(row => row.kind === 'recalled'))
+    assert.equal(w.store.lessons.recurrence(id).before.hits, 5, 'still counted in the background')
   } finally { w.store.close() }
 })
 
@@ -270,77 +254,60 @@ test('v10 databases migrate to v11 in place: the lesson tables are added, templa
     check.close()
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
-test('pinned (phase 2): only the owner pins, at most maxPinned; loaded once at the next step after a start, within 400 characters; recall skips what is loaded', () => {
-  const w = world({ ...ON, maxPinned: 2, recallCooldownTurns: 1 })
+test('§5.16 deliver: after a start the next step hands over all of the session\'s lessons once — pinned first, then chain order, tagged wrong or right — with how to use them', () => {
+  const w = world()
   try {
     w.call('make build')
-    const ids = ['先跑 make check 再打包。', '报错先看第一条。', 'x'.repeat(160)].map(text => { const r = w.write(text); return r.ok ? r.id : '' })
-    const [a, b, c] = ids as [string, string, string]
-    assert.equal(w.store.lessons.cue(a)?.pinned, 0, 'a written lesson is not pinned')
-    assert.deepEqual(pinLesson(w.store, a, true, 2), { ok: true, id: a, pinned: true })
-    assert.equal(pinLesson(w.store, b, true, 2).ok, true)
-    assert.equal((pinLesson(w.store, c, true, 2) as { code: string }).code, 'pinned-full')
-    assert.equal(pinLesson(w.store, a, true, 2).ok, true, 'pinning a pinned one again is not over the limit')
-    assert.equal((pinLesson(w.store, 'nope', true, 2) as { code: string }).code, 'not-found')
-    // No start seen: nothing loaded.
+    assert.deepEqual(w.step(1), [], 'no start seen: nothing handed over')
+    const a = writeLesson(w.store, w.state, S, '当报错看着像表面原因时，先拿完整输出。', '找', ON, undefined, 'wrong')
+    const b = writeLesson(w.store, w.state, S, '当要动返回字段时，先 grep 所有断言它的测试。', '落', ON, undefined, 'right')
+    const c = w.write('当属主只说改时，先不合并。', '收')
+    assert.ok(a.ok && b.ok && c.ok)
+    assert.deepEqual(lessonsOf(w.store, S).map(l => [l.key, l.outcome]), [['收', null], ['找', 'wrong'], ['落', 'right']])
+    assert.equal(pinLesson(w.store, b.ok ? b.id : '', true, 3).ok, true, 'old data: the owner pinned one')
+    w.state.deliverDue = 'compact'
+    const text = textOf(w.step(2))
+    assert.match(text, /^<system-reminder>/)
+    assert.ok(text.includes('【工坊·体会｜本会话】你在这个会话里写下的体会（共 3 条）'))
+    const order = ['- 落·做对：当要动返回字段时', '- 收：当属主只说改时', '- 找·做错：当报错看着像表面原因时'].map(line => text.indexOf(line))
+    assert.ok(order.every(n => n > 0) && order[0]! < order[1]! && order[1]! < order[2]!, 'pinned first, then the chain order')
+    assert.ok(text.includes('走到链路哪一环，就看那一类') && text.includes('回头看一眼') && text.includes('lesson_keep'))
+    assert.ok(text.indexOf('不扩大授权') < text.indexOf(LESSONS_MUST_READ_LINE), 'the must-read line comes last')
+    assert.deepEqual(w.store.lessons.log(S).filter(r => r.kind === 'delivered').map(r => r.origin), ['compact', 'compact', 'compact'])
+    assert.deepEqual(w.step(3), [], 'once per start')
+    assert.ok(!lessonTimeline(w.store, S, 50).some(e => (e.kind as string) === 'delivered'), 'deliveries stay out of the timeline')
+    // Promoted to global: no longer this session's lesson.
+    w.store.makeGlobal(c.ok ? c.id : '')
+    w.state.deliverDue = 'resume'
+    assert.ok(textOf(w.step(4)).includes('（共 2 条）'))
+  } finally { w.store.close() }
+})
+
+test('§5.16 deliver: the list stops at 1600 characters and names how many are left; no lessons, nothing sent', () => {
+  const many = Array.from({ length: 14 }, (_, i) => ({ key: `t${String(i)}`, content: 'x'.repeat(150), outcome: null }))
+  const text = renderLessonList(many)
+  const lines = text.split('\n').filter(line => line.startsWith('- '))
+  assert.ok(lines.length < 14 && lines.reduce((n, line) => n + [...line].length, 0) <= LESSON_LIST_MAX_CHARS)
+  assert.ok(text.includes(`还有 ${String(14 - lines.length)} 条没列出，用 lesson_timeline 查。`))
+  const w = world()
+  try {
+    w.state.deliverDue = 'startup'
     assert.deepEqual(w.step(1), [])
-    w.state.pinnedDue = 'compact'
-    const loaded = textOf(w.step(2))
-    assert.ok(loaded.includes('【工坊·体会｜常驻】'))
-    assert.ok(loaded.includes('1. 先跑 make check 再打包。') && loaded.includes('2. 报错先看第一条。'))
-    assert.ok(!loaded.includes('xxxx'), 'an unpinned lesson is not loaded')
-    assert.ok(loaded.includes('不扩大授权'))
-    assert.deepEqual(w.store.lessons.log(S).filter(r => r.kind === 'pinned-loaded').map(r => [r.template_id, r.origin]), [[a, 'compact'], [b, 'compact']])
-    assert.deepEqual(w.step(3), [], 'loaded once per start')
-    // Loaded pinned lessons are not recalled again; an unpinned one still is.
-    w.call('make build')
-    const step4 = textOf(w.step(4))
-    assert.ok(step4.includes(`｜RSI 一轮】${'x'.repeat(160)}`), 'the unpinned one is recalled')
-    assert.ok(!step4.includes('make check') && !step4.includes('报错先看'), 'the loaded pinned ones are not')
-    // Unpin b, pin the long one: 160 + the 15 of a fit in 400; the cap is on characters, oldest first.
-    assert.equal(pinLesson(w.store, b, false, 2).ok, true)
-    assert.equal(pinLesson(w.store, c, true, 2).ok, true)
-    w.state.pinnedDue = 'resume'
-    const again = textOf(w.step(5))
-    assert.ok(again.includes('1. 先跑 make check 再打包。') && again.includes(`2. ${'x'.repeat(160)}`) && !again.includes('报错先看第一条'))
-    w.call('make build')
-    const recalled = textOf(w.step(6))
-    assert.ok(recalled.includes('｜RSI 一轮】报错先看第一条。'), 'unpinned, it is recalled again')
-    // Promoted to global: no longer this session's lesson, so it cannot be pinned or loaded here.
-    w.store.makeGlobal(a)
-    assert.equal((pinLesson(w.store, a, false, 2) as { code: string }).code, 'not-found')
-    w.state.pinnedDue = 'startup'
-    const third = textOf(w.step(7))
-    assert.ok(third.includes(`1. ${'x'.repeat(160)}`) && !third.includes('make check'))
   } finally { w.store.close() }
 })
 
-test('pinned: the characters cap stops before a lesson that would pass 400', () => {
-  const w = world({ ...ON, maxPinned: 10 })
+test('§5.16 outcome: optional on lesson_write, only wrong or right; tied to the text it tags', () => {
+  const w = world()
   try {
-    w.call('make build')
-    const ids = [1, 2, 3].map(i => { const r = w.write(String(i).repeat(150)); return r.ok ? r.id : '' })
-    for (const id of ids) assert.equal(pinLesson(w.store, id, true, 10).ok, true)
-    w.state.pinnedDue = 'startup'
-    const text = textOf(w.step(1))
-    assert.ok(text.includes('1'.repeat(150)) && text.includes('2'.repeat(150)) && !text.includes('3'.repeat(150)))
-  } finally { w.store.close() }
-})
-
-test('pinned: a lowered maxPinned caps the load; a lesson pinned since the last start is still recalled until it is loaded', () => {
-  const w = world({ ...ON, maxPinned: 1, recallCooldownTurns: 1 })
-  try {
-    w.call('make build')
-    const [a, b] = ['先跑 make check。', '报错先看第一条。'].map(text => { const r = w.write(text); return r.ok ? r.id : '' }) as [string, string]
-    // Pinned while the limit was higher; the owner then lowered it to 1.
-    assert.equal(pinLesson(w.store, a, true, 5).ok, true)
-    assert.equal(pinLesson(w.store, b, true, 5).ok, true)
-    w.state.pinnedDue = 'startup'
-    const loaded = textOf(w.step(1))
-    assert.ok(loaded.includes('1. 先跑 make check。') && !loaded.includes('报错先看'), 'only maxPinned are loaded')
-    // b is pinned but not in the context: recall still brings it back.
-    w.call('make build')
-    assert.ok(textOf(w.step(2)).includes('｜RSI 一轮】报错先看第一条。'))
+    const bad = writeLesson(w.store, w.state, S, '当……时，先……', '找', ON, undefined, 'maybe')
+    assert.equal(!bad.ok && bad.code, 'outcome')
+    assert.equal(lessonsOf(w.store, S).length, 0, 'a refused write writes nothing')
+    assert.ok(writeLesson(w.store, w.state, S, '当报错时，先读完整输出。', '找', ON, undefined, 'wrong').ok)
+    assert.equal(lessonsOf(w.store, S)[0]?.outcome, 'wrong')
+    assert.ok(writeLesson(w.store, w.state, S, '当报错时，先读到出错的那一层。', '找', ON).ok)
+    assert.equal(lessonsOf(w.store, S)[0]?.outcome, null, 'an untagged rewrite is untagged')
+    assert.ok(writeLesson(w.store, w.state, S, '当报错时，先读到出错的那一层再改。', '找', ON, undefined, 'right').ok)
+    assert.equal(lessonsOf(w.store, S)[0]?.outcome, 'right')
   } finally { w.store.close() }
 })
 
@@ -420,8 +387,9 @@ test('host: with lessons.enabled false nothing is prompted, recalled or written'
   })
 })
 
-test('host: prompt, write through the tool, recall in the visible channel; the route lists lessons without their text', async () => {
-  await withHost({ lessons: { enabled: true, mode: 'visible', recallCooldownTurns: 1 } }, async (ctx, route, tools) => {
+test('host: prompt, write through the tool (with outcome), hand over at a start in the visible channel; lesson_pin is gone; the route lists lessons without their text', async () => {
+  await withHost({ lessons: { enabled: true, mode: 'visible' } }, async (ctx, route, tools) => {
+    assert.equal(tools.get('lesson_pin'), undefined, '§5.16: lesson_pin is withdrawn')
     await result(ctx, 'c1', 'make test', true)
     await result(ctx, 'c2', 'make test')
     const prompt = await preStep(ctx, 1)
@@ -429,47 +397,48 @@ test('host: prompt, write through the tool, recall in the visible channel; the r
     assert.equal(prompt[0]?.source?.['kind'], 'user')
     assert.equal(prompt[0]?.source?.['scheduled'], 'prompt-template-lesson')
     assert.match(prompt[0]?.content?.[0]?.text ?? '', /^⚙️ 体会 · 第 1 轮第 1 步/)
-    const written = await tools.get('lesson_write')?.execute({ text: '先看第一条报错，再决定要不要重跑。', type: '找' }, { agent: agentOf(S) })
+    const bad = await tools.get('lesson_write')?.execute({ text: '当报错时先看第一条。', type: '找', outcome: 'half' }, { agent: agentOf(S) })
+    assert.equal(bad?.['code'], 'outcome')
+    const written = await tools.get('lesson_write')?.execute({ text: '当测试先失败再过时，先看第一条报错，再决定要不要重跑。', type: '找', outcome: 'wrong', evidence: 'CI run 7' }, { agent: agentOf(S) })
     assert.equal(written?.['ok'], true)
     await result(ctx, 'c3', 'make test', true)
-    const recalled = await preStep(ctx, 2)
-    assert.ok((recalled[0]?.content?.[0]?.text ?? '').includes('先看第一条报错'))
+    assert.deepEqual(await preStep(ctx, 2), [], 'a matching call recalls nothing')
+    await created(ctx, 'startup')
+    const handed = await preStep(ctx, 3)
+    assert.ok((handed[0]?.content?.[0]?.text ?? '').includes('- 找·做错：当测试先失败再过时'))
+    assert.equal((await tools.get('lesson_keep')?.execute({ type: '找', evidence: 'make test 第二次先读首条报错后通过' }, { agent: agentOf(S) }))?.['ok'], true, 'a keep needs no round')
     const read = await request(route, `${BASE}/lessons?session_id=${S}`)
     assert.equal(read.status, 200)
     assert.equal(read.body.items.length, 1)
     assert.equal(read.body.items[0].origin, 'recovered')
-    assert.equal(read.body.items[0].recall_count, 1)
+    assert.equal(read.body.items[0].outcome, 'wrong')
+    assert.equal(read.body.items[0].latest_evidence, 'make test 第二次先读首条报错后通过', 'the latest keep wins over the write evidence')
+    assert.equal(read.body.items[0].recall_count, 1, 'handed over once')
     assert.ok(!JSON.stringify(read.body).includes('先看第一条报错'), 'the route carries no lesson text')
-    assert.deepEqual(read.body.log.map((row: { kind: string }) => row.kind), ['prompted', 'written', 'recalled'])
+    assert.deepEqual(read.body.log.map((row: { kind: string }) => row.kind), ['prompted', 'written', 'delivered', 'round-closed'])
     assert.equal((await request(route, `${BASE}/lessons`)).status, 400)
   })
 })
 
-test('host (B3b): the owner attaches an external verdict to the latest round; it is recorded, never closes the round, and the timeline shows it', async () => {
-  await withHost({ lessons: { enabled: true, recallCooldownTurns: 1 } }, async (ctx, route, tools) => {
+test('host (B3b, §5.16): the owner attaches an external verdict to any lesson, recalled or not; it is recorded, closes nothing, and the timeline shows it', async () => {
+  await withHost({ lessons: { enabled: true } }, async (ctx, route, tools) => {
     await result(ctx, 'c1', 'make test', true)
     const written = await tools.get('lesson_write')?.execute({ text: '先看第一条报错，再决定要不要重跑。', type: '找' }, { agent: agentOf(S) })
     const id = String(written?.['id'])
-    // Never recalled yet: no round to attach to.
-    const early = await request(route, `${BASE}/lessons/${id}/verdict`, 'POST', { verdict: 'pass', ref: 'PR #9 review' })
-    assert.equal(early.status, 409)
-    assert.equal(early.body.error.code, 'no-round')
-    await result(ctx, 'c2', 'make test', true)
-    assert.ok(((await preStep(ctx, 2))[0]?.content?.[0]?.text ?? '').includes('先看第一条报错'))
     const before = (await request(route, `${BASE}/lessons?session_id=${S}`)).body.items[0]
-    assert.equal(before.rounds.opened, 1)
     assert.deepEqual(before.verdicts, { pass: 0, fail: 0, latest: null })
     assert.equal((await request(route, `${BASE}/lessons/${id}/verdict`, 'POST', { verdict: 'maybe', ref: 'x' })).status, 400)
     assert.equal((await request(route, `${BASE}/lessons/${id}/verdict`, 'POST', { verdict: 'fail', ref: '  ' })).status, 400)
     assert.equal((await request(route, `${BASE}/lessons/${id}/verdict`, 'POST', { verdict: 'fail', ref: 'x'.repeat(201) })).status, 400)
     assert.equal((await request(route, `${BASE}/lessons/missing/verdict`, 'POST', { verdict: 'fail', ref: 'x' })).status, 404)
     const ok = await request(route, `${BASE}/lessons/${id}/verdict`, 'POST', { verdict: 'fail', ref: 'CI run 42\nred' })
-    assert.equal(ok.status, 200)
+    assert.equal(ok.status, 200, 'never recalled is fine now')
     assert.equal(ok.body.verdict, 'fail')
+    assert.equal(ok.body.round, null)
     assert.equal(ok.body.ref, 'CI run 42 red', 'one line')
     assert.equal((await request(route, `${BASE}/lessons/${id}/verdict`, 'POST', { verdict: 'pass', ref: 'PR #9 approved' })).status, 200)
     const after = (await request(route, `${BASE}/lessons?session_id=${S}`)).body.items[0]
-    assert.deepEqual(after.rounds, before.rounds, 'a verdict never closes, reopens or misses a round')
+    assert.deepEqual(after.rounds, before.rounds, 'a verdict never closes, opens or misses a round')
     assert.equal(after.verdicts.pass, 1)
     assert.equal(after.verdicts.fail, 1)
     assert.equal(after.verdicts.latest.verdict, 'pass')
@@ -477,9 +446,6 @@ test('host (B3b): the owner attaches an external verdict to the latest round; it
     const timeline = await tools.get('lesson_timeline')?.execute({}, { agent: agentOf(S) }) as { entries?: Array<{ kind: string, outcome?: string, evidence?: string, type: string | null }> } | undefined
     const verdicts = (timeline?.entries ?? []).filter(e => e.kind === 'round-verdict')
     assert.deepEqual(verdicts.map(e => [e.outcome, e.evidence, e.type]), [['pass', 'PR #9 approved', '找'], ['fail', 'CI run 42 red', '找']])
-    // The round is still open: the session's own rewrite still closes it.
-    const rewrite = await tools.get('lesson_write')?.execute({ text: '先看第一条报错并对照 CI 日志，再决定要不要重跑。', type: '找' }, { agent: agentOf(S) })
-    assert.equal(rewrite?.['round'], 'updated')
   })
 })
 
@@ -498,66 +464,11 @@ test('host (B5b): GET /version reports the loaded server version from the packag
   assert.deepEqual(host.loadedPackage(new URL('file:///nonexistent/package.json')), { name: 'unknown', version: 'unknown' })
 })
 
-test('host (owner 2026-11-21): the session pins its own tested lessons with lesson_pin; quota, owner unpins and reasons hold', async () => {
-  await withHost({ lessons: { enabled: true, recallCooldownTurns: 1, maxPinned: 1 } }, async (ctx, route, tools) => {
-    const pin = (type: string, pinned: boolean, reason = '唤起两轮都照做有效，CI 证据见时间线。') => tools.get('lesson_pin')?.execute({ type, pinned, reason }, { agent: agentOf(S) }) as Promise<Record<string, unknown>>
-    await result(ctx, 'c1', 'make test', true)
-    const written = await tools.get('lesson_write')?.execute({ text: '先看第一条报错，再决定要不要重跑。', type: '找' }, { agent: agentOf(S) })
-    const id = String(written?.['id'])
-    await tools.get('lesson_write')?.execute({ text: '改配置前先备份。', type: '验' }, { agent: agentOf(S) })
-    assert.equal((await pin('收', true))['code'], 'type')
-    assert.equal((await pin('找', true, '有效'))['code'], 'reason')
-    assert.equal((await pin('找', true))['code'], 'untested', 'never recalled: no closed round yet')
-    // Recall, then a verified keep closes the round: now it may be pinned.
-    await result(ctx, 'c2', 'make test', true)
-    const recall = await preStep(ctx, 2)
-    const text = recall[0]?.content?.[0]?.text ?? ''
-    assert.ok(text.includes('lesson_pin'), 'the recall tells the session it manages its own pinned lessons')
-    assert.ok(text.indexOf('lesson_pin') < text.indexOf(LESSONS_MUST_READ_LINE), 'the must-read line stays after the pin line')
-    assert.equal((await tools.get('lesson_keep')?.execute({ type: '找', evidence: 'make test 第二次先读首条报错后通过，CI run 7 绿' }, { agent: agentOf(S) }))?.['ok'], true)
-    assert.deepEqual(await pin('找', true), { ok: true, type: '找', pinned: true })
-    let items = (await request(route, `${BASE}/lessons?session_id=${S}`)).body.items as Array<{ id: string, pinned: boolean }>
-    assert.equal(items.find(i => i.id === id)?.pinned, true)
-    // The loaded block tells the session to unpin what no longer applies.
-    await created(ctx, 'startup')
-    const loaded = (await preStep(ctx, 4))[0]?.content?.[0]?.text ?? ''
-    assert.ok(loaded.includes('1. 先看第一条报错') && loaded.includes('lesson_pin'))
-    // Unpin is always allowed; the owner's unpin cannot be undone by the session.
-    assert.deepEqual(await pin('找', false, '已被更准的「验」类取代，不再适用。'), { ok: true, type: '找', pinned: false })
-    assert.equal((await pin('找', true))['ok'], true)
-    assert.equal((await request(route, `${BASE}/lessons/${id}`, 'PATCH', { pinned: false })).status, 200)
-    assert.equal((await pin('找', true))['code'], 'owner-unpinned')
-    items = (await request(route, `${BASE}/lessons?session_id=${S}`)).body.items
-    assert.equal(items.find(i => i.id === id)?.pinned, false)
-    const timeline = await tools.get('lesson_timeline')?.execute({ type: '找' }, { agent: agentOf(S) }) as { entries?: Array<{ kind: string, reason?: string }> }
-    assert.deepEqual((timeline.entries ?? []).filter(e => e.kind.endsWith('pinned')).map(e => e.kind), ['owner-unpinned', 'self-pinned', 'self-unpinned', 'self-pinned'])
-    assert.equal((timeline.entries ?? []).find(e => e.kind === 'self-unpinned')?.reason, '已被更准的「验」类取代，不再适用。')
-  })
-})
-
-test('lesson_pin respects the quota: a second pin needs an unpin first', async () => {
-  await withHost({ lessons: { enabled: true, recallCooldownTurns: 1, maxPinned: 1 } }, async (ctx, _route, tools) => {
-    await result(ctx, 'c1', 'make test', true)
-    await tools.get('lesson_write')?.execute({ text: '先看第一条报错，再决定要不要重跑。', type: '找' }, { agent: agentOf(S) })
-    await result(ctx, 'c2', 'make test', true)
-    await preStep(ctx, 2)
-    await tools.get('lesson_write')?.execute({ text: '先看第一条报错并对照 CI 日志，再决定要不要重跑。', type: '找' }, { agent: agentOf(S) })
-    await result(ctx, 'd1', 'npm run lint', true)
-    await tools.get('lesson_write')?.execute({ text: 'lint 失败先看规则名，再改代码。', type: '落' }, { agent: agentOf(S) })
-    await result(ctx, 'd2', 'npm run lint', true)
-    await preStep(ctx, 5)
-    await tools.get('lesson_write')?.execute({ text: 'lint 失败先看规则名和文件，再改代码。', type: '落' }, { agent: agentOf(S) })
-    const pin = (type: string) => tools.get('lesson_pin')?.execute({ type, pinned: true, reason: '唤起后照做并改写，之后同类没再失败。' }, { agent: agentOf(S) }) as Promise<Record<string, unknown>>
-    assert.equal((await pin('找'))['ok'], true)
-    assert.equal((await pin('落'))['code'], 'pinned-full')
-  })
-})
-
 async function created(ctx: Context, source: string): Promise<void> {
   await (ctx as unknown as { serial: (...args: unknown[]) => Promise<unknown> }).serial('agent/created', { agent: agentOf(S), source })
 }
 
-test('host (phase 2): the owner pins over PATCH; startup, resume and compact load the pinned lessons at the next step, clear does not', async () => {
+test('host (§5.16): startup, resume and compact hand over all lessons at the next step, the owner\'s pinned ones first; clear does not; the PATCH route still pins', async () => {
   await withHost({ lessons: { enabled: true, maxPinned: 1 } }, async (ctx, route, tools) => {
     await result(ctx, 'c1', 'make test')
     const first = await tools.get('lesson_write')?.execute({ text: '先看第一条报错。', type: '找' }, { agent: agentOf(S) })
@@ -565,24 +476,22 @@ test('host (phase 2): the owner pins over PATCH; startup, resume and compact loa
     const id = String(first?.['id']), other = String(second?.['id'])
     assert.equal((await request(route, `${BASE}/lessons/${id}`, 'PATCH', { pinned: 'yes' })).status, 400)
     assert.equal((await request(route, `${BASE}/lessons/missing`, 'PATCH', { pinned: true })).status, 404)
-    assert.deepEqual((await request(route, `${BASE}/lessons/${id}`, 'PATCH', { pinned: true })).body, { id, pinned: true })
-    const full = await request(route, `${BASE}/lessons/${other}`, 'PATCH', { pinned: true })
+    assert.deepEqual((await request(route, `${BASE}/lessons/${other}`, 'PATCH', { pinned: true })).body, { id: other, pinned: true })
+    const full = await request(route, `${BASE}/lessons/${id}`, 'PATCH', { pinned: true })
     assert.equal(full.status, 409)
     assert.equal(full.body.error.code, 'pinned-full')
-    const read = await request(route, `${BASE}/lessons?session_id=${S}`)
-    assert.deepEqual(read.body.items.map((item: { pinned: boolean }) => item.pinned), [true, false])
     await created(ctx, 'clear')
-    assert.deepEqual(await preStep(ctx, 1), [], 'clear is a fresh start: nothing loaded')
+    assert.deepEqual(await preStep(ctx, 1), [], 'clear is a fresh start: nothing handed over')
     for (const [turn, source] of [[2, 'startup'], [4, 'resume'], [6, 'compact']] as const) {
       await created(ctx, source)
       const loaded = await preStep(ctx, turn)
+      const text = loaded[0]?.content?.[0]?.text ?? ''
       assert.equal(loaded[0]?.source?.['kind'], 'prompt-template-lesson')
-      assert.ok((loaded[0]?.content?.[0]?.text ?? '').includes('1. 先看第一条报错。'), source)
-      assert.ok(!(loaded[0]?.content?.[0]?.text ?? '').includes('改配置前先备份'))
+      assert.ok(text.indexOf('- 验：改配置前先备份。') > 0 && text.indexOf('- 验：') < text.indexOf('- 找：先看第一条报错。'), `${source}: pinned first`)
       assert.deepEqual(await preStep(ctx, turn + 1), [], `${source}: once`)
     }
     const log = (await request(route, `${BASE}/lessons?session_id=${S}`)).body.log as Array<{ kind: string, origin: string }>
-    assert.deepEqual(log.filter(row => row.kind === 'pinned-loaded').map(row => row.origin), ['startup', 'resume', 'compact'])
+    assert.deepEqual(log.filter(row => row.kind === 'delivered').map(row => row.origin), ['startup', 'startup', 'resume', 'resume', 'compact', 'compact'])
   })
 })
 
@@ -591,55 +500,6 @@ test('host (phase 2): off, a start loads nothing', async () => {
     await created(ctx, 'startup')
     assert.deepEqual(await preStep(ctx, 1), [])
   })
-})
-
-test('RSI rounds: every recall opens a round; rewriting the recalled lesson or writing a new one closes it; two turns without a write miss it', () => {
-  const w = world({ ...ON, recallCooldownTurns: 1 })
-  try {
-    w.step(1)
-    w.call('TOKEN_X=abc /opt/py/bin/python build.py')
-    const first = w.write('别手工带 TOKEN_X，先用 make 入口。')
-    assert.ok(first.ok)
-    const id = first.ok ? first.id : ''
-    assert.equal(first.ok && first.round, null, 'no round open yet')
-    // Round 1: recalled at turn 2, closed by rewriting the same lesson.
-    w.call('TOKEN_X=abc /opt/py/bin/python lint.py')
-    assert.ok(textOf(w.step(2)).includes('RSI 一轮'))
-    assert.equal(w.store.lessons.openRounds(S).length, 1)
-    const updated = w.write('别手工带 TOKEN_X，先用 make 入口；lint 也走 make lint。', '收')
-    assert.equal(updated.ok && updated.round, 'updated')
-    assert.equal(w.store.lessons.openRounds(S).length, 0)
-    // Round 2: recalled at turn 4, closed by a new lesson.
-    w.call('TOKEN_X=abc /opt/py/bin/python test.py')
-    assert.ok(textOf(w.step(4)).includes('RSI 一轮'))
-    const added = w.write('测试也走 make test，不手拼解释器。')
-    assert.equal(added.ok && added.round, 'written')
-    // Round 3: recalled at turn 6, nothing written in turns 6 and 7: missed at turn 8.
-    w.call('TOKEN_X=abc /opt/py/bin/python deploy.py')
-    assert.ok(textOf(w.step(6)).includes('RSI 一轮'))
-    w.step(7)
-    assert.equal(w.store.lessons.openRounds(S).length, 1, 'still within the grace turn')
-    w.step(8)
-    assert.equal(w.store.lessons.openRounds(S).length, 0)
-    assert.deepEqual(w.store.lessons.rounds(id), { opened: 3, closed: 2, missed: 1, kept: 0 })
-    const kinds = w.store.lessons.log(S).map(row => row.kind)
-    assert.deepEqual(kinds.filter(k => k.startsWith('round')), ['round-closed', 'round-closed', 'round-missed'])
-  } finally { w.store.close() }
-})
-
-test('RSI rounds: a lesson the owner edited is still rewritable; the recall says the owner\'s text is kept', () => {
-  const w = world({ ...ON, recallCooldownTurns: 1 })
-  try {
-    w.step(1)
-    w.call('TOKEN_X=abc /opt/py/bin/python build.py')
-    const first = w.write('别手工带 TOKEN_X。')
-    const id = first.ok ? first.id : ''
-    w.store.update(id, { content: '属主改过：别手工带 TOKEN_X。', version: null })
-    w.call('TOKEN_X=abc /opt/py/bin/python lint.py')
-    const text = textOf(w.step(2))
-    assert.ok(text.includes('这条属主改过，旧文同样留档'))
-    assert.ok(text.includes('type: 收'))
-  } finally { w.store.close() }
 })
 
 test('card rounds (option A): a workshop injection opens one round per turn; a lesson or a stated no-entry closes it; two turns without either miss it', () => {
@@ -680,20 +540,14 @@ test('card rounds (option A): a workshop injection opens one round per turn; a l
   } finally { w.store.close() }
 })
 
-test('card rounds: a recall round still needs a write (no-entry cannot close it); a rewrite closes the recall, not the card round; no digest prompt while a card round is open', () => {
-  const w = world({ ...ON, recallCooldownTurns: 1, digestCooldownTurns: 1 })
+test('card rounds: lesson_none closes only a card round; no digest prompt while a card round is open', () => {
+  const w = world({ ...ON, digestCooldownTurns: 1 })
   try {
     w.step(1)
     w.call('TOKEN_X=abc /opt/py/bin/python build.py')
     w.write('别手工带 TOKEN_X。', '收')
-    w.call('TOKEN_X=abc /opt/py/bin/python lint.py')
-    assert.ok(textOf(w.step(2)).includes('RSI 一轮'))
     assert.equal((lessonNone(w.store, S, '不适用', 2) as { code: string; error: string }).code, 'no-card-round')
     openCardRound(w.store, S, 2, [{ id: 'c1', name: '工坊-行动审视', version: null }])
-    // Rewriting the recalled type closes the recall round; the card round stays open for its own ending.
-    const updated = w.write('别手工带 TOKEN_X，用 make。', '收')
-    assert.equal(updated.ok && updated.round, 'updated')
-    assert.equal(w.store.lessons.openCardRounds(S).length, 1)
     // A settled experience while the card round is open: no separate digest prompt.
     w.call('make test', { isError: true }); w.call('make test')
     assert.ok(!textOf(w.step(3)).includes('告一段落'), 'the card round already asks')
@@ -738,33 +592,30 @@ test('host: with lessons off a workshop card is injected without a card round', 
 })
 
 // Owner 2026-11-21 (system RSI loop map, item 2): a recall round may end with a verified keep, but only with evidence.
-test('verified keep: a recalled lesson that held closes its round with evidence, unchanged; a bare "still right", no round or a card round are refused', () => {
-  const w = world({ ...ON, recallCooldownTurns: 1 })
+test('verified keep (§5.16): any lesson that held is kept with evidence, unchanged, no round needed; a bare "still right" or an unknown type is refused; a card round is unaffected', () => {
+  const w = world()
   try {
-    w.step(1)
     w.call('TOKEN_X=abc /opt/py/bin/python build.py')
     const first = w.write('别手工带 TOKEN_X，先用 make 入口。', '收')
     const id = first.ok ? first.id : ''
-    assert.equal(lessonKeep(w.store, S, '收', 'make build 退出 0，日志无 TOKEN_X', 2).ok, false, 'no recall round open yet')
-    w.call('TOKEN_X=abc /opt/py/bin/python lint.py')
-    const recalled = textOf(w.step(2))
-    assert.ok(recalled.includes('lesson_keep') && recalled.includes('光说「仍然对」不算'), 'the recall names the keep exit and its evidence rule')
     const bare = lessonKeep(w.store, S, '收', '仍然对', 2)
     assert.equal(bare.ok, false)
     assert.equal(!bare.ok && bare.code, 'evidence')
     assert.equal(lessonKeep(w.store, S, '验', 'make build 退出 0，日志无 TOKEN_X', 2).ok, false, 'no lesson of that type')
     const kept = lessonKeep(w.store, S, '收', 'make lint 退出 0，命令行里没有 TOKEN_X', 2)
     assert.deepEqual(kept, { ok: true, round: 'kept', type: '收' })
-    assert.equal(w.store.lessons.openRounds(S).length, 0)
     assert.equal(w.store.get(id)?.content, '别手工带 TOKEN_X，先用 make 入口。', 'the text is unchanged')
-    assert.deepEqual(w.store.lessons.rounds(id), { opened: 1, closed: 1, missed: 0, kept: 1 })
+    assert.deepEqual(w.store.lessons.rounds(id), { opened: 0, closed: 1, missed: 0, kept: 1 })
+    assert.equal(w.store.lessons.latestKeep(id), 'make lint 退出 0，命令行里没有 TOKEN_X')
     const entry = lessonTimeline(w.store, S, 5).find(e => e.kind === 'round-closed')
     assert.equal(entry?.outcome, 'kept')
     assert.equal(entry?.evidence, 'make lint 退出 0，命令行里没有 TOKEN_X')
-    // A card round is not a keep: it still needs a lesson or lesson_none.
+    // A rewrite makes the old keep stale for the ribbon tab.
+    w.write('别手工带 TOKEN_X，先用 make 入口；lint 也走 make。', '收')
+    assert.equal(w.store.lessons.latestKeep(id), undefined)
     openCardRound(w.store, S, 3, [{ id: 'card-1', name: '自主推进', version: 'v4' }])
-    assert.equal(lessonKeep(w.store, S, '收', 'make lint 退出 0，命令行里没有 TOKEN_X', 3).ok, false)
-    assert.equal(w.store.lessons.openCardRounds(S).length, 1)
+    assert.equal(lessonKeep(w.store, S, '收', 'make lint 退出 0，命令行里没有 TOKEN_X', 3).ok, true)
+    assert.equal(w.store.lessons.openCardRounds(S).length, 1, 'a keep does not close a card round')
   } finally { w.store.close() }
 })
 
@@ -788,8 +639,8 @@ test('churn hint: three rewrites in a row that change nothing of substance are f
 })
 
 // B4a (owner 2026-11-21, system RSI loop map): does the lesson's situation still fail after the lesson is recalled?
-test('recurrence: calls matching a lesson are counted before and after its first recall, with failures; a card sums its lessons; unknown outcomes are skipped', () => {
-  const w = world({ ...ON, recallCooldownTurns: 1 })
+test('recurrence: calls matching a lesson are counted before and after it was first handed over, with failures; a card sums its lessons; unknown outcomes are skipped', () => {
+  const w = world()
   const failed = { isError: true, error: { info: { code: 'EXIT_1' } } }
   try {
     w.step(1)
@@ -798,20 +649,17 @@ test('recurrence: calls matching a lesson are counted before and after its first
     const first = w.write('别手工带 TOKEN_X，先用 make 入口。', '收')
     const id = first.ok ? first.id : ''
     assert.equal(first.ok && first.round, 'written', 'the lesson closes the card round')
-    // Before the first recall: the call that triggers it fails.
     w.call('TOKEN_X=abc /opt/py/bin/python lint.py', failed)
     assert.deepEqual(w.store.lessons.recurrence(id), { before: { hits: 1, fails: 1 }, after: { hits: 0, fails: 0 } })
-    assert.ok(textOf(w.step(2)).includes('RSI 一轮'), 'recalled')
-    // After it: one more failure, then two successes in the same situation.
+    w.state.deliverDue = 'compact'
+    assert.ok(textOf(w.step(2)).includes('别手工带 TOKEN_X'), 'handed over')
     w.call('TOKEN_X=abc /opt/py/bin/python test.py', failed)
     w.call('TOKEN_X=abc /opt/py/bin/python test.py')
     w.call('TOKEN_X=abc /opt/py/bin/python deploy.py')
     assert.deepEqual(w.store.lessons.recurrence(id), { before: { hits: 1, fails: 1 }, after: { hits: 3, fails: 1 } })
-    // A call in another situation is not counted.
     w.call('ls -la')
     assert.equal(w.store.lessons.recurrence(id).after.hits, 3)
     assert.deepEqual(w.store.lessons.cardStats(S).map(card => card.recurrence), [{ hits: 3, fails: 1 }])
-    // Hits stay out of the lesson log, so they never crowd round bookkeeping or the timeline.
     assert.ok(!w.store.lessons.log(S).some(row => (row.kind as string) === 'cue-hit'))
   } finally { w.store.close() }
 })

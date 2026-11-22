@@ -5,7 +5,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { renderReminderItem, renderHandoffItem, REMINDER_BINDING_LINE, REMINDER_MUST_READ_LINE } from '../src/event-inject.ts'
 import { EVOLUTION_CONTENT, EVOLUTION_VERSION } from '../src/evolution-default.ts'
-import { LESSONS_MUST_READ_LINE, renderCardRoundLine, renderDigestPrompt, renderRecall } from '../src/lessons.ts'
+import { LESSONS_MUST_READ_LINE, renderCardRoundLine, renderDigestPrompt, renderLessonList } from '../src/lessons.ts'
 
 const episode = {
   rule_id: 'repeated-failure', rule_version: 1, summary: 'npm test', outcome: 'exit 1',
@@ -40,9 +40,7 @@ test('evolution default card opens with a must-read step and closes as a standin
 // agent-atelier references/lessons.md first.
 for (const [name, body] of [
   ['digest prompt', renderDigestPrompt({ summary: 'npm test' } as never)],
-  ['recall (typed, own)', renderRecall('报错停在表面就动手；下次先拿完整输出。', 160, { key: '找', type: '找' })],
-  ['recall (owner-edited)', renderRecall('x', 160, { key: '找', type: '找' }, false)],
-  ['recall (legacy)', renderRecall('x', 160)],
+  ['lesson list (§5.16)', renderLessonList([{ key: '找', content: '当报错停在表面时，先拿完整输出。', outcome: 'wrong' }, { key: '3', content: 'x', outcome: null }])],
   ['card round line', renderCardRoundLine(['自主推进'])],
 ] as const) {
   test(`${name} carries the lesson-cognition must-read line`, () => {
