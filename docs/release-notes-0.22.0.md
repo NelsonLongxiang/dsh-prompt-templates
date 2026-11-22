@@ -31,7 +31,7 @@
 ### 已知限制
 
 - 真实宿主**压缩后 `agent/created`（`source: compact`）**仍 NOT_RUN：不发这个事件，压缩后就不会交付体会。
-- 首次真机测试（master `c0d9747`）飘带没有渲染（#68），#69 补了三处退路；修复后在 master `2e55c2b` 上真机复查通过：飘带渲染、轮换、收起按钮都在，控制台无报错（#68）。复查时发现飘带盖住了「对话｜轨迹」tab，#70 改成让开 tab；属主看过后要求飘带并进头部、做错做对并排，#71 已改，#71 在 `9f3cf68` 上真机复测通过（tab 完整可点、飘带紧贴 tab 行下方、三条并排、控制台无报错，#68）；#72（`5c26ef9`）加的长文字上看过（测试计划 L03）。
+- 首次真机测试（master `c0d9747`）飘带没有渲染（#68），#69 补了三处退路；修复后在 master `2e55c2b` 上真机复查通过：飘带渲染、轮换、收起按钮都在，控制台无报错（#68）。复查时发现飘带盖住了「对话｜轨迹」tab，#70 改成让开 tab；属主看过后要求飘带并进头部、做错做对并排，#71 已改，#71 在 `9f3cf68` 上真机复测通过（tab 完整可点、飘带紧贴 tab 行下方、三条并排、控制台无报错，#68）；#72（`5c26ef9`）加了长文字横向滚动，三项在 `5c26ef9` 上一起真机复测通过（并进头部、做错做对并排、107 字长体会命中滚动样式且减少动态时关闭，控制台无报错，#68；测试计划 L03）。
 - 外部结论要属主手动记。`/version` 只报本插件自己的版本。
 
 ### 面向贡献者
@@ -71,7 +71,7 @@ This release changes lessons to "tell the model, let it use them" (spec §5.16, 
 ### Known limits
 
 - `agent/created` (`source: compact`) after compaction on a real host is still NOT_RUN; without it, nothing is handed over after compaction.
-- On the first real-host test (master `c0d9747`) the ribbon did not render (#68); #69 adds three fallbacks. The real-host recheck on master `2e55c2b` passed: the ribbon renders, rotates, has its collapse button, and the console shows no errors (#68). The recheck also found the ribbon covering the 对话｜轨迹 view tabs; #70 moves it clear of the tabs; after the owner's look, #71 docks it in the header with wrong and right side by side, and #72 (`5c26ef9`) scrolls text that does not fit. #71 passed the real-host recheck on `9f3cf68` (tabs visible and clickable, ribbon flush under the tab row, three lanes side by side, no console errors, #68); the scrolling from #72 has not been seen on a real host yet (test plan L03).
+- On the first real-host test (master `c0d9747`) the ribbon did not render (#68); #69 adds three fallbacks. The real-host recheck on master `2e55c2b` passed: the ribbon renders, rotates, has its collapse button, and the console shows no errors (#68). The recheck also found the ribbon covering the 对话｜轨迹 view tabs; #70 moves it clear of the tabs; after the owner's look, #71 docks it in the header with wrong and right side by side, and #72 (`5c26ef9`) scrolls text that does not fit. #71 passed the real-host recheck on `9f3cf68` (tabs visible and clickable, ribbon flush under the tab row, three lanes side by side, no console errors, #68); all three were rechecked together on `5c26ef9` and passed (docked in the header, wrong and right side by side, a 107-character lesson picks up the scrolling style and reduced motion turns it off, no console errors, #68; test plan L03).
 - External verdicts are entered by hand. `/version` reports this plugin's version only.
 
 ### For contributors
