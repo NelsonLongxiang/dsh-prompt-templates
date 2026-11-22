@@ -6,7 +6,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import { loadRibbonLessons } from './ribbon-data.ts'
-import { pickAnchor, POLL_MS, ribbonCounts, type RibbonAnchor, type RibbonBus, type RibbonLesson } from './ribbon.ts'
+import { clearTabStrips, measureTabStrips, pickAnchor, POLL_MS, ribbonCounts, type RibbonAnchor, type RibbonBus, type RibbonLesson } from './ribbon.ts'
 import css from './Ribbon.module.css'
 
 /** The knot's injected face. */
@@ -76,7 +76,8 @@ export function LessonKnot({ bus, openPanel, sessionId, t }: LessonKnotProps) {
         { source: 'header', anchor: el === null ? null : headerAnchor(el) },
         { source: 'knot', anchor: el === null ? null : knotAnchor(el) },
       ], window.innerWidth)
-      bus.publish({ sessionId, lessons, anchor: picked.anchor, anchorSource: picked.source })
+      // Below the view tabs, never over them (real-host 2026-11-22: the ribbon covered 对话｜轨迹).
+      bus.publish({ sessionId, lessons, anchor: clearTabStrips(picked.anchor, measureTabStrips(document)), anchorSource: picked.source })
     }
     publish()
     window.addEventListener('resize', publish)

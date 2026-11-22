@@ -8,7 +8,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
-import { changedLesson, FRESH_MS, nextIndex, orderRibbon, pickAnchor, POLL_MS, readCollapsed, ROTATE_MS, writeCollapsed, type RibbonAnchor, type RibbonBus, type RibbonLesson, type RibbonState } from './ribbon.ts'
+import { changedLesson, clearTabStrips, FRESH_MS, measureTabStrips, nextIndex, orderRibbon, pickAnchor, POLL_MS, readCollapsed, ROTATE_MS, writeCollapsed, type RibbonAnchor, type RibbonBus, type RibbonLesson, type RibbonState } from './ribbon.ts'
 import { loadRibbonLessons } from './ribbon-data.ts'
 import css from './Ribbon.module.css'
 
@@ -106,7 +106,8 @@ export function LessonRibbon({ bus, targetSession, subscribeTarget, t }: LessonR
 
   // Nothing to show only when there is no session or no lesson; a missing anchor falls back to the viewport top.
   if (state.sessionId === null || lessons.length === 0) return null
-  const anchor = state.anchor ?? pickAnchor([], window.innerWidth).anchor
+  // Cleared again here: the knot's published anchor can be up to a second old, and the fallbacks never were.
+  const anchor = clearTabStrips(state.anchor ?? pickAnchor([], window.innerWidth).anchor, measureTabStrips(document))
   const lesson = lessons[Math.min(index, lessons.length - 1)]!
   const kind = lesson.outcome === 'wrong' ? css.hazard : lesson.outcome === 'right' ? css.sash : css.plain
   const sessionId = state.sessionId

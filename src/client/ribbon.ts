@@ -54,6 +54,44 @@ export function pickAnchor(candidates: readonly AnchorCandidate[], viewportWidth
   return { anchor: { left: 0, top: 0, width: Math.max(1, viewportWidth) }, source: 'viewport' }
 }
 
+/** A measured box in viewport pixels (a DOMRect has these). */
+export interface Box {
+  readonly left: number
+  readonly right: number
+  readonly top: number
+  readonly bottom: number
+}
+
+/** How far below the anchor a tab strip still counts as part of the header (the ribbon band is about this tall). */
+export const TAB_CLEARANCE_PX = 64
+
+/**
+ * Move the anchor below any tab strip it would cover (real-host 2026-11-22: hung at the header's bottom edge, the
+ * ribbon covered the 对话｜轨迹 tabs). A strip counts when it overlaps the ribbon horizontally and reaches below the
+ * anchor while starting within TAB_CLEARANCE_PX of it; the anchor then starts at its bottom. Repeated so stacked
+ * strips are all cleared. Never moves the anchor up, never changes left or width.
+ */
+export function clearTabStrips(anchor: RibbonAnchor, strips: readonly Box[]): RibbonAnchor {
+  let top = anchor.top
+  const right = anchor.left + anchor.width
+  for (let pass = 0; pass < 4; pass++) {
+    let next = top
+    for (const strip of strips) {
+      if (!(Number.isFinite(strip.top) && Number.isFinite(strip.bottom))) continue
+      if (strip.bottom <= strip.top || strip.right <= anchor.left || strip.left >= right) continue
+      if (strip.bottom > next && strip.top < top + TAB_CLEARANCE_PX) next = strip.bottom
+    }
+    if (next === top) break
+    top = next
+  }
+  return top === anchor.top ? anchor : { ...anchor, top }
+}
+
+/** The tab strips on the page: the conversation's view tabs and any other tablist. */
+export function measureTabStrips(doc: Pick<Document, 'querySelectorAll'>): Box[] {
+  return Array.from(doc.querySelectorAll('[data-conversation-tabs], [role="tablist"]'), el => el.getBoundingClientRect())
+}
+
 /** Each lesson stays this long before the next one rolls up. */
 export const ROTATE_MS = 6000
 /** A lesson just written, rewritten or kept jumps the queue and stays this long first. */

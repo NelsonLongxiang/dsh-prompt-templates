@@ -70,6 +70,27 @@ test('the ribbon always gets an anchor: header first, then the knot row, then th
   assert.deepEqual(pickAnchor([], 0).anchor.width, 1, 'even a zero-width window yields a drawable anchor')
 })
 
+// Real-host fix (2026-11-22: hung at the header's bottom edge, the ribbon covered the 对话｜轨迹 tabs).
+test('the ribbon hangs below the view tabs, never over them', async () => {
+  const { clearTabStrips } = await import('../src/client/ribbon.ts')
+  const anchor = { left: 280, top: 60, width: 820 }
+  const tabs = { left: 300, right: 520, top: 62, bottom: 98 }
+  assert.deepEqual(clearTabStrips(anchor, [tabs]), { left: 280, top: 98, width: 820 }, 'tabs just under the anchor push it below them')
+  assert.deepEqual(clearTabStrips({ ...anchor, top: 100 }, [tabs]), { ...anchor, top: 100 }, 'a header that already holds the tabs is left alone')
+  assert.deepEqual(clearTabStrips(anchor, [{ left: 300, right: 520, top: 400, bottom: 430 }]), anchor, 'a tablist far down the page (trajectory details) does not count')
+  assert.deepEqual(clearTabStrips(anchor, [{ left: 1200, right: 1400, top: 62, bottom: 98 }]), anchor, 'a tablist beside the conversation (a side panel) does not count')
+  assert.deepEqual(clearTabStrips(anchor, [tabs, { left: 300, right: 900, top: 100, bottom: 130 }]), { ...anchor, top: 130 }, 'stacked strips are all cleared')
+  assert.deepEqual(clearTabStrips(anchor, [{ left: 300, right: 520, top: Number.NaN, bottom: 98 }, { left: 300, right: 520, top: 70, bottom: 70 }]), anchor, 'unmeasurable or empty boxes are ignored')
+})
+
+test('both the knot and the overlay clear the tab strips before drawing', async () => {
+  const { readFileSync } = await import('node:fs')
+  for (const file of ['LessonKnot.tsx', 'LessonRibbon.tsx']) {
+    const src = readFileSync(new URL(`../src/client/${file}`, import.meta.url), 'utf8')
+    assert.match(src, /clearTabStrips\([^;]*measureTabStrips\(document\)\)/, file)
+  }
+})
+
 test('the overlay no longer waits for the knot: it falls back to the composer session and fetches for itself', async () => {
   const { readFileSync } = await import('node:fs')
   const src = readFileSync(new URL('../src/client/LessonRibbon.tsx', import.meta.url), 'utf8')
