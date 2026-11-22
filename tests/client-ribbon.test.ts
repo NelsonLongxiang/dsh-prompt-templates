@@ -101,3 +101,33 @@ test('the overlay no longer waits for the knot: it falls back to the composer se
   const index = readFileSync(new URL('../src/client/index.ts', import.meta.url), 'utf8')
   assert.match(index, /targetSession: \(\) => controller\.targetSession\(\) \?\? null/)
 })
+
+// Owner 2026-11-22: the ribbon is part of the header, stacked under the tabs, not a separate floating area.
+test('the ribbon docks inside the header: after the tabs wherever the host puts them', async () => {
+  const { planDock } = await import('../src/client/ribbon.ts')
+  assert.equal(planDock({ headerHoldsTabs: true, nextHoldsTabs: false, gapToNext: Number.POSITIVE_INFINITY }), 'append', 'tabs inside the header: last in the header, under them')
+  assert.equal(planDock({ headerHoldsTabs: false, nextHoldsTabs: true, gapToNext: 0 }), 'afterNext', 'tab row right after the header (older hosts): right after that row')
+  assert.equal(planDock({ headerHoldsTabs: false, nextHoldsTabs: true, gapToNext: 300 }), 'append', 'a tablist far below is not the header\'s tab row')
+  assert.equal(planDock({ headerHoldsTabs: false, nextHoldsTabs: false, gapToNext: 0 }), 'append', 'no tabs at all: under the title row')
+})
+
+test('the overlay docks into its own container in the header and only floats without a header', async () => {
+  const { readFileSync } = await import('node:fs')
+  const src = readFileSync(new URL('../src/client/LessonRibbon.tsx', import.meta.url), 'utf8')
+  assert.match(src, /findDock\(state\.origin, document\)/)
+  assert.match(src, /createPortal\(node, dock \?\? document\.body\)/)
+  const knot = readFileSync(new URL('../src/client/LessonKnot.tsx', import.meta.url), 'utf8')
+  assert.match(knot, /origin: el/, 'the knot tells the overlay which header it sits in')
+  const dock = readFileSync(new URL('../src/client/ribbon-dock.ts', import.meta.url), 'utf8')
+  assert.doesNotMatch(dock, /\.style\.|classList|removeChild|replaceWith/, 'the host\'s own nodes are never restyled or removed')
+})
+
+// Owner 2026-11-22: wrong and right hang side by side, the header is wide enough.
+test('wrong and right roll in their own lanes, side by side', async () => {
+  const { splitLanes } = await import('../src/client/ribbon.ts')
+  const l = (id: string, outcome: 'wrong' | 'right' | null) => ({ id, key: '找', content: id, outcome, evidence: null, stamp: id })
+  const lanes = splitLanes([l('r1', 'right'), l('w1', 'wrong'), l('p1', null), l('w2', 'wrong')])
+  assert.deepEqual(lanes.map(x => [x.outcome, x.lessons.map(y => y.id)]), [['wrong', ['w1', 'w2']], ['right', ['r1']], [null, ['p1']]])
+  assert.deepEqual(splitLanes([l('r1', 'right')]).map(x => x.outcome), ['right'], 'one kind fills the width')
+  assert.deepEqual(splitLanes([]), [])
+})
