@@ -57,3 +57,26 @@ test('the bus hands the visible session to the overlay and hides it when that kn
   bus.publish({ sessionId: 's3', lessons: [], anchor: null })
   assert.equal(seen, 3)
 })
+
+// Real-host fix (owner 2026-11-22: the ribbon did not render on the test host): it always has a place to hang.
+test('the ribbon always gets an anchor: header first, then the knot row, then the viewport top', async () => {
+  const { pickAnchor } = await import('../src/client/ribbon.ts')
+  const header = { left: 280, top: 92, width: 820 }
+  const knot = { left: 280, top: 60, width: 820 }
+  assert.deepEqual(pickAnchor([{ source: 'header', anchor: header }, { source: 'knot', anchor: knot }], 1400), { anchor: header, source: 'header' })
+  assert.deepEqual(pickAnchor([{ source: 'header', anchor: null }, { source: 'knot', anchor: knot }], 1400), { anchor: knot, source: 'knot' })
+  assert.deepEqual(pickAnchor([{ source: 'header', anchor: { left: 0, top: 50, width: 0 } }, { source: 'knot', anchor: null }], 1400), { anchor: { left: 0, top: 0, width: 1400 }, source: 'viewport' }, 'a zero-width header is not a place')
+  assert.deepEqual(pickAnchor([{ source: 'header', anchor: { left: Number.NaN, top: 50, width: 800 } }], 1400).source, 'viewport')
+  assert.deepEqual(pickAnchor([], 0).anchor.width, 1, 'even a zero-width window yields a drawable anchor')
+})
+
+test('the overlay no longer waits for the knot: it falls back to the composer session and fetches for itself', async () => {
+  const { readFileSync } = await import('node:fs')
+  const src = readFileSync(new URL('../src/client/LessonRibbon.tsx', import.meta.url), 'utf8')
+  assert.match(src, /const fallback = published\.sessionId === null \? target : null/)
+  assert.match(src, /loadRibbonLessons\(fallback\)/)
+  assert.doesNotMatch(src, /if \(state\.anchor === null \|\| state\.sessionId === null \|\| lessons\.length === 0\) return null/, 'a missing anchor must not hide the ribbon')
+  assert.match(src, /data-lesson-ribbon-anchor=/, 'the anchor source is visible for real-host checks')
+  const index = readFileSync(new URL('../src/client/index.ts', import.meta.url), 'utf8')
+  assert.match(index, /targetSession: \(\) => controller\.targetSession\(\) \?\? null/)
+})

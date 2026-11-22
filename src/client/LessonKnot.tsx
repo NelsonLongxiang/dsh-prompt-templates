@@ -5,8 +5,8 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
-import { listLessonPins, listTemplates } from './api.ts'
-import { POLL_MS, ribbonCounts, type RibbonAnchor, type RibbonBus, type RibbonLesson } from './ribbon.ts'
+import { loadRibbonLessons } from './ribbon-data.ts'
+import { pickAnchor, POLL_MS, ribbonCounts, type RibbonAnchor, type RibbonBus, type RibbonLesson } from './ribbon.ts'
 import css from './Ribbon.module.css'
 
 /** The knot's injected face. */
@@ -36,14 +36,16 @@ export function headerAnchor(from: HTMLElement): RibbonAnchor | null {
   return rect.width <= 0 ? null : { left: rect.left, top: rect.bottom, width: rect.width }
 }
 
-async function loadRibbonLessons(sessionId: string): Promise<RibbonLesson[]> {
-  const [items, templates] = await Promise.all([listLessonPins(sessionId), listTemplates()])
-  const text = new Map(templates.map(t => [t.id, t.content]))
-  return items.flatMap(item => {
-    const content = text.get(item.id)
-    if (content === undefined) return []
-    return [{ id: item.id, key: item.key, content, outcome: item.outcome, evidence: item.latestEvidence, stamp: `${item.version ?? ''}|${content}|${item.latestEvidence ?? ''}` }]
-  })
+/** The knot's own header row: as wide as the nearest ancestor that is wider than the knot, just below the knot. */
+export function knotAnchor(from: HTMLElement): RibbonAnchor | null {
+  const knot = from.getBoundingClientRect()
+  let node: HTMLElement | null = from.parentElement
+  while (node !== null && node !== document.body) {
+    const rect = node.getBoundingClientRect()
+    if (rect.width > knot.width * 4 && rect.width >= 240) return { left: rect.left, top: Math.max(rect.bottom, knot.bottom), width: rect.width }
+    node = node.parentElement
+  }
+  return null
 }
 
 export function LessonKnot({ bus, openPanel, sessionId, t }: LessonKnotProps) {
@@ -69,7 +71,12 @@ export function LessonKnot({ bus, openPanel, sessionId, t }: LessonKnotProps) {
     if (sessionId === undefined) return
     const publish = (): void => {
       const el = ref.current
-      bus.publish({ sessionId, lessons, anchor: el === null ? null : headerAnchor(el) })
+      // Real-host fix: the header, else the knot's own row, else the viewport top — the ribbon always has a place.
+      const picked = pickAnchor([
+        { source: 'header', anchor: el === null ? null : headerAnchor(el) },
+        { source: 'knot', anchor: el === null ? null : knotAnchor(el) },
+      ], window.innerWidth)
+      bus.publish({ sessionId, lessons, anchor: picked.anchor, anchorSource: picked.source })
     }
     publish()
     window.addEventListener('resize', publish)
