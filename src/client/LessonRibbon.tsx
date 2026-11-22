@@ -69,8 +69,9 @@ function useRibbonState(bus: RibbonBus, targetSession: () => string | null, subs
 
 /**
  * Text that scrolls sideways when it does not fit (owner 2026-11-22「文本显示不全时，需要滚动」): pause, scroll to the
- * end, pause, back; it reports one pass's length so the lane waits for it. Text that fits stays still. Reduced motion:
- * no scrolling, the ellipsis and the hover title remain.
+ * end, pause, back; it reports one pass's length so the lane waits for it. Text that fits stays still. Hovering pauses
+ * it. Reduced motion keeps it scrolling (owner 2026-11-22, #74: the text must be readable in full); only the decorative
+ * sway, unfurl and roll-in stop.
  */
 function Marquee({ text, className, onPass }: { text: string; className: string | undefined; onPass: (ms: number) => void }) {
   const box = useRef<HTMLSpanElement>(null)

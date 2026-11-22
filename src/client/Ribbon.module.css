@@ -127,6 +127,8 @@
 .run { display: inline-block; }
 .scrolling { text-overflow: clip; }
 .scrolling .run { animation: marquee var(--marquee-ms) linear infinite; }
+/* Hovering a lane pauses its scrolling text (and its rotation, in LessonRibbon), so moving text can always be stopped. */
+.ribbon:hover .run { animation-play-state: paused; }
 
 @keyframes marquee {
   0%, 12% { transform: translateX(0); }
@@ -234,8 +236,8 @@
 .knotRight { background: #2f6fd6; }
 
 @media (prefers-reduced-motion: reduce) {
-  /* Decorative motion off; the marquee stays (owner 2026-11-22: text that does not fit
-     must still scroll under reduced motion — the hover pause satisfies the pause rule). */
+  /* Decorative motion off; the marquee stays (owner 2026-11-22, #74: text that does not fit
+     must still scroll under reduced motion). Hovering pauses it — see .ribbon:hover .run above. */
   .ribbon, .unfurl, .face { animation: none; }
   .scrolling { text-overflow: clip; }
 }
