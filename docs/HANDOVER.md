@@ -29,6 +29,7 @@ DSH（DeepSeek Harness）的提示词模板库插件：悬浮面板 + 右侧栏 
 - 验证后保持与空转提示（2026-11-21，属主裁定）：`lesson_keep` 带证据关闭唤起轮、文字不变；同一条连续 3 次无实质变化的改写在面板标「空转」，不拦。见 spec-lesson-inject 5.9。
 - 同类情境再犯（2026-11-21，回路图 B4a）：体会观测把与线索相符的调用记进 `lesson_hits`（不升 schema），按唤起前后统计失败；路由与面板只读显示，卡片行合计。见 spec-lesson-inject 5.10。
 - 体会的证据引用（2026-11-21，回路图 B2b）：`lesson_write` 可选 `evidence`（一行 ≤200 字），存 `lesson_evidence`（不升 schema），时间线、路由与面板「证据」徽标可见；插件不核实证据。见 spec-lesson-inject 5.11。
+- 体会改为「告诉它」（2026-11-22，属主定 §5.16）：开工、恢复、压缩后把本会话全部体会一次交给模型（`delivered`，≤1600 字）；撤掉按情境唤起、唤起轮次与 `lesson_pin`；`lesson_keep` 与外部结论不再要求唤起轮；`lesson_write` 加可选 `outcome`（wrong/right，存 `lesson_outcomes`，不升 schema）。面板会话模板里体会单独成行；对话头部下面常挂体会飘带（`shell.overlay` 加一项，头部右侧小结在 `conversation.session.header.utilities` 加一项，src/client/ribbon.ts、LessonRibbon.tsx、LessonKnot.tsx）。
 - 模型工具注册（src/tool-registry.ts，#43）：`lesson_write`、`selfcheck_write`、`selfcheck_conclude` 经 `ctx.inject(['tools'], …)` 在宿主 tools 服务就绪后注册。0.17.0／0.18.0 在加载时直接 `ctx.get('tools')`，真实宿主上服务尚未激活时三者静默缺席（测试宿主 2026-11-21 实测）。插件不在顶层声明 `inject`：本版 cordis 没有可选依赖，声明了会让没有 tools 的宿主整个插件不加载。第二层（#46）：真实 ToolRuntime 要求每个定义带 `output { schema, render }`，缺了就抛错且被宿主吞掉；三处注册都经 `withOutput()` 补上，`tests/tool-contract.test.ts` 用真实 ToolRuntime 校验（单元测试里的假注册器接受任何形状，拦不住这类问题）。第三层（2026-11-21 真机复验）：原始 `register()` 把 `parameters` 原样交给模型，只有 `defineTool()` 才编译 `{ name: { type, required } }` 属性表；三处工具现经 `objectParameters()` 声明真正的对象 schema（`type: object` + `properties` + `required`），否则模型看不到 `text`，`lesson_write` 收到 `{}` 或猜成 `lesson`（#50 的现象）。契约测试加载插件本身、读真实 `schemas()` 断言形状。
 
 ## 3. 开发回路
