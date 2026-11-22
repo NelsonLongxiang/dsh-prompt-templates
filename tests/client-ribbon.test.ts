@@ -150,4 +150,5 @@ test('text that does not fit scrolls, and the lane waits for one full pass', asy
   // Owner 2026-11-22: the marquee stays under reduced motion (text completeness first; the hover pause satisfies the pause rule).
   assert.doesNotMatch(style, /prefers-reduced-motion[\s\S]{0,200}\.scrolling \.run[\s\S]{0,80}animation: none/, 'reduced motion: the marquee still scrolls')
   assert.match(style, /prefers-reduced-motion[\s\S]*\.ribbon, \.unfurl, \.face[\s\S]*animation: none/, 'reduced motion: decorative sway/unfurl/roll still off')
+  assert.match(style, /\.ribbon:hover \.run \{ animation-play-state: paused; \}/, 'hovering a lane pauses its scrolling text, so moving text can be stopped')
 })
