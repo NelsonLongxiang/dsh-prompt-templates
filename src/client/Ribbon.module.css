@@ -1,0 +1,204 @@
+/* §5.16 lesson ribbon: hazard tape for wrong, a sash for right, plain for untagged; a tab hangs below with the evidence. */
+.sky {
+  position: fixed;
+  z-index: 30;
+  pointer-events: none;
+  padding-top: 6px;
+  --tail: #6b7080;
+}
+
+.ribbon {
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  margin-right: 24px;
+  animation: sway 3.2s ease-in-out infinite;
+}
+
+@keyframes sway {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(2px); }
+}
+
+.band {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  height: 32px;
+  padding: 0 8px 0 12px;
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.3);
+  overflow: hidden;
+}
+
+.unfurl { animation: unfurl 0.8s cubic-bezier(0.2, 0.9, 0.3, 1) both; }
+
+@keyframes unfurl {
+  from { clip-path: inset(0 100% 0 0); }
+  to { clip-path: inset(0 0 0 0); }
+}
+
+.face {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+  animation: rollin 0.45s ease-out both;
+}
+
+@keyframes rollin {
+  from { transform: translateY(110%); opacity: 0; }
+  to { transform: none; opacity: 1; }
+}
+
+.sign {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.tag {
+  flex: none;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+.text {
+  font-size: 12.5px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.pager {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.dot, .dotOn {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.35;
+}
+
+.dotOn { opacity: 1; }
+
+.fold, .unfold {
+  flex: none;
+  border: none;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 4px;
+  pointer-events: auto;
+}
+
+.tab {
+  margin-left: 40px;
+  max-width: calc(100% - 80px);
+  padding: 3px 10px;
+  border-radius: 0 0 6px 6px;
+  background: #0f0f11;
+  color: #d4d4da;
+  font-family: "SF Mono", "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-shadow: 0 6px 12px rgba(0, 0, 0, 0.3);
+}
+
+/* Wrong: hazard tape. */
+.hazard .band { background: #f2b705; color: #141414; }
+.hazard .band::before,
+.hazard .band::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 4px;
+  background: repeating-linear-gradient(-45deg, #141414 0 7px, transparent 7px 14px);
+}
+.hazard .band::before { top: 0; }
+.hazard .band::after { bottom: 0; }
+.hazard .sign { background: #141414; color: #f2b705; clip-path: polygon(50% 0, 100% 100%, 0 100%); padding-top: 4px; }
+.hazard .tag { background: #141414; color: #f2b705; }
+.hazard .thin { background: repeating-linear-gradient(-45deg, #f2b705 0 6px, #141414 6px 12px); }
+
+/* Right: a sash. */
+.sash .band { background: linear-gradient(180deg, #3b7ce6, #2f6fd6 55%, #1f4fa6); color: #fff; }
+.sash .band::after { content: ""; position: absolute; inset: 4px 6px; border: 1px dashed rgba(255, 255, 255, 0.45); pointer-events: none; }
+.sash .sign { background: #fff; color: #1f4fa6; border-radius: 50%; }
+.sash .tag { background: #fff; color: #1f4fa6; }
+.sash .thin { background: #2f6fd6; }
+
+/* Untagged: plain. */
+.plain .band { background: #4a4f5c; color: #f1f2f5; }
+.plain .sign { background: rgba(255, 255, 255, 0.15); border-radius: 50%; }
+.plain .tag { background: rgba(255, 255, 255, 0.15); }
+.plain .thin { background: #6b7080; }
+
+.thin {
+  pointer-events: auto;
+  height: 6px;
+  margin-right: 24px;
+}
+
+.unfold {
+  position: absolute;
+  right: 28px;
+  top: 10px;
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary, #888);
+}
+
+/* Header knot. */
+.knot, .knotEmpty {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 8px;
+  border: 1px solid var(--dsw-alias-border-inverted, rgba(127, 127, 127, 0.3));
+  border-radius: 999px;
+  background: none;
+  color: var(--dsw-alias-label-secondary, inherit);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.knotEmpty { visibility: hidden; width: 0; padding: 0; border: 0; overflow: hidden; }
+
+.knotWrong, .knotRight {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  margin-left: 2px;
+}
+
+.knotWrong { background: repeating-linear-gradient(-45deg, #f2b705 0 3px, #141414 3px 6px); }
+.knotRight { background: #2f6fd6; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ribbon, .unfurl, .face { animation: none; }
+}

@@ -69,6 +69,8 @@ const PEER_SLOTS = {
   'shell.overlay': 'node_modules/@deepseek-ai/dsh-client-ui-layout/lib/types/client/index.d.ts',
   'conversation.input.right': 'node_modules/@deepseek-ai/dsh-client-ui-conversation/lib/types/client/contract/slots.d.ts',
   'sidebar.right.pane.tab': 'node_modules/@deepseek-ai/dsh-client-ui-sidebar-right/lib/types/client/contract/slots.d.ts',
+  // §5.16 lesson ribbon: the header knot is appended to this list slot (the real registry waits on an older host).
+  'conversation.session.header.utilities': 'node_modules/@deepseek-ai/dsh-client-ui-conversation/lib/types/client/contract/slots.d.ts',
 } as const
 
 interface PatchRow {
@@ -395,8 +397,16 @@ test('client plugin loads against declared 0.2 slots, locale, and the sidebar ta
     assert.equal(promptTemplates.en['panel.open'], 'Open prompt panel')
     assert.equal(promptTemplates.zh['tab.title'], '提示词')
 
-    const overlay = core.entries('shell.overlay')
-    assert.equal(overlay.length, 1)
+    const overlays = core.entries('shell.overlay')
+    assert.deepEqual(overlays.map(entry => entry.options.id).sort(), ['prompt-templates', 'prompt-templates-lesson-ribbon'], 'the ribbon is added beside the panel, replacing nothing')
+    const overlay = overlays.filter(entry => entry.options.id === 'prompt-templates')
+    const ribbon = overlays.find(entry => entry.options.id === 'prompt-templates-lesson-ribbon')
+    assert.equal(typeof (ribbon?.inject?.() as { bus?: { get?: unknown } } | undefined)?.bus?.get, 'function')
+    const knot = core.entries('conversation.session.header.utilities')
+    assert.equal(knot.length, 1)
+    assert.equal(knot[0]?.options.id, 'prompt-templates-lesson-knot')
+    assert.equal(specs['conversation.session.header.utilities']?.kind, 'list')
+    assert.equal(specs['conversation.session.header.utilities']?.scope, 'session')
     assert.equal(overlay[0]?.options.id, 'prompt-templates')
     assert.equal(overlay[0]?.locale, 'promptTemplates')
     assert.equal(typeof overlay[0]?.store, 'function', 'shell.overlay must register the store factory, not a shared handle')

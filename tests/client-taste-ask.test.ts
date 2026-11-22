@@ -41,10 +41,12 @@ test('lessonTypeOf strips the 体会· prefix and leaves other names alone', () 
   assert.equal(lessonTypeOf('other'), 'other')
 })
 
-test('the panel inserts the ask (never sends it) and offers it on pinned lessons or lessons with a closed round', () => {
+test('the panel inserts the ask (never sends it) and offers ⚖ on every lesson (§5.16), with no pin toggle left', () => {
   const src = readFileSync(new URL('../src/client/Library.tsx', import.meta.url), 'utf8')
   const handler = src.slice(src.indexOf('const handleTasteAsk'), src.indexOf('const handleSend'))
   assert.match(handler, /insert\(sessionId, buildTasteAsk\(/)
   assert.doesNotMatch(handler, /\b(send|interject)\(/)
-  assert.match(src, /pin\.onTasteAsk !== undefined && \(pin\.pinned \|\| \(pin\.rounds\?\.closed \?\? 0\) > 0\)/)
+  assert.match(src, /\{pin !== undefined && pin\.onTasteAsk !== undefined && \(/)
+  assert.match(src, /onTasteAsk=\{\(\) => \{ handleTasteAsk\(row\) \}\}/, 'the 会话模板 lesson row has ⚖ too')
+  assert.doesNotMatch(src, /📌|setLessonPinned|handleTogglePin/, 'the pin toggle is gone')
 })

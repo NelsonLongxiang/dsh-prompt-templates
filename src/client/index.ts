@@ -43,6 +43,9 @@ import {
 } from './api.ts'
 import { PromptPanel } from './Panel.tsx'
 import { PanelButton } from './PanelButton.tsx'
+import { LessonKnot, type LessonKnotFace } from './LessonKnot.tsx'
+import { LessonRibbon, type LessonRibbonFace } from './LessonRibbon.tsx'
+import { RibbonBus } from './ribbon.ts'
 import { PromptTab } from './PromptTab.tsx'
 import { PROMPT_TEMPLATES_ID, promptTemplatesTabDefinition } from './tab.ts'
 import { createPromptPanelPrefsStore, createPromptPanelStore } from './store.ts'
@@ -180,6 +183,28 @@ export function apply(ctx: ClientContext): void {
       return panelFace
     },
   }, PromptPanel))
+
+  // §5.16 lesson ribbon: the header knot (session scope) fetches the visible session's lessons and measures where the
+  // conversation header ends; the overlay entry draws the always-on ribbon there. Both are additions to list slots:
+  // nothing of the host's own rows or buttons is replaced.
+  const ribbonBus = new RibbonBus()
+  ctx.slots.inject('shell.overlay', () => ctx.slots.register({
+    name: 'shell.overlay',
+    id: 'prompt-templates-lesson-ribbon',
+    order: 20,
+    locale: NS,
+    inject: (): LessonRibbonFace => ({ bus: ribbonBus }),
+  }, LessonRibbon))
+  ctx.slots.inject('conversation.session.header.utilities', () => ctx.slots.register({
+    name: 'conversation.session.header.utilities',
+    id: 'prompt-templates-lesson-knot',
+    order: 50,
+    locale: NS,
+    inject: (): LessonKnotFace => ({
+      bus: ribbonBus,
+      openPanel: (sessionId: string) => { controller.setTargetSession(sessionId as SessionId); controller.toggle() },
+    }),
+  }, LessonKnot))
 
   // The composer entry: session scope, attaches the panel to this composer's
   // session at click time and toggles it via the controller.
