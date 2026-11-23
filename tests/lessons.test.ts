@@ -618,6 +618,23 @@ test('card rounds: without the lesson tools the round is not applicable (never o
   } finally { w.store.close() }
 })
 
+test('card rounds: one session ending a round on a card key never ends another session\'s round on the same key (#78 review X5)', () => {
+  const w = world()
+  try {
+    const B = 'sess-2'
+    const cards = [{ id: 'c-x', name: '工坊-行动审视', version: null }]
+    assert.ok(openCardRound(w.store, B, 1, cards)?.includes('必须用 lesson_write'))
+    assert.ok(openCardRound(w.store, B, 3, cards)?.includes('必须用 lesson_write'))
+    // Session A on the same turns and card keys: not applicable on card:1, opened and closed by lesson_none on card:3.
+    openCardRound(w.store, S, 1, cards, { lessonToolsMissing: true })
+    assert.ok(openCardRound(w.store, S, 3, cards)?.includes('必须用 lesson_write'))
+    assert.notEqual((lessonNone(w.store, S, '无可记', 3) as { code?: string }).code, 'no-card-round')
+    assert.equal(w.store.lessons.openCardRounds(S).length, 0)
+    assert.deepEqual(w.store.lessons.openCardRounds(B).map(round => round.key), ['card:1', 'card:3'], 'B\'s rounds stay open')
+    assert.deepEqual(w.store.lessons.cardStats(B).map(card => ({ na: card.na, none: card.none, missed: card.missed })), [{ na: 0, none: 0, missed: 0 }])
+  } finally { w.store.close() }
+})
+
 test('host: a workshop card for a session without the lesson tools carries the not-applicable line; with the tools or with no readable scope, the usual round', async () => {
   await withHost({ lessons: { enabled: true } }, async (ctx, route) => {
     await request(route, `${BASE}/categories`, 'POST', { name: '工坊', scope: 'global', session_id: null })
