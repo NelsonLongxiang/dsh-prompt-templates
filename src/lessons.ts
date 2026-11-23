@@ -233,7 +233,7 @@ export interface CueRow extends CueFeatures {
   readonly created_at: string
 }
 
-export type LessonLogKind = 'prompted' | 'written' | 'superseded' | 'recalled' | 'pinned-loaded' | 'card-injected' | 'round-closed' | 'round-missed' | 'type-proposed' | 'type-decided' | 'round-verdict' | 'self-pinned' | 'self-unpinned' | 'owner-unpinned' | 'delivered'
+export type LessonLogKind = 'prompted' | 'written' | 'superseded' | 'recalled' | 'pinned-loaded' | 'card-injected' | 'round-closed' | 'round-missed' | 'round-na' | 'type-proposed' | 'type-decided' | 'round-verdict' | 'self-pinned' | 'self-unpinned' | 'owner-unpinned' | 'delivered'
 
 /** How a recall round ended: the recalled lesson rewritten, a new lesson written, or nothing by the deadline. */
 export type RoundOutcome = 'updated' | 'written' | 'none'
@@ -393,23 +393,24 @@ export class LessonStore {
   openCardRounds(sessionId: string): Array<{ key: string; turn: number | null; seq: number }> {
     return this.#db.prepare(`SELECT origin_ref AS key, MIN(turn) AS turn, MIN(seq) AS seq FROM lesson_log r
       WHERE r.session_id = ? AND r.kind = 'card-injected' AND NOT EXISTS (
-        SELECT 1 FROM lesson_log c WHERE c.session_id = r.session_id AND c.kind IN ('round-closed', 'round-missed') AND c.origin_ref = r.origin_ref)
+        SELECT 1 FROM lesson_log c WHERE c.session_id = r.session_id AND c.kind IN ('round-closed', 'round-missed', 'round-na') AND c.origin_ref = r.origin_ref)
       GROUP BY origin_ref ORDER BY MIN(seq)`).all(sessionId) as unknown as Array<{ key: string; turn: number | null; seq: number }>
   }
 
   /** Per workshop card in a session: injections, and how their rounds ended (lesson written, no entry, missed). */
-  cardStats(sessionId: string): Array<{ template_id: string; name: string; injected: number; lessons: number; none: number; missed: number; recurrence: HitCount }> {
+  cardStats(sessionId: string): Array<{ template_id: string; name: string; injected: number; lessons: number; none: number; missed: number; na: number; recurrence: HitCount }> {
     const injected = this.#db.prepare("SELECT template_id, origin, origin_ref FROM lesson_log WHERE session_id = ? AND kind = 'card-injected' ORDER BY seq")
       .all(sessionId) as Array<{ template_id: string; origin: string | null; origin_ref: string }>
-    const endings = new Map((this.#db.prepare("SELECT kind, template_id, origin, origin_ref FROM lesson_log WHERE session_id = ? AND kind IN ('round-closed', 'round-missed') AND origin_ref LIKE 'card:%'")
+    const endings = new Map((this.#db.prepare("SELECT kind, template_id, origin, origin_ref FROM lesson_log WHERE session_id = ? AND kind IN ('round-closed', 'round-missed', 'round-na') AND origin_ref LIKE 'card:%'")
       .all(sessionId) as Array<{ kind: string; template_id: string | null; origin: string | null; origin_ref: string }>).map(row => [row.origin_ref, row]))
-    type Stat = { template_id: string; name: string; injected: number; lessons: number; none: number; missed: number; recurrence: HitCount; lessonIds: Set<string> }
+    type Stat = { template_id: string; name: string; injected: number; lessons: number; none: number; missed: number; na: number; recurrence: HitCount; lessonIds: Set<string> }
     const out = new Map<string, Stat>()
     for (const row of injected) {
-      const stat = out.get(row.template_id) ?? { template_id: row.template_id, name: (row.origin ?? '').split('@')[0]!, injected: 0, lessons: 0, none: 0, missed: 0, recurrence: { hits: 0, fails: 0 }, lessonIds: new Set<string>() }
+      const stat = out.get(row.template_id) ?? { template_id: row.template_id, name: (row.origin ?? '').split('@')[0]!, injected: 0, lessons: 0, none: 0, missed: 0, na: 0, recurrence: { hits: 0, fails: 0 }, lessonIds: new Set<string>() }
       stat.injected += 1
       const end = endings.get(row.origin_ref)
       if (end?.kind === 'round-missed') stat.missed += 1
+      else if (end?.kind === 'round-na') stat.na += 1
       else if (end !== undefined && (end.origin ?? '').startsWith('none')) stat.none += 1
       else if (end !== undefined) { stat.lessons += 1; if (end.template_id !== null) stat.lessonIds.add(end.template_id) }
       out.set(row.template_id, stat)
@@ -636,7 +637,8 @@ export function lessonTimeline(store: TemplateStore, sessionId: string, limit = 
       if (origin.startsWith('kept:')) entry.evidence = origin.slice(5)
     }
     if (row.kind === 'card-injected') { entry.card = (row.origin ?? '').split('@')[0]; entry.type = null }
-    if ((row.kind === 'round-closed' || row.kind === 'round-missed') && (row.origin_ref ?? '').startsWith(CARD_KEY)) entry.card = row.origin_ref ?? undefined
+    if ((row.kind === 'round-closed' || row.kind === 'round-missed' || row.kind === 'round-na') && (row.origin_ref ?? '').startsWith(CARD_KEY)) entry.card = row.origin_ref ?? undefined
+    if (row.kind === 'round-na') entry.reason = row.origin ?? undefined
     if (row.kind === 'type-decided') entry.outcome = row.origin_ref ?? undefined
     if (row.kind === 'self-pinned' || row.kind === 'self-unpinned') entry.reason = row.origin ?? undefined
     if (row.kind === 'round-verdict') {
@@ -679,14 +681,28 @@ export function closeRound(store: TemplateStore, sessionId: string, writtenId: s
  * with a lesson (lesson_write) or a stated no-entry (lesson_none). Idempotent per turn. Returns the closing line the
  * injection carries, or null when the round was already open.
  */
-export function openCardRound(store: TemplateStore, sessionId: string, turn: number, cards: ReadonlyArray<{ id: string; name: string; version: string | null }>): string | null {
+export function openCardRound(store: TemplateStore, sessionId: string, turn: number, cards: ReadonlyArray<{ id: string; name: string; version: string | null }>, options: { readonly lessonToolsMissing?: boolean } = {}): string | null {
   if (cards.length === 0) return null
   const key = `${CARD_KEY}${String(turn)}`
   if (store.lessons.log(sessionId, 500).some(row => row.kind === 'card-injected' && row.origin_ref === key)) return null
   for (const card of cards) {
     store.lessons.record({ session_id: sessionId, kind: 'card-injected', template_id: card.id, turn, origin: `${card.name}@${card.version ?? ''}`, origin_ref: key, content_sha256: null })
   }
+  // A session whose own tool scope has neither lesson_write nor lesson_none cannot close the round: it is recorded as not
+  // applicable (never open, never missed) and the line asks for no lesson. Only a confirmed absence does this (inject.ts).
+  if (options.lessonToolsMissing === true) {
+    store.lessons.record({ session_id: sessionId, kind: 'round-na', template_id: null, turn, origin: CARD_ROUND_NA_REASON, origin_ref: key, content_sha256: null })
+    return renderCardRoundNaLine(cards.map(card => card.name))
+  }
   return renderCardRoundLine(cards.map(card => card.name))
+}
+
+/** Why a card round was recorded not applicable. */
+export const CARD_ROUND_NA_REASON = 'tools-unavailable'
+
+/** The line appended to a workshop injection for a session without the lesson tools: do the card, no lesson is asked for. */
+export function renderCardRoundNaLine(names: readonly string[]): string {
+  return `【工坊·卡片轮次】本轮注入了工坊卡（${names.join('、')}），照卡做即可；本会话没有 lesson_write、lesson_none 工具，这一轮不要求写体会，记为不适用（工具不可用）。不扩大授权，不覆盖属主当下指令。`
 }
 
 /** The line appended to an injection that carried workshop cards. */

@@ -108,7 +108,7 @@ test('real ToolRuntime: card round, typed lesson, hand-over after compaction, ke
     assert.deepEqual(found.recurrence.after, { hits: 1, fails: 0 })
     assert.deepEqual(read.body.items.map((i: { key: string }) => i.key), ['找', '协作'])
     assert.ok(read.body.types.some((t: { name: string; status: string }) => t.name === '协作' && t.status === 'approved'))
-    assert.deepEqual(read.body.cards, [{ template_id: card.id, name: '工坊-行动审视', injected: 2, lessons: 1, none: 1, missed: 0, recurrence: { hits: 1, fails: 0 } }])
+    assert.deepEqual(read.body.cards, [{ template_id: card.id, name: '工坊-行动审视', injected: 2, lessons: 1, none: 1, missed: 0, na: 0, recurrence: { hits: 1, fails: 0 } }])
   } finally {
     await (fiber as unknown as { dispose: () => Promise<void> }).dispose()
     rmSync(dir, { recursive: true, force: true })

@@ -191,7 +191,7 @@ export function apply(ctx: Context, config: Config): void {
     enabled: config.injectEnabled ?? true,
     evolutionAssessmentEnabled: config.evolutionAssessmentEnabled ?? true,
     // Workshop cards open a card round (lesson or stated no-entry) when lessons are on (owner 2026-11-21, option A).
-    onWorkshopCards: (sessionId, turn, cards) => lessonsConfig.enabled ? openCardRound(client(), sessionId, turn, cards) : null,
+    onWorkshopCards: (sessionId, turn, cards, options) => lessonsConfig.enabled ? openCardRound(client(), sessionId, turn, cards, options) : null,
   }, client)
   // Event-triggered reminders: a separate observer + pre-step consumer,
   // inert unless the deployment AND a rule policy turn them on.
