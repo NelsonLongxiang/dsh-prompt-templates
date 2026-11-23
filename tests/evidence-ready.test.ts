@@ -127,9 +127,11 @@ test('#82 review R3: appended but the flush throws, has no durable listener, or 
 
 test('#82 review R3: prepared before a restart cannot be proven by this process: unknown, never resent', async () => {
   const first = await harness(true)
-  const a2a = await first.callerCtx(A2A)
-  a2a.promptTemplates.evidenceReady({ sessionId: 's1', ...REF })
-  assert.equal(first.ours(await first.preStep('s1', 1, 1)).length, 1)
+  try {
+    const a2a = await first.callerCtx(A2A)
+    a2a.promptTemplates.evidenceReady({ sessionId: 's1', ...REF })
+    assert.equal(first.ours(await first.preStep('s1', 1, 1)).length, 1)
+  } catch (error) { await first.dispose(); throw error }
   await first.close()
   const second = await harness(true, first.dir)
   try {
