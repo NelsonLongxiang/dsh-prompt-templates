@@ -50,6 +50,7 @@ import type { InjectionStatusView } from './inject.ts'
 import { DEFAULT_INJECT_MAX_EVERY, SCHEMA_VERSION, TemplateRuleError, TemplateStore } from './store.ts'
 import { INTERVENTION_SOURCES, MANUAL_METHODS, contentDigest, type InterventionSource, type ManualMethod } from './interventions.ts'
 import { registerCast, type PromptTemplatesService } from './cast.ts'
+import { registerEvidenceReady } from './evidence-ready.ts'
 import { registerSelfCheck } from './self-check.ts'
 import { BUILTIN_LESSON_TYPES, DEFAULT_LESSONS_CONFIG, attachVerdict, decideLessonType, lessonChurn, lessonsOf, openCardRound, pinLesson, registerLessons, type LessonsConfig } from './lessons.ts'
 
@@ -205,6 +206,8 @@ export function apply(ctx: Context, config: Config): void {
   const lessonsConfig: LessonsConfig = { ...DEFAULT_LESSONS_CONFIG, ...config.lessons }
   registerLessons(ctx, client, () => lessonsConfig)
   registerEventInject(ctx, eventInjectConfig, () => client().events, () => client().interventions)
+  // #81: evidence-ready reminders at the next actionable step; off with casting (cast.enabled).
+  registerEvidenceReady(ctx, () => client().evidence, () => config.cast?.enabled === true, () => client().interventions)
 
   // B5b: host-side evidence of what is loaded — read once when the host applies the plugin.
   const loaded = { ...loadedPackage(), loaded_at: new Date().toISOString() }

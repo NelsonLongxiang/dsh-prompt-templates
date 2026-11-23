@@ -18,6 +18,7 @@ import { PLUGIN_CALLERS, contentDigest, type InterventionSource, type Interventi
 import type { LibraryCard, TemplateStore } from './store.ts'
 import type { SelfCheckRow } from './self-check.ts'
 import { expandTemplateVariables } from './variables.ts'
+import { EVIDENCE_QUEUE_MAX, type EvidenceRow, type EvidenceState } from './evidence-ready.ts'
 
 /** The service name other plugins read: `ctx.promptTemplates`. */
 export const SERVICE_NAME = 'promptTemplates'
@@ -61,7 +62,15 @@ export interface PromptTemplatesService {
   /** Whether the wrap-up self-check is on in this deployment (a reader must not take an empty log for a missing check when it is off). */
   selfCheckEnabled(): boolean
   cast(input: { sessionId: string; templateId: string; reason: string }): CastResult
+  /** #81: hand in one evidence reference for a session's next actionable step (recognized caller, cast.enabled). */
+  evidenceReady(input: { sessionId: string; ticketId: string; version: string; ref: string; action: string }): EvidenceReadyResult
+  /** #81: read back one session's references and their states (recognized caller only). */
+  evidenceReadyStatus(input: { sessionId: string; ticketId?: string }): EvidenceStatusResult
 }
+
+/** What handing in an evidence reference returns. A repeat returns the existing row's state, never resets it. */
+export type EvidenceReadyResult = { ok: true; id: string; state: EvidenceState; created: boolean } | { ok: false; code: 'disabled' | 'caller' | 'session' | 'field' | 'full'; error: string }
+export type EvidenceStatusResult = { ok: true; items: EvidenceRow[] } | { ok: false; code: 'caller' | 'session'; error: string }
 
 /** Casts waiting across all sessions, at most, and how long one waits before it is dropped. */
 export const CAST_QUEUE_TOTAL_MAX = 256
@@ -90,6 +99,12 @@ export function renderCastMessage(turn: number, step: number, cards: readonly Qu
     }],
     source: { kind: 'user', scheduled: 'prompt-template-cast', turn, step, templates: cards.map(card => ({ id: card.templateId, name: card.name, caller: card.caller })) } satisfies CastSource as unknown as UserMessage['source'],
   })
+}
+
+/** A field of an evidence reference (#81): one line, 1..max characters, or undefined. */
+function evidenceField(value: unknown, max: number): string | undefined {
+  const text = oneLine(String(value ?? ''))
+  return text === '' || text.length > max ? undefined : text
 }
 
 /**
@@ -155,6 +170,31 @@ export function registerCast(ctx: Context, store: () => TemplateStore, enabled: 
       queue.push({ templateId: template.id, name: template.name, version: template.version ?? null, content: template.content, caller, reason, at: Date.now() })
       queues.set(sessionId, queue)
       return { ok: true, queued: queue.length }
+    }
+
+    /** #81: one evidence reference for the session's next actionable step. A repeat returns the existing state unchanged. */
+    evidenceReady(input: { sessionId: string; ticketId: string; version: string; ref: string; action: string }): EvidenceReadyResult {
+      if (!enabled()) return { ok: false, code: 'disabled', error: 'casting is off on this host (cast.enabled)' }
+      const caller = callerOf(this.ctx)
+      if (caller === undefined || !PLUGIN_CALLERS.includes(caller)) return { ok: false, code: 'caller', error: 'only a plugin this host recognizes may hand in evidence' }
+      const sessionId = String(input?.sessionId ?? '').trim()
+      if (sessionId === '') return { ok: false, code: 'session', error: 'name the session' }
+      const ticketId = evidenceField(input?.ticketId, 200), version = evidenceField(input?.version, 200), ref = evidenceField(input?.ref, 500), action = evidenceField(input?.action, 300)
+      if (ticketId === undefined || version === undefined || ref === undefined || action === undefined) return { ok: false, code: 'field', error: 'ticketId and version 1..200, ref 1..500, action 1..300 characters, each on one line' }
+      const evidence = store().evidence
+      const existing = evidence.list(sessionId, ticketId).find(row => row.version === version)
+      if (existing === undefined && evidence.waiting(sessionId) >= EVIDENCE_QUEUE_MAX) return { ok: false, code: 'full', error: 'too many references wait for this session' }
+      const { created, row } = evidence.offer({ sessionId, ticketId, version, ref, action, caller }, new Date().toISOString())
+      return { ok: true, id: row.id, state: row.state, created }
+    }
+
+    /** #81: read back one session's references and their states (recognized caller only). */
+    evidenceReadyStatus(input: { sessionId: string; ticketId?: string }): EvidenceStatusResult {
+      const caller = callerOf(this.ctx)
+      if (caller === undefined || !PLUGIN_CALLERS.includes(caller)) return { ok: false, code: 'caller', error: 'only a plugin this host recognizes may read evidence states' }
+      const sessionId = String(input?.sessionId ?? '').trim()
+      if (sessionId === '') return { ok: false, code: 'session', error: 'name the session' }
+      return { ok: true, items: store().evidence.list(sessionId, input?.ticketId === undefined ? undefined : String(input.ticketId)) }
     }
   }
   const service = new Face(ctx) as unknown as PromptTemplatesService

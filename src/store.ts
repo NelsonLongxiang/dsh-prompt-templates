@@ -27,6 +27,7 @@ import { EVENT_MASTER_SQL, EVENT_REPEAT_AFTER_SQL, EVENT_SCHEMA_SQL, EventStore,
 import { INTERVENTIONS_SQL, InterventionLog, contentDigest } from './interventions.ts'
 import { SELF_CHECK_SQL, SelfCheckLog } from './self-check.ts'
 import { LESSONS_SQL, LESSON_EVIDENCE_SQL, LESSON_HITS_SQL, LESSON_OUTCOME_SQL, LESSON_TYPES_SQL, LessonStore } from './lessons.ts'
+import { EVIDENCE_READY_SQL, EvidenceReadyStore } from './evidence-ready.ts'
 
 /** v9: the version label of a template's text. */
 const TEMPLATE_VERSION_SQL = 'ALTER TABLE templates ADD COLUMN version TEXT'
@@ -133,6 +134,8 @@ export class TemplateStore {
   readonly selfChecks: SelfCheckLog
   /** Lesson cues and log (v11). */
   readonly lessons: LessonStore
+  /** Evidence-ready references (#81; additive table, no version bump). */
+  readonly evidence: EvidenceReadyStore
 
   constructor(dbPath: string, options: TemplateStoreOptions = {}) {
     this.#injectMaxEvery = options.injectMaxEvery ?? DEFAULT_INJECT_MAX_EVERY
@@ -196,6 +199,7 @@ export class TemplateStore {
       this.db.exec(LESSON_HITS_SQL)
       this.db.exec(LESSON_EVIDENCE_SQL)
       this.db.exec(LESSON_OUTCOME_SQL)
+      this.db.exec(EVIDENCE_READY_SQL)
       this.db.exec('COMMIT')
       if (dbPath !== ':memory:') {
         try { chmodSync(dbPath, 0o600) } catch { /* best-effort */ }
@@ -204,6 +208,7 @@ export class TemplateStore {
       this.interventions = new InterventionLog(this.db)
       this.selfChecks = new SelfCheckLog(this.db)
       this.lessons = new LessonStore(this.db)
+      this.evidence = new EvidenceReadyStore(this.db)
     } catch (error) {
       // A failed constructor has no owner to close it later. Preserve the
       // original fault even when initialization failed before BEGIN.
