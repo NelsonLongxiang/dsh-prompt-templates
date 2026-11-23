@@ -11,12 +11,14 @@
  *
  * States, durable in `evidence_ready`:
  *   queued     handed in, not yet given to a step
- *   prepared   given to a step; becomes `persisted` once its id is found in the session's durable log
- *   persisted  in the session log (delivered); nothing here claims the model read it or acted on it
+ *   prepared   given to a step; becomes `persisted` once this process saw it appended to the session log and an
+ *              awaited `sessions.flush` (the session store's durability checkpoint) then succeeded
+ *   persisted  appended and flushed to durable storage; nothing here claims the model read it or acted on it
  *   superseded a newer version of the same ticket for that session arrived first
  *   expired    waited longer than EVIDENCE_WAIT_MS without a step
  *   failed     given to EVIDENCE_MAX_ATTEMPTS steps and never found in the log
- *   unknown    prepared, but the session log could not be read to tell
+ *   unknown    prepared, but delivery cannot be proven: the flush failed or had no durable listener, there is no
+ *              session store, or it was prepared before this process started (a restart); never resent
  * A repeat of the same (session, ticket, version) adds nothing and never turns a delivered one back into undelivered.
  * @module dsh-prompt-templates/evidence-ready
  */
@@ -140,16 +142,15 @@ export class EvidenceReadyStore {
   }
 }
 
-/** The ids of evidence reminders found in a session's durable log. */
-export function deliveredEvidenceIds(events: readonly InjectionEventProbe[]): Set<string> {
-  const ids = new Set<string>()
-  for (const event of events) {
-    if (event?.type !== 'user/message') continue
-    const source = event.data.source as { kind?: unknown; scheduled?: unknown; items?: unknown } | undefined
-    if (source?.kind !== 'user' || source.scheduled !== EVIDENCE_SCHEDULED || !Array.isArray(source.items)) continue
-    for (const item of source.items as Array<{ id?: unknown }>) if (typeof item?.id === 'string') ids.add(item.id)
-  }
-  return ids
+/** What reconcile knows about one prepared reference. */
+export type DeliveryVerdict = 'persisted' | 'absent' | 'unknown'
+
+/** Whether a session event is one of ours, and which reference ids it carries. */
+export function evidenceIdsOf(event: InjectionEventProbe | undefined): string[] {
+  if (event?.type !== 'user/message') return []
+  const source = event.data.source as { kind?: unknown; scheduled?: unknown; items?: unknown } | undefined
+  if (source?.kind !== 'user' || source.scheduled !== EVIDENCE_SCHEDULED || !Array.isArray(source.items)) return []
+  return (source.items as Array<{ id?: unknown }>).flatMap(item => typeof item?.id === 'string' ? [item.id] : [])
 }
 
 /** The visible message for one step's references. */
@@ -169,17 +170,18 @@ export function renderEvidenceMessage(turn: number, step: number, rows: readonly
 }
 
 /**
- * Reconcile, then pick this step's references. `events` is null when the session log cannot be read: prepared ones
- * then become `unknown`, never sent again blindly. Exported for tests; the host path is the listener below.
+ * Reconcile, then pick this step's references. `verdictOf` says what is known about each prepared one: persisted
+ * (appended and flushed), absent (prepared here and never appended: given again, bounded), or unknown (never resent).
+ * Exported for tests; the host path is the listener below.
  */
-export function prepareEvidence(store: EvidenceReadyStore, sessionId: string, turn: number, step: number, events: readonly InjectionEventProbe[] | null, now: number): EvidenceRow[] {
+export function prepareEvidence(store: EvidenceReadyStore, sessionId: string, turn: number, step: number, verdictOf: (row: EvidenceRow) => DeliveryVerdict, now: number): EvidenceRow[] {
   const at = new Date(now).toISOString()
   const prepared = store.inState(sessionId, 'prepared')
   if (prepared.length > 0) {
-    const seen = events === null ? null : deliveredEvidenceIds(events)
     for (const row of prepared) {
-      if (seen === null) store.setState(row.id, 'unknown', at)
-      else if (seen.has(row.id)) store.setState(row.id, 'persisted', at)
+      const verdict = verdictOf(row)
+      if (verdict === 'persisted') store.setState(row.id, 'persisted', at)
+      else if (verdict === 'unknown') store.setState(row.id, 'unknown', at)
       else if (store.replaced(row)) store.setState(row.id, 'superseded', at)
       else if (row.attempts >= EVIDENCE_MAX_ATTEMPTS) store.setState(row.id, 'failed', at)
       else store.setState(row.id, 'queued', at)
@@ -195,21 +197,44 @@ export function prepareEvidence(store: EvidenceReadyStore, sessionId: string, tu
   return chosen
 }
 
-/** Register the pre-step listener. Pass-through while `enabled()` is false; a fault is reported once and never fails a step. */
+/**
+ * Register the listeners. Pass-through while `enabled()` is false; a fault is reported once and never fails a step.
+ * Delivery is proven in this process only: a `session/event` append of our message, then an awaited
+ * `sessions.flush(session)` that resolves true (at least one durability listener, all settled; dsh-session 0.2.1-rc.2
+ * `SessionStore.flush`). No synchronous session log read is used. Anything that cannot be proven is unknown.
+ */
 export function registerEvidenceReady(ctx: Context, store: () => EvidenceReadyStore, enabled: () => boolean, interventions?: () => InterventionLog): void {
   let faultReported = false
+  const appended = new Map<string, Set<string>>()
+  const preparedHere = new Set<string>()
+  ctx.on('session/event' as never, ((session: { header?: { id?: unknown }; id?: unknown }, event: InjectionEventProbe) => {
+    try {
+      const ids = evidenceIdsOf(event)
+      if (ids.length === 0) return
+      const sessionId = String(session?.header?.id ?? session?.id ?? '')
+      const seen = appended.get(sessionId) ?? new Set<string>()
+      for (const id of ids) seen.add(id)
+      appended.set(sessionId, seen)
+    } catch { /* an observer never fails an append */ }
+  }) as never)
   ctx.on('agent/pre-step', async ({ agent, turn, step, signal }, next): Promise<PreStepDecision> => {
     const decision = await next()
     if (decision.kind === 'reject' || signal?.aborted === true || !enabled()) return decision
     try {
       const sessionId = String(agent.session.header.id)
-      const session = agent.session as unknown as { snapshotEvents?: () => readonly InjectionEventProbe[]; events?: readonly InjectionEventProbe[] }
-      // A log that cannot be read, whether missing or throwing, is null: prepared references become unknown, never resent.
-      let events: readonly InjectionEventProbe[] | null
-      try { events = typeof session.snapshotEvents === 'function' ? session.snapshotEvents() : (session.events ?? null) } catch { events = null }
       const stepNo = typeof step === 'number' ? step : 1
-      const rows = prepareEvidence(store(), sessionId, turn, stepNo, events, Date.now())
+      let durable = false
+      if (store().inState(sessionId, 'prepared').length > 0) {
+        try {
+          const sessions = (ctx as unknown as { get(name: string): unknown }).get('sessions') as { flush?: (session: unknown) => Promise<boolean> } | undefined
+          durable = typeof sessions?.flush === 'function' ? (await sessions.flush(agent.session)) === true : false
+        } catch { durable = false }
+      }
+      const seen = appended.get(sessionId) ?? new Set<string>()
+      const verdictOf = (row: EvidenceRow): DeliveryVerdict => !preparedHere.has(row.id) ? 'unknown' : seen.has(row.id) ? (durable ? 'persisted' : 'unknown') : 'absent'
+      const rows = prepareEvidence(store(), sessionId, turn, stepNo, verdictOf, Date.now())
       if (rows.length === 0) return decision
+      for (const row of rows) preparedHere.add(row.id)
       const message = renderEvidenceMessage(turn, stepNo, rows)
       if (interventions !== undefined) {
         try {
