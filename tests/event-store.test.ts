@@ -444,7 +444,9 @@ test('M07: PTC sub-calls are observed and flagged; observations are trimmed per 
 
 
 test('master switch: config seeds once, stored flag is authoritative afterwards', () => {
-  const file = join(createTestDirectory('pt-master-'), 'db.sqlite3')
+  const dir = createTestDirectory('pt-master-')
+  try {
+  const file = join(dir, 'db.sqlite3')
   let store = new TemplateStore(file)
   try {
     assert.equal(store.events.masterEnabled(true), true, 'first read seeds from config true')
@@ -462,6 +464,7 @@ test('master switch: config seeds once, stored flag is authoritative afterwards'
       assert.equal(row.enabled, 0, 'single enforced row id=1, stored off')
     } finally { db.close() }
   } finally { store.close() }
+  } finally { rmSync(dir, { recursive: true, force: true }) }
 })
 
 test('master switch: config false seeds off and the observer honors the stored flag', () => {
