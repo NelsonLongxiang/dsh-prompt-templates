@@ -17,6 +17,12 @@ import * as host from '../src/index.ts'
 import { LESSON_SELF_TOOLS } from '../src/lessons.ts'
 
 const SEVEN = ['lesson_write', 'lesson_none', 'lesson_keep', 'lesson_timeline', 'lesson_type_propose', 'selfcheck_write', 'selfcheck_conclude']
+/**
+ * Explicit exceptions, with each tool's purpose: this is a test inventory, not a runtime permission list.
+ * Currently empty: lessons.ts registers five self tools and self-check.ts registers two; index.ts's panel HTTP routes
+ * do not register model tools. Any new tool, regardless of its prefix, must be classified deliberately here or as self.
+ */
+const NON_SELF_TOOLS: Record<string, string> = {}
 /** Every parameter each tool takes, as the model sees it: anything added here is a deliberate, reviewed change. */
 const FIELDS: Record<string, string[]> = {
   lesson_write: ['text', 'type', 'evidence', 'outcome'],
@@ -64,12 +70,20 @@ test('the self tools the model sees are exactly the list, with a fixed set of pa
   const ctx = new Context()
   await ctx.plugin(FakeSystemPrompt as never)
   await ctx.plugin(ToolRuntime as never)
+  const runtime = ctx.tools as unknown as { schemas: () => Array<{ name: string, parameters: { properties?: Record<string, unknown> } }> }
+  const before = new Set(runtime.schemas().map(s => s.name))
   const dir = createTestDirectory('pt-self-tools-')
   const fiber = await ctx.plugin(host as never, { dbPath: join(dir, 'db.sqlite3') } as never)
   try {
     await new Promise(resolve => setImmediate(resolve))
-    const schemas = (ctx.tools as unknown as { schemas: () => Array<{ name: string, parameters: { properties?: Record<string, unknown> } }> }).schemas()
-    const self = schemas.filter(s => /^(lesson|selfcheck)_/.test(s.name))
+    const added = runtime.schemas().filter(s => !before.has(s.name))
+    const self = added.filter(s => LESSON_SELF_TOOLS.includes(s.name))
+    const nonSelf = added.filter(s => !LESSON_SELF_TOOLS.includes(s.name))
+    assert.deepEqual(sorted(nonSelf.map(s => s.name)), sorted(Object.keys(NON_SELF_TOOLS)), 'every other tool this plugin registers, regardless of prefix, needs an explicit non-self classification')
+    for (const [name, purpose] of Object.entries(NON_SELF_TOOLS)) {
+      assert.ok(!LESSON_SELF_TOOLS.includes(name), name + ' cannot be both self and non-self')
+      assert.ok(purpose.trim() !== '', name + ' needs its actual purpose recorded')
+    }
     assert.deepEqual(sorted(self.map(s => s.name)), sorted(LESSON_SELF_TOOLS), 'every self tool this plugin registers is on the list, and every listed one is registered')
     for (const s of self) {
       const fields = Object.keys(s.parameters.properties ?? {})
@@ -86,7 +100,7 @@ test('the self tools the model sees are exactly the list, with a fixed set of pa
 type Tool = { execute(args: unknown, exec: unknown): Promise<Record<string, unknown>> }
 const agentOf = (sessionId: string): unknown => ({ session: { header: { id: sessionId }, snapshotEvents: () => [] } })
 
-test('each self tool takes the session only from exec.agent.session.header.id, never from its arguments or elsewhere on exec', async () => {
+test('each self tool takes the session only from exec.agent.session.header.id, never from its arguments or elsewhere on exec', async t => {
   const dir = createTestDirectory('pt-self-session-')
   const ctx = new Context()
   const registered = new Map<string, Tool>()
@@ -96,11 +110,13 @@ test('each self tool takes the session only from exec.agent.session.header.id, n
   try {
     const elsewhere = { session_id: 'session-other', sessionId: 'session-other', session: 'session-other', path: '/elsewhere', file: '/elsewhere', command: 'true' }
     for (const name of SEVEN) {
-      const tool = registered.get(name)
-      assert.ok(tool !== undefined, name + ' is registered')
-      // No calling agent: whatever else names a session, the tool refuses.
-      const out = await tool.execute({ ...VALID[name], ...elsewhere }, { sessionId: 'session-other', session: { header: { id: 'session-other' } }, callerSession: 'session-other' })
-      assert.equal(out['code'], 'session', name + ' refuses without a calling agent')
+      await t.test(name + ' refuses without a calling session', async () => {
+        const tool = registered.get(name)
+        assert.ok(tool !== undefined, name + ' is registered')
+        // No calling agent: whatever else names a session, the tool refuses.
+        const out = await tool.execute({ ...VALID[name], ...elsewhere }, { sessionId: 'session-other', session: { header: { id: 'session-other' } }, callerSession: 'session-other' })
+        assert.equal(out['code'], 'session', name + ' refuses without a calling agent')
+      })
     }
     // With an agent, a session named in the arguments is ignored: the lesson is the caller's alone.
     const write = await registered.get('lesson_write')!.execute({ ...VALID['lesson_write'], ...elsewhere }, { agent: agentOf('session-caller') })
