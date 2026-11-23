@@ -61,6 +61,44 @@ export interface InjectionEventProbe {
   readonly data: { readonly source?: unknown }
 }
 
+/** The tools that close a workshop card round. */
+export const CARD_ROUND_TOOLS: readonly string[] = ['lesson_write', 'lesson_none']
+
+/**
+ * The agent's tool scope key: dsh-scope keeps it on the agent's context under Symbol("dsh.scope"), possibly up the prototype
+ * chain. Read by the symbol's description, since this plugin's copy of dsh-scope would hold another symbol.
+ */
+function scopeKeyOf(ctx: unknown): object | undefined {
+  for (let cursor = ctx, depth = 0; cursor !== null && typeof cursor === 'object' && depth < 32; cursor = Object.getPrototypeOf(cursor), depth++) {
+    for (const symbol of Object.getOwnPropertySymbols(cursor)) {
+      if (symbol.description !== 'dsh.scope') continue
+      const key = (cursor as Record<symbol, unknown>)[symbol]
+      if (key !== null && typeof key === 'object') return key
+    }
+  }
+  return undefined
+}
+
+/**
+ * Whether this agent's own tool scope offers none of the tools that close a card round. DSH's registry answers get(name, scope)
+ * with undefined for a tool restricted away from that scope, so this reads the session's actual tools, not its role. True only
+ * on a confirmed absence: no scope, no tools service, or any fault counts as "has them", so the round opens as before.
+ * @param agent - the pre-step event's agent.
+ * @returns true when neither lesson_write nor lesson_none is visible to the agent.
+ */
+export function lessonToolsMissing(agent: unknown): boolean {
+  try {
+    const ctx = (agent as { ctx?: unknown } | null)?.ctx
+    const tools = (ctx as { tools?: { get?: (name: string, scope?: object) => unknown } } | undefined)?.tools
+    const scope = scopeKeyOf(ctx)
+    if (typeof tools?.get !== 'function' || scope === undefined) return false
+    return CARD_ROUND_TOOLS.every(name => tools.get!(name, scope) === undefined)
+  } catch {
+    // An unreadable tool scope is no proof the tools are missing.
+    return false
+  }
+}
+
 /** Deployment-facing switch; the listener stays registered but pass-through when off. */
 export interface AutoInjectConfig {
   readonly enabled: boolean
@@ -69,7 +107,7 @@ export interface AutoInjectConfig {
    * Called when this turn's injection carries cards of the workshop category (owner 2026-11-21): opens the card round
    * and returns the closing line to append, or null for none (lessons off, or the round was already open).
    */
-  readonly onWorkshopCards?: (sessionId: string, turn: number, cards: ReadonlyArray<{ id: string; name: string; version: string | null }>) => string | null
+  readonly onWorkshopCards?: (sessionId: string, turn: number, cards: ReadonlyArray<{ id: string; name: string; version: string | null }>, options: { readonly lessonToolsMissing: boolean }) => string | null
 }
 
 /**
@@ -323,7 +361,7 @@ export function registerAutoInject(ctx: Context, config: AutoInjectConfig, store
           const row = scheduled.find(r => r.id === template.id)
           return row?.category === WORKSHOP_CATEGORY ? [{ id: template.id, name: template.name, version: row.version ?? null }] : []
         })
-        if (workshop.length > 0) closing = config.onWorkshopCards?.(sessionId, turn, workshop) ?? null
+        if (workshop.length > 0) closing = config.onWorkshopCards?.(sessionId, turn, workshop, { lessonToolsMissing: lessonToolsMissing(agent) }) ?? null
       } catch (error) {
         console.error('[dsh-prompt-templates] card round skipped for this injection:', error)
       }

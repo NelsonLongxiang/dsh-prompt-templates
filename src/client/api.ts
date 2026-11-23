@@ -249,6 +249,8 @@ export interface CardStatWire {
   readonly lessons: number
   readonly none: number
   readonly missed: number
+  /** Card rounds recorded not applicable: the session had no lesson tools. */
+  readonly na: number
   /** B4a: calls in the situations of this card's lessons after they were recalled, and how many failed. */
   readonly recurrence: { readonly hits: number; readonly fails: number }
 }
@@ -263,7 +265,7 @@ export async function listCardStats(sessionId: string): Promise<CardStatWire[]> 
     return (body.cards ?? []).filter(card => typeof card['template_id'] === 'string')
       .map(card => {
         const rec = (card['recurrence'] ?? {}) as Record<string, unknown>
-        return { template_id: card['template_id'] as string, injected: n(card['injected']), lessons: n(card['lessons']), none: n(card['none']), missed: n(card['missed']), recurrence: { hits: n(rec['hits']), fails: n(rec['fails']) } }
+        return { template_id: card['template_id'] as string, injected: n(card['injected']), lessons: n(card['lessons']), none: n(card['none']), missed: n(card['missed']), na: n(card['na']), recurrence: { hits: n(rec['hits']), fails: n(rec['fails']) } }
       })
   } catch {
     return []

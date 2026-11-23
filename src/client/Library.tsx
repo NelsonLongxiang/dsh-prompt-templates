@@ -146,7 +146,7 @@ function TemplateRow({ template, onInsert, onSend, onInterject, onEdit, onDelete
       {cardYield !== undefined && cardYield.injected > 0 && (
         <span
           className={css.injectBadge}
-          title={t('panel.cardYield').replace('{injected}', String(cardYield.injected)).replace('{lessons}', String(cardYield.lessons)).replace('{none}', String(cardYield.none)).replace('{missed}', String(cardYield.missed))}
+          title={t('panel.cardYield').replace('{injected}', String(cardYield.injected)).replace('{lessons}', String(cardYield.lessons)).replace('{none}', String(cardYield.none)).replace('{missed}', String(cardYield.missed)).replace('{na}', String(cardYield.na))}
         >
           体会 {cardYield.lessons}/{cardYield.injected}
         </span>

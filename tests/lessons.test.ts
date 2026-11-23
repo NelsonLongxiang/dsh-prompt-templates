@@ -17,6 +17,7 @@ import type { ObservationFeatures } from '../src/event-features.ts'
 import { CHURN_REWRITES, DEFAULT_LESSONS_CONFIG, LESSON_CATEGORY, LESSONS_MUST_READ_LINE, allowedTypes, lessonChurn, lessonKeep, lessonSimilarity, decideLessonType, lessonNone, lessonTimeline, lessonsOf, newLessonState, observeForLessons, openCardRound, pinLesson, prepareLessonMessages, proposeLessonType, renderLessonList, LESSON_LIST_MAX_CHARS, writeLesson } from '../src/lessons.ts'
 import { contentDigest } from '../src/interventions.ts'
 import type { LessonsConfig, LessonState } from '../src/lessons.ts'
+import { lessonToolsMissing } from '../src/inject.ts'
 import { TemplateStore } from '../src/store.ts'
 
 const S = 'sess-1'
@@ -529,8 +530,8 @@ test('card rounds (option A): a workshop injection opens one round per turn; a l
     w.step(7)
     assert.equal(w.store.lessons.openCardRounds(S).length, 0)
     assert.deepEqual(w.store.lessons.cardStats(S), [
-      { template_id: 'c-review', name: '工坊-行动审视', injected: 2, lessons: 1, none: 1, missed: 0, recurrence: { hits: 0, fails: 0 } },
-      { template_id: 'c-accept', name: '工坊-验收流程', injected: 2, lessons: 1, none: 0, missed: 1, recurrence: { hits: 0, fails: 0 } },
+      { template_id: 'c-review', name: '工坊-行动审视', injected: 2, lessons: 1, none: 1, missed: 0, na: 0, recurrence: { hits: 0, fails: 0 } },
+      { template_id: 'c-accept', name: '工坊-验收流程', injected: 2, lessons: 1, none: 0, missed: 1, na: 0, recurrence: { hits: 0, fails: 0 } },
     ])
     const timeline = lessonTimeline(w.store, S, 50)
     const none = timeline.find(e => e.kind === 'round-closed' && e.outcome === 'none')
@@ -575,7 +576,64 @@ test('host: a scheduled workshop card carries the card-round line and opens the 
     const closed = await tools.get('lesson_none')?.execute({ reason: '照卡审视过，没有新问题' }, { agent: agentOf(S) })
     assert.deepEqual(closed, { ok: true, round: 'none', card_round: 'card:2' })
     const read = await request(route, `${BASE}/lessons?session_id=${S}`)
-    assert.deepEqual(read.body.cards, [{ template_id: card.id, name: '工坊-行动审视', injected: 1, lessons: 0, none: 1, missed: 0, recurrence: { hits: 0, fails: 0 } }])
+    assert.deepEqual(read.body.cards, [{ template_id: card.id, name: '工坊-行动审视', injected: 1, lessons: 0, none: 1, missed: 0, na: 0, recurrence: { hits: 0, fails: 0 } }])
+  })
+})
+
+// Ticket 091ec9f4: a session whose own tool scope lacks the lesson tools gets a not-applicable round; every other session is unchanged.
+const scopeKey = {}
+const scopedAgent = (visible: (name: string) => boolean): unknown => ({ session: { header: { id: S }, snapshotEvents: () => [] },
+  ctx: { [Symbol('dsh.scope')]: scopeKey, tools: { get: (name: string, scope?: object) => scope === scopeKey && visible(name) ? { name } : undefined } } })
+const withoutLessonTools = scopedAgent(name => name !== 'lesson_write' && name !== 'lesson_none')
+
+test('lessonToolsMissing: true only when the agent\'s own scope shows neither lesson_write nor lesson_none', () => {
+  assert.equal(lessonToolsMissing(withoutLessonTools), true)
+  assert.equal(lessonToolsMissing(scopedAgent(() => true)), false)
+  assert.equal(lessonToolsMissing(scopedAgent(name => name !== 'lesson_write')), false, 'lesson_none alone can close a round')
+  assert.equal(lessonToolsMissing(scopedAgent(name => name !== 'lesson_none')), false, 'lesson_write alone can close a round')
+  assert.equal(lessonToolsMissing(agentOf(S)), false, 'no tool scope is no proof')
+  assert.equal(lessonToolsMissing({ ctx: { [Symbol('dsh.scope')]: scopeKey } }), false, 'no tools service is no proof')
+  assert.equal(lessonToolsMissing({ ctx: Object.defineProperty({ [Symbol('dsh.scope')]: scopeKey }, 'tools', { get: () => { throw new Error('not injected') } }) }), false, 'a fault is no proof')
+  assert.equal(lessonToolsMissing(undefined), false)
+})
+
+test('card rounds: without the lesson tools the round is not applicable (never open, never missed); with them nothing changes', () => {
+  const w = world()
+  try {
+    const cards = [{ id: 'c-na', name: '工坊-行动审视', version: null }]
+    const line = openCardRound(w.store, S, 1, cards, { lessonToolsMissing: true })
+    assert.ok(line?.includes('记为不适用（工具不可用）') && !line.includes('必须用 lesson_write'))
+    assert.equal(w.store.lessons.openCardRounds(S).length, 0)
+    assert.equal((lessonNone(w.store, S, '没有工具', 1) as { code: string }).code, 'no-card-round')
+    w.step(5)
+    assert.equal(w.store.lessons.log(S, 100).filter(row => row.kind === 'round-missed').length, 0)
+    assert.deepEqual(w.store.lessons.cardStats(S), [{ template_id: 'c-na', name: '工坊-行动审视', injected: 1, lessons: 0, none: 0, missed: 0, na: 1, recurrence: { hits: 0, fails: 0 } }])
+    const na = lessonTimeline(w.store, S, 50).find(entry => entry.kind === 'round-na')
+    assert.deepEqual(na && { card: na.card, reason: na.reason }, { card: 'card:1', reason: 'tools-unavailable' })
+    // With the tools (the default) the same card opens a round that two quiet turns miss.
+    assert.ok(openCardRound(w.store, S, 10, cards)?.includes('必须用 lesson_write'))
+    assert.equal(w.store.lessons.openCardRounds(S).length, 1)
+    w.step(12)
+    assert.equal(w.store.lessons.log(S, 100).filter(row => row.kind === 'round-missed').length, 1)
+  } finally { w.store.close() }
+})
+
+test('host: a workshop card for a session without the lesson tools carries the not-applicable line; with the tools or with no readable scope, the usual round', async () => {
+  await withHost({ lessons: { enabled: true } }, async (ctx, route) => {
+    await request(route, `${BASE}/categories`, 'POST', { name: '工坊', scope: 'global', session_id: null })
+    const card = (await request(route, `${BASE}/templates`, 'POST', { name: '工坊-行动审视', content: '先审视实际调用。', scope: 'global', category: '工坊', inject_enabled: true, inject_every: 1, mode: 'inject' })).body.template
+    const step = async (turn: number, agent: unknown) => {
+      const decision = await (ctx as unknown as { waterfall: (...args: unknown[]) => Promise<{ messages?: Array<{ content?: Array<{ text?: string }> }> }> }).waterfall('agent/pre-step', {
+        agent, messages: [{ role: 'user' }], turn, step: 1, signal: new AbortController().signal,
+      }, async () => ({ kind: 'enter', messages: [] }))
+      return (decision.messages ?? []).map(m => m.content?.[0]?.text ?? '').join('\n')
+    }
+    const without = await step(1, withoutLessonTools)
+    assert.ok(without.includes('先审视实际调用。') && without.includes('记为不适用（工具不可用）') && !without.includes('必须用 lesson_write'))
+    assert.ok((await step(2, scopedAgent(() => true))).includes('必须用 lesson_write'), 'with the tools: the usual round')
+    assert.ok((await step(3, agentOf(S))).includes('必须用 lesson_write'), 'no readable scope: the usual round')
+    const read = await request(route, `${BASE}/lessons?session_id=${S}`)
+    assert.deepEqual(read.body.cards, [{ template_id: card.id, name: '工坊-行动审视', injected: 3, lessons: 0, none: 0, missed: 0, na: 1, recurrence: { hits: 0, fails: 0 } }])
   })
 })
 
