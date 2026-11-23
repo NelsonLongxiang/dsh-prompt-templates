@@ -145,6 +145,47 @@ test('#81: across a restart the durable rows reconcile against the log; an unrea
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
 
+test('#82 review: two versions in the same millisecond keep their order: after a restart the newer is retried, never superseded by the older', () => {
+  for (const olderPrepared of [false, true]) {
+    const dir = createTestDirectory('pt-evidence-samems-')
+    try {
+      const dbPath = join(dir, 'db.sqlite3')
+      const at = Date.parse('2026-11-23T10:00:00Z'), iso = new Date(at).toISOString()
+      let store = new TemplateStore(dbPath)
+      const v1 = store.evidence.offer({ sessionId: 's1', ...REF, version: 'v1', caller: A2A }, iso).row
+      if (olderPrepared) assert.equal(prepareEvidence(store.evidence, 's1', 1, 1, [], at).length, 1)
+      const v2 = store.evidence.offer({ sessionId: 's1', ...REF, version: 'v2', caller: A2A }, iso).row
+      const given = prepareEvidence(store.evidence, 's1', 1, 2, [], at)
+      assert.deepEqual(given.map(r => r.id), [v2.id], String(olderPrepared))
+      assert.equal(store.evidence.get(v1.id)!.state, 'superseded')
+      store.close()
+      store = new TemplateStore(dbPath)
+      try {
+        const again = prepareEvidence(store.evidence, 's1', 2, 1, [], at)
+        assert.deepEqual(again.map(r => r.id), [v2.id], 'the newer is given again')
+        assert.equal(store.evidence.get(v2.id)!.state, 'prepared')
+      } finally { store.close() }
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  }
+})
+
+test('#82 review: a session log that throws when read is unknown, like a missing one, and is never resent', async () => {
+  const h = await harness(true)
+  try {
+    const a2a = await h.callerCtx(A2A)
+    const handed = a2a.promptTemplates.evidenceReady({ sessionId: 's1', ...REF }) as { id: string }
+    assert.equal(h.ours(await h.preStep('s1', 1, 1)).length, 1)
+    const throwing = await h.ctx.waterfall('agent/pre-step', {
+      agent: { session: { header: { id: 's1' }, snapshotEvents: () => { throw new Error('log unreadable') } } }, messages: [], turn: 1, step: 2, signal: new AbortController().signal,
+    }, async () => ({ kind: 'enter', messages: [] })) as { messages: Msg[] }
+    assert.equal(h.ours(throwing).length, 0)
+    const state = () => (a2a.promptTemplates.evidenceReadyStatus({ sessionId: 's1' }) as { items: Array<{ id: string; state: string }> }).items.find(r => r.id === handed.id)!.state
+    assert.equal(state(), 'unknown')
+    assert.equal(h.ours(await h.preStep('s1', 1, 3)).length, 0, 'the log readable again and empty: still not resent')
+    assert.equal(state(), 'unknown')
+  } finally { await h.dispose() }
+})
+
 test('#81: a reference that waited past EVIDENCE_WAIT_MS without a step expires and is not delivered', () => {
   const dir = createTestDirectory('pt-evidence-expire-')
   try {

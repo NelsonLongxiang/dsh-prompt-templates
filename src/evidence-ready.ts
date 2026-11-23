@@ -130,10 +130,13 @@ export class EvidenceReadyStore {
     return { created: true, row: this.get(id)! }
   }
 
-  /** Whether a newer reference for the same session and ticket has been handed in after this one. */
+  /**
+   * Whether a reference for the same session and ticket was handed in after this one. Ordered by insertion (rowid; rows
+   * are never deleted), never by time: two versions handed in within the same millisecond keep their order.
+   */
   replaced(row: EvidenceRow): boolean {
-    return (this.#db.prepare('SELECT COUNT(*) AS n FROM evidence_ready WHERE session_id = ? AND ticket_id = ? AND id <> ? AND queued_at >= ?')
-      .get(row.session_id, row.ticket_id, row.id, row.queued_at) as { n: number }).n > 0
+    return (this.#db.prepare('SELECT COUNT(*) AS n FROM evidence_ready WHERE session_id = ? AND ticket_id = ? AND rowid > (SELECT rowid FROM evidence_ready WHERE id = ?)')
+      .get(row.session_id, row.ticket_id, row.id) as { n: number }).n > 0
   }
 }
 
@@ -201,7 +204,9 @@ export function registerEvidenceReady(ctx: Context, store: () => EvidenceReadySt
     try {
       const sessionId = String(agent.session.header.id)
       const session = agent.session as unknown as { snapshotEvents?: () => readonly InjectionEventProbe[]; events?: readonly InjectionEventProbe[] }
-      const events = typeof session.snapshotEvents === 'function' ? session.snapshotEvents() : (session.events ?? null)
+      // A log that cannot be read, whether missing or throwing, is null: prepared references become unknown, never resent.
+      let events: readonly InjectionEventProbe[] | null
+      try { events = typeof session.snapshotEvents === 'function' ? session.snapshotEvents() : (session.events ?? null) } catch { events = null }
       const stepNo = typeof step === 'number' ? step : 1
       const rows = prepareEvidence(store(), sessionId, turn, stepNo, events, Date.now())
       if (rows.length === 0) return decision
