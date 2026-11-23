@@ -18,7 +18,7 @@
  *   failed     given to EVIDENCE_MAX_ATTEMPTS steps and never found in the log
  *   unknown    prepared, but the session log could not be read to tell
  * A repeat of the same (session, ticket, version) adds nothing and never turns a delivered one back into undelivered.
- * @module @nelsonlongxiang/dsh-prompt-templates/evidence-ready
+ * @module dsh-prompt-templates/evidence-ready
  */
 
 import { createHash } from 'node:crypto'

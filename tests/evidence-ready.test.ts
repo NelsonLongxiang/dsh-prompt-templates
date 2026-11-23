@@ -11,8 +11,9 @@ import { Context } from '@deepseek-ai/cordis'
 import * as host from '../src/index.ts'
 import { EVIDENCE_MAX_ATTEMPTS, EVIDENCE_SCHEDULED, EVIDENCE_WAIT_MS, prepareEvidence } from '../src/evidence-ready.ts'
 import { TemplateStore } from '../src/store.ts'
+import { PLUGIN_CALLERS } from '../src/interventions.ts'
 
-const A2A = '@nelsonlongxiang/dsh-open-a2a-net'
+const A2A = PLUGIN_CALLERS[0]!
 const REF = { ticketId: 'T-test-1', version: 'abcdef0123456789abcdef0123456789abcdef01', ref: 'ygl:evidence/demo-1', action: '是否发起独立复核' }
 type Msg = { source?: { scheduled?: string; items?: Array<{ id: string }> }; content?: Array<{ text?: string }> }
 
