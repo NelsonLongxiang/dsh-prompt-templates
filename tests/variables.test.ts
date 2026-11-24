@@ -32,5 +32,5 @@ test('unknown names, spacing, and plain text pass through untouched', () => {
 })
 
 test('the advertised variable list matches the implemented set', () => {
-  assert.deepEqual([...TEMPLATE_VARIABLES].sort(), ['date', 'datetime', 'session', 'time', 'turn', 'weekday'])
+  assert.deepEqual([...TEMPLATE_VARIABLES].sort(), ['date', 'datetime', 'mirror', 'session', 'time', 'turn', 'weekday'])
 })

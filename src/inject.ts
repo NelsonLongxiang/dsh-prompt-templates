@@ -23,6 +23,7 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { UserMessage } from '@deepseek-ai/dsh-session'
 import type { TemplateStore } from './store.ts'
 import { expandTemplateVariables } from './variables.ts'
+import { renderMirror, type MirrorEventProbe } from './mirror.ts'
 import { WORKSHOP_CATEGORY } from './lessons.ts'
 import type { InjectionHistoryEntry, InjectionStatusView, TemplateInjectMode, TemplateView } from './types.ts'
 
@@ -330,9 +331,13 @@ export function registerAutoInject(ctx: Context, config: AutoInjectConfig, store
       // Expand variable placeholders with this delivery context;
       // unresolved ones stay literal. The history surface records the
       // expanded bodies — what actually went out.
+      // The mirror reads the whole log, so render it only when a due template asks for it.
+      const mirror = due.some(candidate => /\{\{\s*mirror\s*\}\}/.test(candidate.content))
+        ? renderMirror(events as unknown as readonly MirrorEventProbe[])
+        : undefined
       const expanded = due.map(candidate => ({
         ...candidate,
-        content: expandTemplateVariables(candidate.content, { sessionId, turn }),
+        content: expandTemplateVariables(candidate.content, { sessionId, turn, mirror }),
       }))
       if (alreadyInjectedAtTurn(events, state.scanned, turn)) {
         state.injectedTurns.add(turn)

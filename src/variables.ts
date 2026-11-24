@@ -11,10 +11,10 @@
  */
 
 /** Variable names the expander understands (the advertised set). */
-export const TEMPLATE_VARIABLES = ['date', 'time', 'datetime', 'weekday', 'session', 'turn'] as const
+export const TEMPLATE_VARIABLES = ['date', 'time', 'datetime', 'weekday', 'session', 'turn', 'mirror'] as const
 
 /** The placeholder namespace: a double-brace name with optional inner spacing. */
-const PATTERN = /\{\{\s*(date|time|datetime|weekday|session|turn)\s*\}\}/g
+const PATTERN = /\{\{\s*(date|time|datetime|weekday|session|turn|mirror)\s*\}\}/g
 
 /** What one delivery can tell the expander; every field optional. */
 export interface VariableContext {
@@ -24,6 +24,8 @@ export interface VariableContext {
   readonly sessionId?: string
   /** The boundary turn, when the delivery is a scheduled injection. */
   readonly turn?: number
+  /** The rendered mirror (recent turn endings and what followed), when the delivery can read the session. */
+  readonly mirror?: string
 }
 
 const WEEKDAYS = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'] as const
@@ -45,6 +47,8 @@ export function expandTemplateVariables(content: string, context: VariableContex
       case 'weekday': return WEEKDAYS[now.getDay()] ?? match
       case 'session': return context.sessionId ?? match
       case 'turn': return context.turn !== undefined ? String(context.turn) : match
+      // An empty mirror (no finished turn yet) renders as nothing rather than a literal placeholder.
+      case 'mirror': return context.mirror ?? match
       default: return match
     }
   })
