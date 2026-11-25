@@ -19,7 +19,7 @@ import type { LibraryCard, TemplateStore } from './store.ts'
 import type { SelfCheckRow } from './self-check.ts'
 import { expandTemplateVariables } from './variables.ts'
 import { EVIDENCE_QUEUE_MAX, type EvidenceRow, type EvidenceState } from './evidence-ready.ts'
-import type { CastRow, CastState, CastView } from './cast-queue.ts'
+import type { CastMode, CastRow, CastState, CastView } from './cast-queue.ts'
 
 /** The service name other plugins read: `ctx.promptTemplates`. */
 export const SERVICE_NAME = 'promptTemplates'
@@ -50,7 +50,7 @@ type Queued = Pick<CastRow, 'template_id' | 'name' | 'version' | 'content' | 'ca
 export interface CastSource { readonly kind: 'user'; readonly scheduled: 'prompt-template-cast'; readonly turn: number; readonly step: number; readonly templates: ReadonlyArray<{ id: string; name: string; caller: string }> }
 
 /** What a cast returns. */
-export type CastResult = { ok: true; queued: number; id: string } | { ok: false; code: 'disabled' | 'caller' | 'template' | 'session' | 'full' | 'reason' | 'basis' | 'already-queued'; error: string }
+export type CastResult = { ok: true; queued: number; id: string } | { ok: false; code: 'disabled' | 'caller' | 'template' | 'session' | 'full' | 'reason' | 'basis' | 'mode' | 'already-queued'; error: string }
 
 /** What writing an author session's card returns (#902 S2). */
 export type DraftResult = { ok: true; id: string; name: string; content_sha256: string; created: boolean } | { ok: false; code: 'caller' | 'session' | 'card' | 'input' | 'name'; error: string }
@@ -70,7 +70,7 @@ export interface PromptTemplatesService {
   /** Whether the wrap-up self-check is on in this deployment (a reader must not take an empty log for a missing check when it is off). */
   selfCheckEnabled(): boolean
   /** Cast a card; `basis` (#902 S1) is the ticket, event or `none: …` it rests on, one line of at most 200 characters. */
-  cast(input: { sessionId: string; templateId: string; reason: string; basis?: string; authorSession?: string }): CastResult
+  cast(input: { sessionId: string; templateId: string; reason: string; basis?: string; authorSession?: string; mode?: CastMode }): CastResult
   /** #902 S1: read queued casts (newest first, no text); recognized caller only. */
   castQueue(filter?: { sessionId?: string; state?: CastState; limit?: number }): CastQueueResult
   /** #902 S1: withdraw one waiting cast of a session; recognized caller only. */
@@ -163,7 +163,7 @@ export function registerCast(ctx: Context, store: () => TemplateStore, enabled: 
      * (PLUGIN_CALLERS) may cast, and only while `cast.enabled` is on. The card must be a global template or one of that
      * session's own; one copy of a card waits per session. The reason is put on one line and must be 1..500 characters.
      */
-    cast(input: { sessionId: string; templateId: string; reason: string; basis?: string; authorSession?: string }): CastResult {
+    cast(input: { sessionId: string; templateId: string; reason: string; basis?: string; authorSession?: string; mode?: CastMode }): CastResult {
       if (!enabled()) return { ok: false, code: 'disabled', error: 'casting is off on this host (cast.enabled)' }
       const caller = callerOf(this.ctx)
       if (caller === undefined || !PLUGIN_CALLERS.includes(caller)) return { ok: false, code: 'caller', error: 'only a plugin this host recognizes may cast a card' }
@@ -171,6 +171,8 @@ export function registerCast(ctx: Context, store: () => TemplateStore, enabled: 
       if (sessionId === '') return { ok: false, code: 'session', error: 'name the session to cast into' }
       const reason = oneLine(String(input?.reason ?? ''))
       if (reason === '' || reason.length > 500) return { ok: false, code: 'reason', error: 'give a reason of 1..500 characters on one line' }
+      const mode: CastMode = input?.mode === undefined ? 'insert' : input.mode
+      if (mode !== 'insert' && mode !== 'queue') return { ok: false, code: 'mode', error: 'mode is insert (the next step) or queue (the first step of the next turn)' }
       const basis = input?.basis === undefined ? null : oneLine(String(input.basis))
       if (basis !== null && (basis === '' || basis.length > 200)) return { ok: false, code: 'basis', error: 'give a basis of 1..200 characters on one line, or none' }
       const template = store().get(String(input?.templateId ?? ''))
@@ -183,7 +185,7 @@ export function registerCast(ctx: Context, store: () => TemplateStore, enabled: 
       const queue = waiting(sessionId, now)
       if (queue.some(card => card.template_id === template.id)) return { ok: false, code: 'already-queued', error: 'that card already waits for this session' }
       if (queue.length >= CAST_QUEUE_MAX || waiting(undefined, now).length >= CAST_QUEUE_TOTAL_MAX) return { ok: false, code: 'full', error: `at most ${String(CAST_QUEUE_MAX)} cast cards can wait for one session` }
-      const row = store().castQueue.add({ session_id: sessionId, template_id: template.id, name: authored ? `定制·${template.name}` : template.name, version: template.version ?? null, content: template.content, caller, reason, basis, at: new Date(now).toISOString() })
+      const row = store().castQueue.add({ session_id: sessionId, template_id: template.id, name: authored ? `定制·${template.name}` : template.name, version: template.version ?? null, content: template.content, caller, reason, basis, at: new Date(now).toISOString(), mode })
       return { ok: true, queued: queue.length + 1, id: row.id }
     }
 
@@ -270,7 +272,9 @@ export function registerCast(ctx: Context, store: () => TemplateStore, enabled: 
     try {
       const sessionId = String(agent.session.header.id)
       const now = Date.now()
-      const queued = waiting(sessionId, now)
+      // #902 S3: a `queue` cast waits for the first step of a turn, so it never cuts into a turn under way.
+      const first = typeof step !== 'number' || step <= 1
+      const queued = waiting(sessionId, now).filter(row => row.mode !== 'queue' || first)
       if (queued.length === 0) return decision
       // Ended before rendering, so a second step can never deliver the same row again.
       const cards = store().castQueue.end(queued.map(row => row.id), 'delivered', new Date(now).toISOString())

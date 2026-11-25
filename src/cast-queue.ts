@@ -43,7 +43,12 @@ export interface CastRow {
   readonly at: string
   readonly state: CastState
   readonly ended_at: string | null
+  /** #902 S3: `insert` goes in at the session's next step; `queue` waits for the first step of its next turn. */
+  readonly mode: CastMode
 }
+
+/** How a queued cast goes in (#902 S3). */
+export type CastMode = 'insert' | 'queue'
 
 /** A queued cast as other plugins read it: everything but the text. */
 export type CastView = Omit<CastRow, 'content'>
@@ -69,8 +74,8 @@ export class CastQueueStore {
   /** Append one waiting row. */
   add(row: Omit<CastRow, 'id' | 'state' | 'ended_at'>): CastRow {
     const id = randomUUID()
-    this.#db.prepare(`INSERT INTO cast_queue (id, session_id, template_id, name, version, content, caller, reason, basis, at, state)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'waiting')`).run(id, row.session_id, row.template_id, row.name, row.version, row.content, row.caller, row.reason, row.basis, row.at)
+    this.#db.prepare(`INSERT INTO cast_queue (id, session_id, template_id, name, version, content, caller, reason, basis, at, state, mode)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'waiting', ?)`).run(id, row.session_id, row.template_id, row.name, row.version, row.content, row.caller, row.reason, row.basis, row.at, row.mode)
     return { ...row, id, state: 'waiting', ended_at: null }
   }
 
@@ -97,7 +102,7 @@ export class CastQueueStore {
     if (filter.state !== undefined) { clauses.push('state = ?'); args.push(filter.state) }
     const limit = Math.max(1, Math.min(500, Math.trunc(filter.limit ?? 100)))
     const where = clauses.length > 0 ? ` WHERE ${clauses.join(' AND ')}` : ''
-    const rows = this.#db.prepare(`SELECT id, session_id, template_id, name, version, caller, reason, basis, at, state, ended_at FROM cast_queue${where} ORDER BY at DESC, id DESC LIMIT ?`).all(...args, limit)
+    const rows = this.#db.prepare(`SELECT id, session_id, template_id, name, version, caller, reason, basis, at, state, ended_at, mode FROM cast_queue${where} ORDER BY at DESC, id DESC LIMIT ?`).all(...args, limit)
     return rows as unknown as CastView[]
   }
 }
