@@ -52,6 +52,9 @@ export interface CastSource { readonly kind: 'user'; readonly scheduled: 'prompt
 /** What a cast returns. */
 export type CastResult = { ok: true; queued: number; id: string } | { ok: false; code: 'disabled' | 'caller' | 'template' | 'session' | 'full' | 'reason' | 'basis' | 'already-queued'; error: string }
 
+/** What writing an author session's card returns (#902 S2). */
+export type DraftResult = { ok: true; id: string; name: string; content_sha256: string; created: boolean } | { ok: false; code: 'caller' | 'session' | 'card' | 'input' | 'name'; error: string }
+
 /** What reading or withdrawing queued casts returns (#902 S1; recognized caller only). */
 export type CastQueueResult = { ok: true; items: CastView[] } | { ok: false; code: 'caller' | 'state'; error: string }
 export type CastWithdrawResult = { ok: true; withdrawn: boolean } | { ok: false; code: 'caller' | 'session'; error: string }
@@ -67,11 +70,19 @@ export interface PromptTemplatesService {
   /** Whether the wrap-up self-check is on in this deployment (a reader must not take an empty log for a missing check when it is off). */
   selfCheckEnabled(): boolean
   /** Cast a card; `basis` (#902 S1) is the ticket, event or `none: …` it rests on, one line of at most 200 characters. */
-  cast(input: { sessionId: string; templateId: string; reason: string; basis?: string }): CastResult
+  cast(input: { sessionId: string; templateId: string; reason: string; basis?: string; authorSession?: string }): CastResult
   /** #902 S1: read queued casts (newest first, no text); recognized caller only. */
   castQueue(filter?: { sessionId?: string; state?: CastState; limit?: number }): CastQueueResult
   /** #902 S1: withdraw one waiting cast of a session; recognized caller only. */
   castWithdraw(input: { sessionId: string; id: string }): CastWithdrawResult
+  /**
+   * #902 S2: create (no id) or edit (id) a card in one session's own templates for that session's caster (the a2a
+   * plugin writes the team observer's own cards); recognized caller only. The card is an ordinary session template: its
+   * session sees it in the panel like any other.
+   */
+  draftCard(input: { authorSession: string; id?: string; name: string; content: string; description?: string }): DraftResult
+  /** #902 S2: delete one card of that session's own templates; recognized caller only. */
+  draftDelete(input: { authorSession: string; id: string }): { ok: true; deleted: boolean } | { ok: false; code: 'caller' | 'session'; error: string }
   /** #81: hand in one evidence reference for a session's next actionable step (recognized caller, cast.enabled). */
   evidenceReady(input: { sessionId: string; ticketId: string; version: string; ref: string; action: string }): EvidenceReadyResult
   /** #81: read back one session's references and their states (recognized caller only). */
@@ -152,7 +163,7 @@ export function registerCast(ctx: Context, store: () => TemplateStore, enabled: 
      * (PLUGIN_CALLERS) may cast, and only while `cast.enabled` is on. The card must be a global template or one of that
      * session's own; one copy of a card waits per session. The reason is put on one line and must be 1..500 characters.
      */
-    cast(input: { sessionId: string; templateId: string; reason: string; basis?: string }): CastResult {
+    cast(input: { sessionId: string; templateId: string; reason: string; basis?: string; authorSession?: string }): CastResult {
       if (!enabled()) return { ok: false, code: 'disabled', error: 'casting is off on this host (cast.enabled)' }
       const caller = callerOf(this.ctx)
       if (caller === undefined || !PLUGIN_CALLERS.includes(caller)) return { ok: false, code: 'caller', error: 'only a plugin this host recognizes may cast a card' }
@@ -163,12 +174,16 @@ export function registerCast(ctx: Context, store: () => TemplateStore, enabled: 
       const basis = input?.basis === undefined ? null : oneLine(String(input.basis))
       if (basis !== null && (basis === '' || basis.length > 200)) return { ok: false, code: 'basis', error: 'give a basis of 1..200 characters on one line, or none' }
       const template = store().get(String(input?.templateId ?? ''))
-      if (template === undefined || (template.scope === 'session' && template.session_id !== sessionId)) return { ok: false, code: 'template', error: 'no such card for that session' }
+      // #902 S2: a recognized caller may also cast a card of the author session it names (the a2a plugin checks who that is).
+      const author = input?.authorSession === undefined ? '' : String(input.authorSession).trim()
+      const own = template !== undefined && template.scope === 'session' && template.session_id === sessionId
+      const authored = template !== undefined && template.scope === 'session' && author !== '' && author !== sessionId && template.session_id === author
+      if (template === undefined || (template.scope === 'session' && !own && !authored)) return { ok: false, code: 'template', error: 'no such card for that session' }
       const now = Date.now()
       const queue = waiting(sessionId, now)
       if (queue.some(card => card.template_id === template.id)) return { ok: false, code: 'already-queued', error: 'that card already waits for this session' }
       if (queue.length >= CAST_QUEUE_MAX || waiting(undefined, now).length >= CAST_QUEUE_TOTAL_MAX) return { ok: false, code: 'full', error: `at most ${String(CAST_QUEUE_MAX)} cast cards can wait for one session` }
-      const row = store().castQueue.add({ session_id: sessionId, template_id: template.id, name: template.name, version: template.version ?? null, content: template.content, caller, reason, basis, at: new Date(now).toISOString() })
+      const row = store().castQueue.add({ session_id: sessionId, template_id: template.id, name: authored ? `定制·${template.name}` : template.name, version: template.version ?? null, content: template.content, caller, reason, basis, at: new Date(now).toISOString() })
       return { ok: true, queued: queue.length + 1, id: row.id }
     }
 
@@ -187,6 +202,38 @@ export function registerCast(ctx: Context, store: () => TemplateStore, enabled: 
       // Only a cast still waiting for that very session: an id from another session withdraws nothing.
       const mine = waiting(sessionId, Date.now()).some(row => row.id === id)
       return { ok: true, withdrawn: mine && store().castQueue.end([id], 'withdrawn', new Date().toISOString()).length === 1 }
+    }
+
+    draftCard(input: { authorSession: string; id?: string; name: string; content: string; description?: string }): DraftResult {
+      if (recognized(this.ctx) === undefined) return { ok: false, code: 'caller', error: 'only a plugin this host recognizes may write a session\'s cards' }
+      const author = String(input?.authorSession ?? '').trim()
+      if (author === '') return { ok: false, code: 'session', error: 'name the author session' }
+      const name = oneLine(String(input?.name ?? ''))
+      const content = String(input?.content ?? '')
+      if (name === '' || name.length > 128) return { ok: false, code: 'name', error: 'name the card: one line, 1..128 characters' }
+      if (content.trim() === '' || content.length > 8000) return { ok: false, code: 'input', error: 'the card text is 1..8000 characters' }
+      const description = input?.description === undefined ? undefined : oneLine(String(input.description)).slice(0, 512)
+      try {
+        if (input?.id !== undefined) {
+          const current = store().get(String(input.id))
+          if (current === undefined || current.scope !== 'session' || current.session_id !== author) return { ok: false, code: 'card', error: 'no such card of that session' }
+          const view = store().update(current.id, { name, content, ...(description !== undefined ? { description } : {}) })!
+          return { ok: true, id: view.id, name: view.name, content_sha256: contentDigest(view.content), created: false }
+        }
+        const view = store().create({ name, content, scope: 'session', session_id: author, ...(description !== undefined ? { description } : {}) })
+        return { ok: true, id: view.id, name: view.name, content_sha256: contentDigest(view.content), created: true }
+      } catch (error) {
+        return { ok: false, code: 'name', error: error instanceof Error ? error.message : String(error) }
+      }
+    }
+
+    draftDelete(input: { authorSession: string; id: string }): { ok: true; deleted: boolean } | { ok: false; code: 'caller' | 'session'; error: string } {
+      if (recognized(this.ctx) === undefined) return { ok: false, code: 'caller', error: 'only a plugin this host recognizes may delete a session\'s cards' }
+      const author = String(input?.authorSession ?? '').trim()
+      const current = store().get(String(input?.id ?? ''))
+      if (author === '') return { ok: false, code: 'session', error: 'name the author session' }
+      if (current === undefined || current.scope !== 'session' || current.session_id !== author) return { ok: true, deleted: false }
+      return { ok: true, deleted: store().delete(current.id) }
     }
 
     /** #81: one evidence reference for the session's next actionable step. A repeat returns the existing state unchanged. */
