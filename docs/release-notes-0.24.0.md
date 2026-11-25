@@ -11,9 +11,9 @@
 
 ### 范围与验证边界
 
-- 发布门禁在干净环境对 master 完整头执行 `pnpm verify` 通过（typecheck、321/321 测试、build、package 自检），并由非作者按原需求与反例完成一次复核。
+- 发布门禁在干净环境对 PR #85 的合并提交 `ab0a2d0b` 执行 `pnpm verify` 通过（typecheck、321/321 测试、build、package 自检），并由非作者按原需求与反例完成一次复核。npm 私有与公网两端为同一制品（sha1 `85e237a1…`）。
 - 本版只涉及收尾自查的登记要求。本包不修改 A2A 的角色白名单或预设，不代表任何预设已升级或历史卡片已闭合。
-- 本版**不含** PR #86 与 PR #87（投卡队列、代写作者会话卡）。这两项已合入 master 但尚未经作者以外评审，本版由独立发布分支从 PR #85 的合并提交发布，不包含它们。
+- 本版**不含** PR #86、#87、#88（投卡队列、代写作者会话卡、投卡方式）。这些已陆续合入 master 但尚未经作者以外评审；本版经属主裁定，由独立发布分支 `release/v0.24.0` 从 PR #85 的合并提交发布，不推 master、不包含它们。
 - 本次发布未安装到任何宿主；真实宿主上的加载、卡片闭合与模型是否照做均未验证。
 
 ## English
@@ -25,7 +25,7 @@
 
 ### Scope and validation limits
 
-- The release gate passed `pnpm verify` in a clean environment on the full master head (typecheck, 321/321 tests, build, package self-check), followed by a non-author review against the original requirements and counterexamples.
+- The release gate passed `pnpm verify` in a clean environment on the PR #85 merge commit `ab0a2d0b` (typecheck, 321/321 tests, build, package self-check), followed by a non-author review against the original requirements and counterexamples. The private and public npm registries carry the same artifact (sha1 `85e237a1…`).
 - This release only changes the wrap-up check's registration requirement. The package does not change A2A role allowlists or presets, and publishing it does not upgrade any preset or close historical rounds.
-- This release does **not** include PR #86 or PR #87 (the cast queue and author-session drafts). Both are on master without a non-author review; this release is published from the PR #85 merge commit on a separate release branch and leaves them out.
+- This release does **not** include PR #86, #87 or #88 (the cast queue, author-session drafts and cast modes). They have since landed on master without a non-author review. By the owner's ruling this release is published from the PR #85 merge commit on the separate branch `release/v0.24.0`; master is not pushed and they are left out.
 - This release is not installed on any host. Loading on a real host, card closure, and whether a model complies are all unverified.
