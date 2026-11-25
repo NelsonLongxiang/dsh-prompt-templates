@@ -6,8 +6,11 @@ import { createTestDirectory } from './temp-dir.mjs'
 import assert from 'node:assert/strict'
 import { rmSync } from 'node:fs'
 import { join } from 'node:path'
+import { setImmediate } from 'node:timers/promises'
 import test from 'node:test'
 import { Context } from '@deepseek-ai/cordis'
+import { SessionStore, type UserMessage } from '@deepseek-ai/dsh-session'
+import { SessionId } from '@deepseek-ai/dsh-session/types'
 import * as host from '../src/index.ts'
 import { CAST_QUEUE_MAX, callerOf, oneLine } from '../src/cast.ts'
 import { PLUGIN_CALLERS } from '../src/interventions.ts'
@@ -20,6 +23,8 @@ const castOk = (r: { ok: boolean; queued?: number }) => (r.ok ? { ok: true, queu
 async function harness(castEnabled: boolean) {
   const dir = createTestDirectory('pt-cast-')
   const ctx = new Context()
+  const sessions = new SessionStore(ctx)
+  ctx.on('session/flush', () => {})
   const fiber = await ctx.plugin(host, { dbPath: join(dir, 'db.sqlite3'), cast: { enabled: castEnabled } })
   // A caller plugin: its fiber carries the loader entry the profile gave it.
   const callerCtx = async (pkg: string | undefined): Promise<Context> => {
@@ -28,9 +33,16 @@ async function harness(castEnabled: boolean) {
     if (pkg !== undefined) (inner as unknown as { fiber: { entry?: unknown } }).fiber.entry = { options: { name: pkg } }
     return inner!
   }
-  const preStep = async (sessionId: string, turn: number, step = 1) => await ctx.waterfall('agent/pre-step', {
-    agent: { session: { header: { id: sessionId }, snapshotEvents: () => [] } }, messages: [{ role: 'user' }], turn, step, signal: new AbortController().signal,
-  }, async () => ({ kind: 'enter', messages: [{ id: 'downstream' }] })) as { kind: string; messages: Array<{ source?: { scheduled?: string }; content?: Array<{ text?: string }> }> }
+  const preStep = async (sessionId: string, turn: number, step = 1) => {
+    const id = SessionId(sessionId)
+    const session = sessions.get(id) ?? sessions.create(id)
+    const result = await ctx.waterfall('agent/pre-step', {
+      agent: { session }, messages: [{ role: 'user' }], turn, step, signal: new AbortController().signal,
+    }, async () => ({ kind: 'enter', messages: [{ id: 'downstream' }] })) as { kind: string; messages: UserMessage[] }
+    for (const message of result.messages.slice(1)) session.append('user/message', message, { surfaceOp: 'append' })
+    await setImmediate()
+    return result
+  }
   const dispose = async () => { await fiber.dispose(); rmSync(dir, { recursive: true, force: true }) }
   // Cards are made through a second connection to the same file, as the routes would.
   const makeCard = (data: Parameters<TemplateStore['create']>[0]) => { const store = new TemplateStore(join(dir, 'db.sqlite3')); try { return store.create(data) } finally { store.close() } }

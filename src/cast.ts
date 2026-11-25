@@ -13,13 +13,13 @@
 import { Service, type Context } from '@deepseek-ai/cordis'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
-import type { UserMessage } from '@deepseek-ai/dsh-session'
+import type { Session, SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
 import { PLUGIN_CALLERS, contentDigest, type InterventionSource, type InterventionView } from './interventions.ts'
 import type { LibraryCard, TemplateStore } from './store.ts'
 import type { SelfCheckRow } from './self-check.ts'
 import { expandTemplateVariables } from './variables.ts'
 import { EVIDENCE_QUEUE_MAX, type EvidenceRow, type EvidenceState } from './evidence-ready.ts'
-import type { CastMode, CastRow, CastState, CastView } from './cast-queue.ts'
+import { CAST_STATES, type CastMode, type CastRow, type CastState, type CastView } from './cast-queue.ts'
 
 /** The service name other plugins read: `ctx.promptTemplates`. */
 export const SERVICE_NAME = 'promptTemplates'
@@ -128,17 +128,170 @@ function evidenceField(value: unknown, max: number): string | undefined {
   return text === '' || text.length > max ? undefined : text
 }
 
+/** A persisted user message provides the event location and the exact content the host accepted. */
+interface CastReceipt {
+  readonly seq: number
+  readonly turn: number
+  readonly step: number
+  readonly digest: string
+}
+
+function messageDigest(message: UserMessage): string | undefined {
+  const part = message.content[0]
+  return message.content.length === 1 && part?.type === 'text' ? contentDigest(part.text) : undefined
+}
+
+function receiptOf(event: SessionEvent): CastReceipt | undefined {
+  if (event.type !== 'user/message') return undefined
+  const source = event.data.source as Partial<CastSource>
+  if (source.kind !== 'user' || source.scheduled !== 'prompt-template-cast'
+    || typeof source.turn !== 'number' || typeof source.step !== 'number') return undefined
+  const digest = messageDigest(event.data)
+  return digest === undefined ? undefined : { seq: event.seq, turn: source.turn, step: source.step, digest }
+}
+
+/** Read capability of the host's optional persistence service. */
+interface CastSessionPersistence {
+  open(id: Session['id'], access: 'read', options: { signal: AbortSignal }): Promise<{
+    read(offset?: number, length?: number, options?: { signal: AbortSignal }): Promise<{ events: readonly SessionEvent[] }>
+    close(): Promise<void>
+  }>
+}
+
+interface CastAttempt {
+  readonly messageId: string
+  readonly turn: number
+  readonly step: number
+  appended?: SessionEvent
+  ended?: boolean
+  settlement?: Promise<void>
+}
+
+/**
+ * Prepare a cast before returning it to the host. A durable append settles the queue and audit. A live step ending
+ * without the append can release the batch.
+ */
+function registerCastDelivery(ctx: Context, store: () => TemplateStore, enabled: () => boolean): void {
+  const attempts = new WeakMap<Session, CastAttempt>()
+  let disposed = false
+  ctx.effect(() => () => { disposed = true }, 'prompt-templates: cast delivery stop')
+  let faultReported = false
+  function reportFault(error: unknown): void {
+    if (faultReported) return
+    faultReported = true
+    console.error('[dsh-prompt-templates] cast delivery could not advance:', error)
+  }
+
+  async function flush(session: Session): Promise<boolean> {
+    return (await ctx.get('sessions')?.flush?.(session)) === true
+  }
+
+  function settle(sessionId: string, messageId: string, receipt?: CastReceipt): void {
+    const db = store()
+    const at = new Date().toISOString()
+    db.castQueue.settle(sessionId, messageId, at, receipt, row => {
+      if (receipt === undefined) return
+      const { turn, step } = receipt
+      db.interventions.record({ session_id: sessionId, source: 'plugin', method: null, caller: row.caller, template_id: row.template_id,
+        template_name: row.name, template_version: row.version, content_sha256: contentDigest(expandTemplateVariables(row.content, { sessionId, turn })),
+        turn, step, at, basis: row.basis })
+    })
+  }
+
+  function settleAttempt(session: Session, attempt: CastAttempt): Promise<void> {
+    // Defer until the host's synchronous persistence listener has seen the same append.
+    attempt.settlement ??= Promise.resolve().then(async () => {
+      if (disposed) return
+      const sessionId = String(session.header.id)
+      if (attempt.appended === undefined) {
+        store().castQueue.release(sessionId, attempt.messageId)
+      } else {
+        const receipt = receiptOf(attempt.appended)
+        const durable = receipt !== undefined && await flush(session)
+        if (disposed) return
+        settle(sessionId, attempt.messageId, durable ? receipt : undefined)
+      }
+      attempts.delete(session)
+    }).catch(reportFault).finally(() => { attempt.settlement = undefined })
+    return attempt.settlement
+  }
+
+  ctx.on('session/event', (session, event) => {
+    const attempt = attempts.get(session)
+    if (attempt === undefined) return
+    if (event.type === 'user/message' && event.data.id === attempt.messageId) {
+      attempt.appended = event
+      void settleAttempt(session, attempt)
+    } else if ((event.type === 'step/end' && event.data.turn === attempt.turn && event.data.step === attempt.step)
+      || (event.type === 'turn/end' && event.data.turn === attempt.turn)) {
+      attempt.ended = true
+      void settleAttempt(session, attempt)
+    }
+  })
+
+  async function recover(session: Session, signal: AbortSignal): Promise<void> {
+    const sessionId = String(session.header.id)
+    const prepared = store().castQueue.prepared(sessionId)
+    if (prepared.length === 0) return
+    const pending = new Set(prepared)
+    const receipts = new Map<string, CastReceipt>()
+    const persistence = ctx.get('sessionPersistence' as never) as CastSessionPersistence | undefined
+    if (typeof persistence?.open === 'function' && await flush(session) && !signal.aborted && !disposed) {
+      const handle = await persistence.open(session.header.id, 'read', { signal })
+      try {
+        // The JSONL backend loads the stored generation per read. Read it once for this unfinished batch.
+        const { events } = await handle.read(undefined, undefined, { signal })
+        for (const event of events) {
+          if (event.type !== 'user/message' || !pending.delete(event.data.id)) continue
+          const receipt = receiptOf(event)
+          if (receipt !== undefined) receipts.set(event.data.id, receipt)
+          if (pending.size === 0) break
+        }
+      } finally { await handle.close() }
+    }
+    if (signal.aborted || disposed) return
+    // After losing the originating step, absence from the current log cannot exclude prior delivery.
+    for (const messageId of prepared) settle(sessionId, messageId, receipts.get(messageId))
+  }
+
+  ctx.on('agent/pre-step', async ({ agent, messages, turn, step, signal }, next): Promise<PreStepDecision> => {
+    const decision = await next()
+    if (decision.kind === 'reject' || signal?.aborted || disposed || !enabled()) return decision
+    try {
+      const session = agent.session
+      const sessionId = String(session.header.id)
+      const attempt = attempts.get(session)
+      if (attempt !== undefined && (attempt.appended !== undefined || attempt.ended)) await settleAttempt(session, attempt)
+      if (attempts.has(session)) return decision
+      await recover(session, signal)
+      if (signal?.aborted || disposed || messages.length === 0 || attempts.has(session)) return decision
+      const queue = store().castQueue
+      queue.expire(Date.now(), CAST_WAIT_MS)
+      const stepNo = typeof step === 'number' ? step : 1
+      const cards = queue.waiting(sessionId).filter(row => row.mode !== 'queue' || stepNo <= 1)
+      if (cards.length === 0) return decision
+      const message = renderCastMessage(turn, stepNo, cards, sessionId)
+      const digest = messageDigest(message)
+      if (digest === undefined) return decision
+      const result = { ...decision, messages: [...decision.messages, message] }
+      queue.prepare(sessionId, cards.map(row => row.id), message.id, digest)
+      attempts.set(session, { messageId: message.id, turn, step: stepNo })
+      return result
+    } catch (error) {
+      reportFault(error)
+      return decision
+    }
+  })
+}
+
 /**
  * Provide the service and deliver queued casts at a session's next admitted step. The store and the switch live in this
  * closure only: the service object other plugins hold carries its public methods and cordis' own `ctx`/`name`, never the
  * store or a way to drain a queue (#28 review); reading and withdrawing queued casts is for a recognized caller only.
- * Delivery is recorded as `source: plugin` with the caller and the cast's basis; a fault is reported once and never
- * fails the step. #902 S1: the queue is a table in the plugin's database, so a restart keeps what waits; a cast waits at
- * most an hour, then is marked expired.
+ * Waiting cards survive restarts and expire after one hour. Delivery is recorded with the caller and basis after the host
+ * confirms the message. A queue fault is reported once and does not fail the step.
  */
 export function registerCast(ctx: Context, store: () => TemplateStore, enabled: () => boolean, selfCheckEnabled: () => boolean = () => false): PromptTemplatesService {
-  // #902 S1: the queue is the store's table, so a restart keeps what waits; a cast waits at most CAST_WAIT_MS.
-  const waiting = (sessionId: string | undefined, now: number): CastRow[] => { store().castQueue.expire(now, CAST_WAIT_MS); return store().castQueue.waiting(sessionId) }
   const recognized = (c: Context): string | undefined => { const caller = callerOf(c); return caller !== undefined && PLUGIN_CALLERS.includes(caller) ? caller : undefined }
 
   class Face extends Service {
@@ -182,16 +335,19 @@ export function registerCast(ctx: Context, store: () => TemplateStore, enabled: 
       const authored = template !== undefined && template.scope === 'session' && author !== '' && author !== sessionId && template.session_id === author
       if (template === undefined || (template.scope === 'session' && !own && !authored)) return { ok: false, code: 'template', error: 'no such card for that session' }
       const now = Date.now()
-      const queue = waiting(sessionId, now)
-      if (queue.some(card => card.template_id === template.id)) return { ok: false, code: 'already-queued', error: 'that card already waits for this session' }
-      if (queue.length >= CAST_QUEUE_MAX || waiting(undefined, now).length >= CAST_QUEUE_TOTAL_MAX) return { ok: false, code: 'full', error: `at most ${String(CAST_QUEUE_MAX)} cast cards can wait for one session` }
-      const row = store().castQueue.add({ session_id: sessionId, template_id: template.id, name: authored ? `定制·${template.name}` : template.name, version: template.version ?? null, content: template.content, caller, reason, basis, at: new Date(now).toISOString(), mode })
-      return { ok: true, queued: queue.length + 1, id: row.id }
+      const queue = store().castQueue
+      queue.expire(now, CAST_WAIT_MS)
+      const active = queue.active()
+      const target = active.filter(card => card.session_id === sessionId)
+      if (target.some(card => card.template_id === template.id)) return { ok: false, code: 'already-queued', error: 'that card already waits for this session' }
+      if (target.length >= CAST_QUEUE_MAX || active.length >= CAST_QUEUE_TOTAL_MAX) return { ok: false, code: 'full', error: `at most ${String(CAST_QUEUE_MAX)} cast cards can wait for one session` }
+      const id = queue.add({ session_id: sessionId, template_id: template.id, name: authored ? `定制·${template.name}` : template.name, version: template.version ?? null, content: template.content, caller, reason, basis, at: new Date(now).toISOString(), mode })
+      return { ok: true, queued: target.length + 1, id }
     }
 
     castQueue(filter: { sessionId?: string; state?: CastState; limit?: number } = {}): CastQueueResult {
       if (recognized(this.ctx) === undefined) return { ok: false, code: 'caller', error: 'only a plugin this host recognizes may read the cast queue' }
-      if (filter.state !== undefined && !['waiting', 'delivered', 'withdrawn', 'expired'].includes(filter.state)) return { ok: false, code: 'state', error: 'state must be waiting, delivered, withdrawn or expired' }
+      if (filter.state !== undefined && !CAST_STATES.includes(filter.state)) return { ok: false, code: 'state', error: `state must be one of ${CAST_STATES.join(', ')}` }
       store().castQueue.expire(Date.now(), CAST_WAIT_MS)
       return { ok: true, items: store().castQueue.list({ ...(filter.sessionId !== undefined ? { sessionId: String(filter.sessionId) } : {}), ...(filter.state !== undefined ? { state: filter.state } : {}), ...(filter.limit !== undefined ? { limit: filter.limit } : {}) }) }
     }
@@ -201,9 +357,10 @@ export function registerCast(ctx: Context, store: () => TemplateStore, enabled: 
       const sessionId = String(input?.sessionId ?? '').trim()
       const id = String(input?.id ?? '').trim()
       if (sessionId === '' || id === '') return { ok: false, code: 'session', error: 'name the session and the queued cast' }
-      // Only a cast still waiting for that very session: an id from another session withdraws nothing.
-      const mine = waiting(sessionId, Date.now()).some(row => row.id === id)
-      return { ok: true, withdrawn: mine && store().castQueue.end([id], 'withdrawn', new Date().toISOString()).length === 1 }
+      const now = Date.now()
+      const queue = store().castQueue
+      queue.expire(now, CAST_WAIT_MS)
+      return { ok: true, withdrawn: queue.withdraw(sessionId, id, new Date(now).toISOString()) }
     }
 
     draftCard(input: { authorSession: string; id?: string; name: string; content: string; description?: string }): DraftResult {
@@ -264,34 +421,6 @@ export function registerCast(ctx: Context, store: () => TemplateStore, enabled: 
     }
   }
   const service = new Face(ctx) as unknown as PromptTemplatesService
-  let faultReported = false
-  ctx.on('agent/pre-step', async ({ agent, messages, turn, step }, next): Promise<PreStepDecision> => {
-    const decision = await next()
-    // Casting off: nothing can be queued, so the step does not read the store at all (#902 S1).
-    if (decision.kind === 'reject' || messages.length === 0 || !enabled()) return decision
-    try {
-      const sessionId = String(agent.session.header.id)
-      const now = Date.now()
-      // #902 S3: a `queue` cast waits for the first step of a turn, so it never cuts into a turn under way.
-      const first = typeof step !== 'number' || step <= 1
-      const queued = waiting(sessionId, now).filter(row => row.mode !== 'queue' || first)
-      if (queued.length === 0) return decision
-      // Ended before rendering, so a second step can never deliver the same row again.
-      const cards = store().castQueue.end(queued.map(row => row.id), 'delivered', new Date(now).toISOString())
-      if (cards.length === 0) return decision
-      const message = renderCastMessage(turn, typeof step === 'number' ? step : 1, cards, sessionId)
-      try {
-        const at = new Date().toISOString()
-        for (const card of cards) {
-          store().interventions.record({ session_id: sessionId, source: 'plugin', method: null, caller: card.caller, template_id: card.template_id, template_name: card.name,
-            template_version: card.version, content_sha256: contentDigest(expandTemplateVariables(card.content, { sessionId, turn })), turn, step: typeof step === 'number' ? step : null, at, basis: card.basis })
-        }
-      } catch (error) { console.error('[dsh-prompt-templates] intervention log skipped a cast:', error) }
-      return { ...decision, messages: [...decision.messages, message] }
-    } catch (error) {
-      if (!faultReported) { faultReported = true; console.error('[dsh-prompt-templates] cast skipped this step; further faults stay silent:', error) }
-      return decision
-    }
-  })
+  registerCastDelivery(ctx, store, enabled)
   return service
 }

@@ -249,7 +249,7 @@ test('v10 databases migrate to v11 in place: the lesson tables are added, templa
       assert.deepEqual(reopened.lessons.log(S), [])
     } finally { reopened.close() }
     const check = new DatabaseSync(path)
-    assert.equal((check.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, 11)
+    assert.equal((check.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, 12)
     const tables = (check.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>).map(row => row.name)
     assert.ok(tables.includes('lesson_cues') && tables.includes('lesson_log'))
     check.close()
@@ -384,7 +384,7 @@ test('host: with lessons.enabled false nothing is prompted, recalled or written'
     assert.deepEqual(await preStep(ctx, 1), [])
     assert.deepEqual(await tools.get('lesson_write')?.execute({ text: 'x', type: '找' }, { agent: agentOf(S) }), { ok: false, code: 'disabled', error: 'lessons are off on this host' })
     const read = await request(route, `${BASE}/lessons?session_id=${S}`)
-    assert.deepEqual({ items: read.body.items, log: read.body.log, schema: read.body.schema }, { items: [], log: [], schema: 11 })
+    assert.deepEqual({ items: read.body.items, log: read.body.log, schema: read.body.schema }, { items: [], log: [], schema: 12 })
   })
 })
 
@@ -457,7 +457,7 @@ test('host (B5b): GET /version reports the loaded server version from the packag
     assert.equal(read.status, 200)
     assert.equal(read.body.name, manifest.name)
     assert.equal(read.body.version, manifest.version)
-    assert.equal(read.body.schema, 11)
+    assert.equal(read.body.schema, 12)
     assert.ok(!Number.isNaN(Date.parse(read.body.loaded_at)))
     assert.deepEqual(read.body.features, { inject: true, lessons: false, selfCheck: true, cast: true, eventInject: false })
     assert.equal((await request(route, `${BASE}/version`, 'POST', {})).status, 405)

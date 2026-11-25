@@ -28,7 +28,7 @@ import { INTERVENTIONS_SQL, InterventionLog, contentDigest } from './interventio
 import { SELF_CHECK_CARDS_SQL, SELF_CHECK_SQL, SelfCheckLog } from './self-check.ts'
 import { LESSONS_SQL, LESSON_EVIDENCE_SQL, LESSON_HITS_SQL, LESSON_OUTCOME_SQL, LESSON_TYPES_SQL, LessonStore } from './lessons.ts'
 import { EVIDENCE_READY_SQL, EvidenceReadyStore } from './evidence-ready.ts'
-import { CAST_QUEUE_SQL, CastQueueStore } from './cast-queue.ts'
+import { CastQueueStore, migrateCastQueue } from './cast-queue.ts'
 
 /** v9: the version label of a template's text. */
 const TEMPLATE_VERSION_SQL = 'ALTER TABLE templates ADD COLUMN version TEXT'
@@ -53,9 +53,10 @@ import type { CategoryCreateRequest, CategoryView, PromptScope, TemplateCreateRe
  * v8 adds `event_episodes.repeated_after_reminder` (提醒后仍在重复, 0.16),
  * v9 adds `templates.version` and the durable `interventions` log (observer phase 1, 0.16),
  * v10 adds the wrap-up `self_check_log` (observer phase 2, PT-4),
- * v11 adds `lesson_cues` and `lesson_log` (体会, docs/spec-lesson-inject.md).
+ * v11 adds `lesson_cues` and `lesson_log` (体会, docs/spec-lesson-inject.md),
+ * v12 requires host delivery receipts for terminal casts.
  */
-export const SCHEMA_VERSION = 11
+export const SCHEMA_VERSION = 12
 
 /** Upper bound of the inject interval when the deployment config omits one. */
 export const DEFAULT_INJECT_MAX_EVERY = 1000
@@ -204,11 +205,8 @@ export class TemplateStore {
       this.db.exec(SELF_CHECK_CARDS_SQL)
       this.db.exec(LESSON_OUTCOME_SQL)
       this.db.exec(EVIDENCE_READY_SQL)
-      // #902 S1: the durable cast queue, and the basis a cast was given (guarded: added once, older builds ignore both).
-      this.db.exec(CAST_QUEUE_SQL)
+      migrateCastQueue(this.db)
       if (!(this.db.prepare('PRAGMA table_info(interventions)').all() as Array<{ name: string }>).some(col => col.name === 'basis')) this.db.exec('ALTER TABLE interventions ADD COLUMN basis TEXT')
-      // #902 S3: a queued cast's mode (insert at the next step, or queue for the next turn's first step).
-      if (!(this.db.prepare('PRAGMA table_info(cast_queue)').all() as Array<{ name: string }>).some(col => col.name === 'mode')) this.db.exec("ALTER TABLE cast_queue ADD COLUMN mode TEXT NOT NULL DEFAULT 'insert'")
       this.db.exec('COMMIT')
       if (dbPath !== ':memory:') {
         try { chmodSync(dbPath, 0o600) } catch { /* best-effort */ }
