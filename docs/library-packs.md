@@ -64,5 +64,15 @@
     - `castWithdraw({ sessionId, id })`：撤回该会话里一张还在等的卡。
     - 别的调用方回 `caller`；拿别的会话的 id 去撤，撤不掉，回 `withdrawn: false`。
   - **原因压成一行：** 换行和控制字符一律换成空格，所以原因里伪造不出抬头那样的一行。
+  - **代写会话卡（#902 S2，只认调用方）：**
+    - `draftCard({ authorSession, id?, name, content, description? })`：在 authorSession 自己的会话模板里新建一张卡；带 `id` 就是改这张卡。
+    - `draftDelete({ authorSession, id })`：删掉 authorSession 自己的一张卡。
+    - 这些卡就是普通的会话模板，该会话在面板上也看得到、改得了。
+    - 只能动 authorSession 自己的卡；拿别的会话的卡 id 来改，回 `card`；拿来删，回 `deleted: false`。
+    - 名称 1～128 字，正文 1～8000 字；同一个会话里卡不能重名。
+  - **按作者会话投卡（#902 S2）：**
+    - `cast()` 可以多带一个 `authorSession`，表示把作者会话自己的卡投进另一个会话。谁可以当作者、能投给谁，由调用方（a2a 插件）先查过。
+    - 投出去的卡名前面加「定制·」。
+    - 不带 `authorSession`，或者带的不是这张卡所属的会话，仍旧只能投全局卡和目标会话自己的卡。
   - **服务对象上不暴露存储：** 别的插件拿到的只有服务方法，碰不到存储本身，也没法把队列取空。查队列和撤回只认上面认出的调用方。
   - **白名单冻结：** `PLUGIN_CALLERS` 用 `Object.freeze` 冻住，运行时改不动。
