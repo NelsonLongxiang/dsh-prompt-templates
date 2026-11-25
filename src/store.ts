@@ -208,7 +208,15 @@ export class TemplateStore {
       this.db.exec(CAST_QUEUE_SQL)
       if (!(this.db.prepare('PRAGMA table_info(interventions)').all() as Array<{ name: string }>).some(col => col.name === 'basis')) this.db.exec('ALTER TABLE interventions ADD COLUMN basis TEXT')
       // #902 S3: a queued cast's mode (insert at the next step, or queue for the next turn's first step).
-      if (!(this.db.prepare('PRAGMA table_info(cast_queue)').all() as Array<{ name: string }>).some(col => col.name === 'mode')) this.db.exec("ALTER TABLE cast_queue ADD COLUMN mode TEXT NOT NULL DEFAULT 'insert'")
+      const castCols = (this.db.prepare('PRAGMA table_info(cast_queue)').all() as Array<{ name: string }>).map(col => col.name)
+      if (!castCols.includes('mode')) this.db.exec("ALTER TABLE cast_queue ADD COLUMN mode TEXT NOT NULL DEFAULT 'insert'")
+      // #902 review: the caller's label for a cast, and when a row was handed to a step but not yet seen in the log.
+      if (!castCols.includes('origin')) this.db.exec('ALTER TABLE cast_queue ADD COLUMN origin TEXT')
+      if (!castCols.includes('sent_at')) this.db.exec('ALTER TABLE cast_queue ADD COLUMN sent_at TEXT')
+      // #902 review (#88 B1): how a cast went in and the caller's label, in the intervention log too.
+      const ivCols = (this.db.prepare('PRAGMA table_info(interventions)').all() as Array<{ name: string }>).map(col => col.name)
+      if (!ivCols.includes('mode')) this.db.exec('ALTER TABLE interventions ADD COLUMN mode TEXT')
+      if (!ivCols.includes('origin')) this.db.exec('ALTER TABLE interventions ADD COLUMN origin TEXT')
       this.db.exec('COMMIT')
       if (dbPath !== ':memory:') {
         try { chmodSync(dbPath, 0o600) } catch { /* best-effort */ }
@@ -229,6 +237,15 @@ export class TemplateStore {
   }
 
   /** Close the underlying database handle. */
+  /**
+   * #89 review B2: run `fn` in one transaction over the plugin's file, so two writes (a queue row's end and its
+   * intervention record) land together or not at all.
+   */
+  transaction<T>(fn: () => T): T {
+    this.db.exec('BEGIN IMMEDIATE')
+    try { const out = fn(); this.db.exec('COMMIT'); return out } catch (error) { try { this.db.exec('ROLLBACK') } catch { /* already rolled back */ } throw error }
+  }
+
   close(): void {
     this.db.close()
   }
