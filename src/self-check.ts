@@ -19,6 +19,7 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { UserMessage } from '@deepseek-ai/dsh-session'
 import type { DatabaseSync } from 'node:sqlite'
 import { oneLine } from './cast.ts'
+import { scopeLacksAll } from './inject.ts'
 import type { TemplateStore } from './store.ts'
 import { objectParameters, registerWhenToolsReady, withOutput } from './tool-registry.ts'
 
@@ -43,6 +44,40 @@ export const FIXED_POINTS = [
   '6. 交结论：用 selfcheck_conclude 交一次（做完、登记等待、接着做、孤儿停，四选一），附证据或叫醒条件、期限、关联的单子或目标。',
   '7. 本模板是属主预置的常设要求，适用即须执行；不扩大授权，不覆盖属主当下指令。',
 ] as const
+
+/**
+ * Decision-card registration for a2a collaboration (owner 2026-11-25): like a workshop card round that ends with a
+ * lesson or a stated no-entry, a check taken while the session holds an open a2a ticket ends with a decision card it
+ * submitted or a stated reason for none. Kept outside FIXED_POINTS, which are workbench-market 18's words.
+ */
+export const CARD_TOOLS: readonly string[] = ['superagent_decision_propose', 'a2a_decision_propose', 'a2a_outbound_request']
+export const NO_CARD_MAX = 200
+export const CARD_LINE = '【a2a 协作·决策卡登记】你手上有 a2a 单子。本轮结束前二选一：已经提交决策卡的，在 selfcheck_conclude 的 card 写卡号或请求号；不提交的，在 no_card 写一句原因。和不写体会也要登记一样，两项都空不算交了结论。'
+/** Why a card registration was recorded not applicable. */
+export const CARD_NA_REASON = '工具不可用'
+
+/** DDL of the card registrations: additive and idempotent, so no schema version bump. */
+export const SELF_CHECK_CARDS_SQL = `CREATE TABLE IF NOT EXISTS self_check_cards (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT NOT NULL,
+  turn INTEGER,
+  kind TEXT NOT NULL CHECK (kind IN ('card', 'none', 'na')),
+  card TEXT,
+  reason TEXT,
+  at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS self_check_cards_session ON self_check_cards (session_id, seq)`
+
+/** One card registration (wire shape). */
+export interface SelfCheckCardRow {
+  readonly seq: number
+  readonly session_id: string
+  readonly turn: number | null
+  readonly kind: 'card' | 'none' | 'na'
+  readonly card: string | null
+  readonly reason: string | null
+  readonly at: string
+}
 
 /** The fixed part when nobody is present: points 1–4, 6 and 7. */
 export const FIXED_ABSENT = [`【工坊·收尾自查｜底线 ${FIXED_VERSION}】`, ...FIXED_POINTS.filter((_, i) => i !== 4)].join('\n')
@@ -101,6 +136,13 @@ export class SelfCheckLog {
     const rows = this.#db.prepare('SELECT * FROM (SELECT * FROM self_check_log WHERE session_id = ? ORDER BY seq DESC LIMIT ?) ORDER BY seq').all(sessionId, Math.max(1, Math.min(500, Math.trunc(limit)))) as unknown as Array<Omit<SelfCheckRow, 'present'> & { present: number | null }>
     return rows.map(r => ({ ...r, present: r.present === null ? null : r.present === 1 }))
   }
+  recordCard(row: Omit<SelfCheckCardRow, 'seq' | 'at'>): void {
+    this.#db.prepare('INSERT INTO self_check_cards (session_id, turn, kind, card, reason, at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(row.session_id, row.turn, row.kind, row.card, row.reason, new Date().toISOString())
+  }
+  cards(sessionId: string, limit = 100): SelfCheckCardRow[] {
+    return this.#db.prepare('SELECT * FROM (SELECT * FROM self_check_cards WHERE session_id = ? ORDER BY seq DESC LIMIT ?) ORDER BY seq').all(sessionId, Math.max(1, Math.min(500, Math.trunc(limit)))) as unknown as SelfCheckCardRow[]
+  }
   count(sessionId: string, kind: SelfCheckRow['kind']): number {
     return Number((this.#db.prepare('SELECT COUNT(*) AS n FROM self_check_log WHERE session_id = ? AND kind = ?').get(sessionId, kind) as { n: number }).n)
   }
@@ -137,9 +179,9 @@ export function writeDomain(store: TemplateStore, log: SelfCheckLog, sessionId: 
 }
 
 /** The silent self-check message steered at the stop boundary. */
-export function renderSelfCheck(turn: number, present: boolean, domain: string | undefined): UserMessage {
+export function renderSelfCheck(turn: number, present: boolean, domain: string | undefined, card = false): UserMessage {
   const fixed = present ? FIXED_PRESENT : FIXED_ABSENT
-  const parts = ['<system-reminder>', fixed, ...(domain !== undefined && !present ? ['', '【你自己的领域部分】', domain] : []), '</system-reminder>']
+  const parts = ['<system-reminder>', fixed, ...(card ? [CARD_LINE] : []), ...(domain !== undefined && !present ? ['', '【你自己的领域部分】', domain] : []), '</system-reminder>']
   return createUserMessage({
     content: [{ type: 'text', text: parts.join('\n') }],
     source: { kind: 'prompt-template-selfcheck', turn, present, fixed: FIXED_VERSION } as unknown as UserMessage['source'],
@@ -155,7 +197,7 @@ export function renderHint(turn: number): UserMessage {
 }
 
 /** Per-session state of the trigger (memory; the log carries what matters across restarts). */
-interface SessionState { injectedTurn?: number; concluded?: boolean; orphanLogged?: boolean; actions: number; actionsAtCheck?: number; lastHintTurn?: number; attachNext?: UserMessage[] }
+interface SessionState { injectedTurn?: number; concluded?: boolean; cardDue?: boolean; orphanLogged?: boolean; actions: number; actionsAtCheck?: number; lastHintTurn?: number; attachNext?: UserMessage[] }
 
 type AgentLike = { id: unknown; session: { header: { id: unknown }; snapshotEvents?: () => ReadonlyArray<{ type?: string; data?: { source?: { kind?: string } } }> }; steer?: (message: UserMessage) => void }
 type AgentsLike = { roots?: () => unknown[]; turnBoundaryOf?: (session: unknown) => { openTurnStartSeq: number | null } }
@@ -164,11 +206,11 @@ type GoalsLike = { get?: (agent: unknown) => { phase?: string } | undefined }
 type A2aTicketsLike = { hasOpenTicket?: (sessionId: string) => boolean | undefined }
 
 /** What makes a session's work unfinished: an active goal, or an open a2a ticket; `unknown` when a2a gives no answer. */
-export function workInHand(goals: GoalsLike | undefined, tickets: A2aTicketsLike | undefined, agent: unknown, sessionId: string): { open: boolean; ticketSource: 'a2a' | 'missing' } {
+export function workInHand(goals: GoalsLike | undefined, tickets: A2aTicketsLike | undefined, agent: unknown, sessionId: string): { open: boolean; ticket: boolean; ticketSource: 'a2a' | 'missing' } {
   const goal = goals?.get?.(agent)?.phase === 'active'
   let ticket: boolean | undefined
   try { ticket = typeof tickets?.hasOpenTicket === 'function' ? tickets.hasOpenTicket(sessionId) : undefined } catch { ticket = undefined }
-  return { open: goal || ticket === true, ticketSource: typeof ticket === 'boolean' ? 'a2a' : 'missing' }
+  return { open: goal || ticket === true, ticket: ticket === true, ticketSource: typeof ticket === 'boolean' ? 'a2a' : 'missing' }
 }
 
 /** Whether the owner opened this turn: a direct human message in the open turn (as dsh-tool-goal reads it). */
@@ -239,15 +281,23 @@ export function registerSelfCheck(ctx: Context, store: () => TemplateStore, enab
       s.actionsAtCheck = s.actions
       // The ticket source is noted when a2a gave no answer (it was judged on the goal alone).
       const note = work.ticketSource === 'missing' ? 'a2a-ticket-source-missing' : null
+      // a2a collaboration: the check also asks for a decision card or a stated reason for none, unless the session has
+      // no card tool at all (then recorded not applicable, as a card round without lesson tools is).
+      let card = false
+      if (work.ticket) {
+        if (scopeLacksAll(agent, CARD_TOOLS)) log().recordCard({ session_id: sessionId, turn, kind: 'na', card: null, reason: CARD_NA_REASON })
+        else card = true
+      }
+      s.cardDue = card
       if (present) {
         // Owner present: never extend the turn. The one check rides along at the session's next step instead.
-        s.attachNext = [...(s.attachNext ?? []), renderSelfCheck(turn, true, undefined)]
+        s.attachNext = [...(s.attachNext ?? []), renderSelfCheck(turn, true, undefined, card)]
         log().record({ session_id: sessionId, turn, kind: 'injected', present: true, conclusion: null, evidence: note, wake: null, deadline: null, ticket: null })
         return
       }
       if (typeof agent.steer !== 'function') return
       s.injectedTurn = turn; s.concluded = false; s.orphanLogged = false
-      agent.steer(renderSelfCheck(turn, false, domain?.content))
+      agent.steer(renderSelfCheck(turn, false, domain?.content, card))
       log().record({ session_id: sessionId, turn, kind: 'injected', present: false, conclusion: null, evidence: note, wake: null, deadline: null, ticket: null })
       if (domain === undefined) {
         const hints = log().count(sessionId, 'hint')
@@ -300,8 +350,10 @@ export function registerSelfCheck(ctx: Context, store: () => TemplateStore, enab
         wake: { type: 'string', description: 'For waiting: what wakes you (an a2a message or a schedule).' },
         deadline: { type: 'string', description: 'For waiting: by when, roughly.' },
         ticket: { type: 'string', description: 'The ticket or goal it concerns.' },
+        card: { type: 'string', description: 'In a2a collaboration: the decision card (or outbound request) you submitted this round, by its id.' },
+        no_card: { type: 'string', description: 'In a2a collaboration: why you submit no decision card this round, in one sentence (1..200 characters).' },
       }, ['conclusion']),
-      execute: async (args: { conclusion?: unknown; evidence?: unknown; wake?: unknown; deadline?: unknown; ticket?: unknown }, exec: unknown) => {
+      execute: async (args: { conclusion?: unknown; evidence?: unknown; wake?: unknown; deadline?: unknown; ticket?: unknown; card?: unknown; no_card?: unknown }, exec: unknown) => {
         if (!enabled()) return { ok: false, code: 'disabled', error: 'self-check is off on this host' }
         const sessionId = sessionOf(exec)
         if (sessionId === undefined) return { ok: false, code: 'session', error: 'no calling session' }
@@ -311,10 +363,18 @@ export function registerSelfCheck(ctx: Context, store: () => TemplateStore, enab
         const row = { evidence: text(args.evidence), wake: text(args.wake), deadline: text(args.deadline), ticket: text(args.ticket) }
         if (conclusion === 'done' && row.evidence === null) return { ok: false, code: 'evidence', error: 'done needs its evidence' }
         if (conclusion === 'waiting' && (row.wake === null || row.deadline === null)) return { ok: false, code: 'wake', error: 'waiting needs the wake condition and a deadline' }
+        const card = oneLine(String(args.card ?? '')).slice(0, 200)
+        const noCard = oneLine(String(args.no_card ?? ''))
+        if (card !== '' && noCard !== '') return { ok: false, code: 'card', error: 'give the decision card you submitted or the reason for none, not both' }
+        if (noCard !== '' && [...noCard].length > NO_CARD_MAX) return { ok: false, code: 'card', error: `no_card is 1..${String(NO_CARD_MAX)} characters` }
         const s = state(sessionId)
+        if (s.cardDue === true && card === '' && noCard === '') return { ok: false, code: 'card', error: 'you hold an a2a ticket: give the decision card you submitted this round (card) or one sentence why none (no_card)' }
         s.concluded = true
-        log().record({ session_id: sessionId, turn: s.injectedTurn ?? null, kind: 'concluded', present: null, conclusion, ...row })
-        return { ok: true }
+        const turn = s.injectedTurn ?? null
+        log().record({ session_id: sessionId, turn, kind: 'concluded', present: null, conclusion, ...row })
+        if (card !== '' || noCard !== '') log().recordCard({ session_id: sessionId, turn, kind: card !== '' ? 'card' : 'none', card: card === '' ? null : card, reason: noCard === '' ? null : noCard })
+        s.cardDue = false
+        return { ok: true, ...(card !== '' ? { card } : noCard !== '' ? { card: 'none' } : {}) }
       },
     }))
   })

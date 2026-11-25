@@ -9,19 +9,19 @@ import { join } from 'node:path'
 import test from 'node:test'
 import { Context } from '@deepseek-ai/cordis'
 import * as host from '../src/index.ts'
-import { DOMAIN_MAX, FIXED_ABSENT, FIXED_PRESENT, FIXED_MAX, FIXED_POINTS, HINT_EVERY, MISSING_HINT, SELF_CHECK_NAME } from '../src/self-check.ts'
+import { CARD_LINE, CARD_NA_REASON, DOMAIN_MAX, FIXED_ABSENT, FIXED_PRESENT, FIXED_MAX, FIXED_POINTS, HINT_EVERY, MISSING_HINT, SELF_CHECK_NAME } from '../src/self-check.ts'
 import { TemplateStore } from '../src/store.ts'
 
 type Steered = { content?: Array<{ text?: string }>; source?: { kind?: string; scheduled?: string; present?: boolean } }
 
-async function harness(o: { enabled?: boolean; goal?: string; ticket?: boolean } = {}) {
+async function harness(o: { enabled?: boolean; goal?: string; ticket?: boolean; agentCtx?: unknown } = {}) {
   const dir = createTestDirectory('pt-selfcheck-')
   const dbPath = join(dir, 'db.sqlite3')
   const ctx = new Context()
   const goal = { phase: o.goal ?? 'active' }
   const events: Array<{ type: string; data: { source: { kind: string } } }> = []
   const steered: Steered[] = []
-  const agent = { id: 'agent-1', session: { header: { id: 'sess-1' }, snapshotEvents: () => events }, steer: (m: Steered) => { steered.push(m) } }
+  const agent = { id: 'agent-1', ...(o.agentCtx !== undefined ? { ctx: o.agentCtx } : {}), session: { header: { id: 'sess-1' }, snapshotEvents: () => events }, steer: (m: Steered) => { steered.push(m) } }
   const tools = new Map<string, { execute(a: unknown, e: unknown): Promise<Record<string, unknown>> }>()
   ctx.provide('agents' as never, { roots: () => [agent], turnBoundaryOf: () => ({ openTurnStartSeq: 0 }) } as never)
   ctx.provide('goals' as never, { get: () => goal } as never)
@@ -265,5 +265,54 @@ test('#29 review (N7, N5): a done conclusion\'s evidence is masked for other plu
     assert.equal(done(noEntry!).evidence, null, 'no loader entry: summary only')
     assert.equal(done(noEntry!).conclusion, 'done')
     assert.ok(!JSON.stringify(noEntry!.promptTemplates.selfChecks('sess-1')).includes('EVIDENCE-TEXT'))
+  } finally { await h.dispose() }
+})
+
+test('a2a collaboration: a check with an open ticket ends with a decision card or a stated reason for none (owner 2026-11-25)', async () => {
+  const h = await harness({ goal: 'none', ticket: true })
+  const cards = () => { const st = new TemplateStore(h.dbPath); try { return st.selfChecks.cards('sess-1') } finally { st.close() } }
+  try {
+    h.act(); await h.stop(1)
+    const check = h.steered.find(m => m.source?.kind === 'prompt-template-selfcheck')
+    assert.ok(check?.content?.[0]?.text?.includes(CARD_LINE), 'the check carries the card line')
+    const bare = await h.call('selfcheck_conclude', { conclusion: 'continue' })
+    assert.equal(bare.code, 'card', 'neither a card nor a reason: refused')
+    assert.equal(h.read().filter(r => r.kind === 'concluded').length, 0, 'a refused conclusion is not logged')
+    assert.equal((await h.call('selfcheck_conclude', { conclusion: 'continue', card: 'd-1', no_card: 'x' })).code, 'card', 'not both')
+    assert.equal((await h.call('selfcheck_conclude', { conclusion: 'continue', no_card: 'x'.repeat(201) })).code, 'card', 'reason too long')
+    assert.deepEqual(await h.call('selfcheck_conclude', { conclusion: 'continue', card: 'decision 42' }), { ok: true, card: 'decision 42' })
+    h.act(); await h.stop(2)
+    assert.deepEqual(await h.call('selfcheck_conclude', { conclusion: 'waiting', wake: 'a2a 回执', deadline: '今晚', no_card: '本轮只是在等回执，没有要属主取舍的事' }), { ok: true, card: 'none' })
+    assert.deepEqual(cards().map(r => [r.turn, r.kind, r.card, r.reason]), [[1, 'card', 'decision 42', null], [2, 'none', null, '本轮只是在等回执，没有要属主取舍的事']])
+  } finally { await h.dispose() }
+
+  // No ticket in hand: no card line, no card required, nothing registered.
+  const goalOnly = await harness({ goal: 'active', ticket: false })
+  try {
+    goalOnly.act(); await goalOnly.stop(1)
+    assert.ok(!goalOnly.steered.find(m => m.source?.kind === 'prompt-template-selfcheck')?.content?.[0]?.text?.includes(CARD_LINE))
+    assert.deepEqual(await goalOnly.call('selfcheck_conclude', { conclusion: 'continue' }), { ok: true })
+  } finally { await goalOnly.dispose() }
+
+  // A ticket in hand but a confirmed scope without any card tool: recorded not applicable, not required.
+  const scope = {}
+  const agentCtx = { [Symbol('dsh.scope')]: scope, tools: { get: () => undefined } }
+  const na = await harness({ goal: 'none', ticket: true, agentCtx })
+  try {
+    na.act(); await na.stop(1)
+    assert.ok(!na.steered.find(m => m.source?.kind === 'prompt-template-selfcheck')?.content?.[0]?.text?.includes(CARD_LINE))
+    assert.deepEqual(await na.call('selfcheck_conclude', { conclusion: 'continue' }), { ok: true })
+    const st = new TemplateStore(na.dbPath)
+    try { assert.deepEqual(st.selfChecks.cards('sess-1').map(r => [r.kind, r.reason]), [['na', CARD_NA_REASON]]) } finally { st.close() }
+  } finally { await na.dispose() }
+})
+
+test('a2a collaboration, owner present: the attached check carries the card line too', async () => {
+  const h = await harness({ goal: 'none', ticket: true })
+  try {
+    h.humanTurn(); h.act(); await h.stop(1)
+    const out = await h.preStep(2)
+    assert.ok(out.messages.some(m => m.content?.[0]?.text?.includes(CARD_LINE)))
+    assert.equal((await h.call('selfcheck_conclude', { conclusion: 'done', evidence: 'x' })).code, 'card')
   } finally { await h.dispose() }
 })
