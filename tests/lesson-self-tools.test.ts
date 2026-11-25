@@ -31,7 +31,7 @@ const FIELDS: Record<string, string[]> = {
   lesson_timeline: ['limit', 'type'],
   lesson_type_propose: ['name', 'description'],
   selfcheck_write: ['text'],
-  selfcheck_conclude: ['conclusion', 'evidence', 'wake', 'deadline', 'ticket'],
+  selfcheck_conclude: ['conclusion', 'evidence', 'wake', 'deadline', 'ticket', 'card', 'no_card'],
 }
 /** Words that, as a part of a parameter name, would let a call reach beyond the calling session or into the host. */
 const FORBIDDEN = new Set(['session', 'sid', 'agent', 'caller', 'path', 'paths', 'file', 'files', 'dir', 'directory', 'cwd', 'folder', 'command', 'cmd', 'shell', 'exec', 'script', 'url', 'uri', 'home'])
@@ -52,7 +52,7 @@ const sorted = (xs: readonly string[]): string[] => [...xs].sort()
 test('the forbidden-word check itself sees a session, path, command or file in the usual spellings', () => {
   for (const name of ['session_id', 'sessionId', 'targetSession', 'path', 'filePath', 'cwd', 'command', 'shell_cmd', 'url'])
     assert.notDeepEqual(parts(name).filter(p => FORBIDDEN.has(p)), [], name)
-  for (const name of ['description', 'deadline', 'evidence', 'reason']) assert.deepEqual(parts(name).filter(p => FORBIDDEN.has(p)), [], name)
+  for (const name of ['description', 'deadline', 'evidence', 'reason', 'card', 'no_card']) assert.deepEqual(parts(name).filter(p => FORBIDDEN.has(p)), [], name)
 })
 
 test('LESSON_SELF_TOOLS is exactly the seven self tools', () => {

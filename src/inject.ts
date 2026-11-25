@@ -87,12 +87,20 @@ function scopeKeyOf(ctx: unknown): object | undefined {
  * @returns true when neither lesson_write nor lesson_none is visible to the agent.
  */
 export function lessonToolsMissing(agent: unknown): boolean {
+  return scopeLacksAll(agent, CARD_ROUND_TOOLS)
+}
+
+/**
+ * Whether this agent's own tool scope offers none of `names`. True only on a confirmed absence: no scope, no tools
+ * service, or any fault counts as "has them".
+ */
+export function scopeLacksAll(agent: unknown, names: readonly string[]): boolean {
   try {
     const ctx = (agent as { ctx?: unknown } | null)?.ctx
     const tools = (ctx as { tools?: { get?: (name: string, scope?: object) => unknown } } | undefined)?.tools
     const scope = scopeKeyOf(ctx)
     if (typeof tools?.get !== 'function' || scope === undefined) return false
-    return CARD_ROUND_TOOLS.every(name => tools.get!(name, scope) === undefined)
+    return names.every(name => tools.get!(name, scope) === undefined)
   } catch {
     // An unreadable tool scope is no proof the tools are missing.
     return false
