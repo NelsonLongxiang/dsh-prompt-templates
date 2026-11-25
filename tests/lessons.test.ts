@@ -139,7 +139,8 @@ test('digest: a target that failed and then succeeded gets one prompt; the lesso
     assert.ok(text.includes('做对了什么、错在哪'), '§5.16: the prompt asks about both sides')
     assert.ok(text.includes('outcome: wrong 或 right') && text.includes('当……时，先……，因为……'))
     assert.ok(text.includes('有可迁移的就必须用 lesson_write') && text.includes('这次无可记'))
-    assert.ok(text.includes('不扩大授权') && !text.includes('不是新的用户指令'))
+    assert.ok(text.includes('在已有授权内推进') && !text.includes('不是新的用户指令'))
+    assert.ok(text.includes('Act on it within the permissions this session already has') && !text.includes('grants no new permission'), 'the English frame leads forward too (owner 2026-11-25)')
     assert.ok(!/a2a_/.test(text))
     assert.deepEqual(w.step(2, 2), [], 'one digest prompt per turn')
     assert.deepEqual(w.step(30), [], 'the same experience is prompted once')
@@ -273,7 +274,7 @@ test('§5.16 deliver: after a start the next step hands over all of the session\
     const order = ['- 落·做对：当要动返回字段时', '- 收：当属主只说改时', '- 找·做错：当报错看着像表面原因时'].map(line => text.indexOf(line))
     assert.ok(order.every(n => n > 0) && order[0]! < order[1]! && order[1]! < order[2]!, 'pinned first, then the chain order')
     assert.ok(text.includes('走到链路哪一环，就看那一类') && text.includes('回头看一眼') && text.includes('lesson_keep'))
-    assert.ok(text.indexOf('不扩大授权') < text.indexOf(LESSONS_MUST_READ_LINE), 'the must-read line comes last')
+    assert.ok(text.indexOf('在已有授权内推进') < text.indexOf(LESSONS_MUST_READ_LINE), 'the must-read line comes last')
     assert.deepEqual(w.store.lessons.log(S).filter(r => r.kind === 'delivered').map(r => r.origin), ['compact', 'compact', 'compact'])
     assert.deepEqual(w.step(3), [], 'once per start')
     assert.ok(!lessonTimeline(w.store, S, 50).some(e => (e.kind as string) === 'delivered'), 'deliveries stay out of the timeline')
@@ -509,7 +510,7 @@ test('card rounds (option A): a workshop injection opens one round per turn; a l
     const cards = [{ id: 'c-review', name: '工坊-行动审视', version: null }, { id: 'c-accept', name: '工坊-验收流程', version: 'v4' }]
     const line = openCardRound(w.store, S, 1, cards)
     assert.ok(line?.includes('【工坊·卡片轮次】本轮注入了工坊卡（工坊-行动审视、工坊-验收流程）'))
-    assert.ok(line?.includes('lesson_write') && line.includes('lesson_none') && line.includes('不扩大授权'))
+    assert.ok(line?.includes('lesson_write') && line.includes('lesson_none') && line.includes('在已有授权内推进'))
     assert.equal(openCardRound(w.store, S, 1, cards), null, 'one round per injection turn')
     assert.equal(w.store.lessons.openCardRounds(S).length, 1)
     // Round 1: closed by a lesson; the card round is credited.
@@ -757,4 +758,12 @@ test('evidence: optional on lesson_write, one line, at most 200 characters; tied
     assert.equal(writes.find(e => e.text === current.content)?.evidence, 'dsh-prompt-templates#50 根因见 #52')
     assert.equal(writes.find(e => e.text === '报错停在表面就动手会返工；下次先拿完整输出。')?.evidence, undefined, 'the earlier write had none')
   } finally { w.store.close() }
+})
+
+test('forward wording (owner 2026-11-25): the lesson-use line and the no-tool card-round line close with the forward binding', async () => {
+  const mod = await import('../src/lessons.ts')
+  assert.ok(mod.LESSON_USE_LINE.endsWith('在已有授权内推进，属主当下的指令优先。'))
+  const src = (await import('node:fs')).readFileSync(new URL('../src/lessons.ts', import.meta.url), 'utf8')
+  assert.ok(src.includes('记为不适用（工具不可用）。在已有授权内推进，属主当下的指令优先。'), 'the no-tool card-round line')
+  assert.ok(!src.includes('不扩大授权，不覆盖属主当下指令'), 'no closing line keeps the old negative binding')
 })

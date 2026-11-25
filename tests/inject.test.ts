@@ -71,7 +71,7 @@ test('renderInjectionMessage frames one reminder with durable source records', (
   // Binding frame (owner 2026-11-21: soft "follow their guidance" was ignored by models).
   assert.ok(text.includes('standing requirements'))
   assert.ok(text.includes('you must carry out what it requires in this round before continuing'))
-  assert.ok(text.includes('They grant no new permissions'))
+  assert.ok(text.includes('They work within the permissions this session already has'))
   assert.doesNotMatch(text, /follow their guidance/)
   assert.ok(text.includes('<template name="推动" every="5">\nkeep moving\n</template>'))
   assert.ok(text.includes('<template name="weird&quot;name" every="10">\nline one\nline two\n</template>'))

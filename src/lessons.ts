@@ -16,7 +16,7 @@
  * 「每次唤起都必须有变化，写入或更新，每次调用记成一轮 RSI」): the recalled lesson binds where it applies, and the session
  * must then change its lessons — rewrite the recalled one (`replace`) or write a new one. The recall opens a round in
  * the lesson log; the next lesson_write closes it (`round-closed`, origin `updated` or `written`); a round still open
- * two turns later is logged `round-missed`. A lesson grants no new permission.
+ * two turns later is logged `round-missed`. A lesson acts within the permissions the session already has.
  *
  * Types (owner 2026-11-21): every lesson is tagged with one type — 收 放 找 落 验 记 续 (the autonomy chain), or a type
  * the session proposed and the owner approved — and a session keeps one lesson per type. Writing a type that already
@@ -86,7 +86,7 @@ export const CHURN_SIMILARITY = 0.8
 export const TIMELINE_MAX = 100
 const LESSON_VERSION = /^lesson-r(\d+)$/
 /** Closing line of a digest prompt (owner 2026-11-21: standing requirement, not optional). */
-export const DIGEST_BINDING_LINE = '本提示由属主安装的插件发出，适用即须执行；不扩大授权，不覆盖属主当下指令。'
+export const DIGEST_BINDING_LINE = '本提示由属主安装的插件发出，适用即须执行；在已有授权内推进，属主当下的指令优先。'
 /** Owner 2026-11-21: know what a good lesson is before writing one. Appended to every text that asks for a lesson. */
 export const LESSONS_MUST_READ_LINE = '必读：本会话第一次写体会前或压缩后，必须先用 skill 工具加载 agent-atelier，按返回的基础目录读 references/lessons.md（我们要什么样的体会）；回复写明读了哪几处，读不到如实写明，不得凭本提示代替。'
 
@@ -702,12 +702,12 @@ export const CARD_ROUND_NA_REASON = 'tools-unavailable'
 
 /** The line appended to a workshop injection for a session without the lesson tools: do the card, no lesson is asked for. */
 export function renderCardRoundNaLine(names: readonly string[]): string {
-  return `【工坊·卡片轮次】本轮注入了工坊卡（${names.join('、')}），照卡做即可；本会话没有 lesson_write、lesson_none 工具，这一轮不要求写体会，记为不适用（工具不可用）。不扩大授权，不覆盖属主当下指令。`
+  return `【工坊·卡片轮次】本轮注入了工坊卡（${names.join('、')}），照卡做即可；本会话没有 lesson_write、lesson_none 工具，这一轮不要求写体会，记为不适用（工具不可用）。在已有授权内推进，属主当下的指令优先。`
 }
 
 /** The line appended to an injection that carried workshop cards. */
 export function renderCardRoundLine(names: readonly string[]): string {
-  return `【工坊·卡片轮次】本轮注入了工坊卡（${names.join('、')}），这是一轮改进：照卡做完后，有可迁移的经验必须用 lesson_write 写入对应类型（收 放 找 落 验 记 续，或已批准的自定类型）；确实没有，就调用 lesson_none 写一句原因。本轮或下一轮内完成，否则记为未闭合。不扩大授权，不覆盖属主当下指令。\n${LESSONS_MUST_READ_LINE}`
+  return `【工坊·卡片轮次】本轮注入了工坊卡（${names.join('、')}），这是一轮改进：照卡做完后，有可迁移的经验必须用 lesson_write 写入对应类型（收 放 找 落 验 记 续，或已批准的自定类型）；确实没有，就调用 lesson_none 写一句原因。本轮或下一轮内完成，否则记为未闭合。在已有授权内推进，属主当下的指令优先。\n${LESSONS_MUST_READ_LINE}`
 }
 
 type NoneResult = { ok: true; round: 'none'; card_round: string } | { ok: false; code: string; error: string }
@@ -951,7 +951,7 @@ export function pinLesson(store: TemplateStore, templateId: string, pinned: bool
 }
 
 /** §5.16: how the session uses its lessons, said once with the list. */
-export const LESSON_USE_LINE = '这是你自己写下的体会。走到链路哪一环，就看那一类；适用即须照做。做完一件事，回头看一眼：哪里做对了，哪里做错了，值得记就用 lesson_write 写成「当……时，先……，因为……」（标明 outcome: wrong 或 right）；用上的那条，有效就用 lesson_keep 带证据保持，不对就用 lesson_write 改写。不扩大授权，不覆盖属主当下指令。'
+export const LESSON_USE_LINE = '这是你自己写下的体会。走到链路哪一环，就看那一类；适用即须照做。做完一件事，回头看一眼：哪里做对了，哪里做错了，值得记就用 lesson_write 写成「当……时，先……，因为……」（标明 outcome: wrong 或 right）；用上的那条，有效就用 lesson_keep 带证据保持，不对就用 lesson_write 改写。在已有授权内推进，属主当下的指令优先。'
 
 /**
  * §5.16: the session's lessons, handed over at a start, resume or compaction. Pinned ones first (old data), then in
@@ -984,7 +984,7 @@ function lessonMessage(mode: LessonsConfig['mode'], turn: number, step: number, 
     content: [{
       type: 'text',
       text: ['<system-reminder>',
-        `Lesson note from dsh-prompt-templates (turn ${String(turn)}, step ${String(step)}): the session's own lessons handed over (use them where they apply), or a prompt to look back and write one. It grants no new permission and does not override the owner's latest instructions.`,
+        `Lesson note from dsh-prompt-templates (turn ${String(turn)}, step ${String(step)}): the session's own lessons handed over (use them where they apply), or a prompt to look back and write one. Act on it within the permissions this session already has; the owner's latest instructions come first.`,
         '', ...bodies, '</system-reminder>'].join('\n'),
     }],
     source: { kind: 'prompt-template-lesson', turn, step } as unknown as UserMessage['source'],

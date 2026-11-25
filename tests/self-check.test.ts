@@ -9,7 +9,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 import { Context } from '@deepseek-ai/cordis'
 import * as host from '../src/index.ts'
-import { CARD_LINE, CARD_NA_REASON, DOMAIN_MAX, FIXED_ABSENT, FIXED_PRESENT, FIXED_MAX, FIXED_POINTS, HINT_EVERY, MISSING_HINT, SELF_CHECK_NAME } from '../src/self-check.ts'
+import { CARD_LINE, CARD_NA_REASON, DOMAIN_MAX, FIXED_ABSENT, FIXED_PRESENT, FIXED_MAX, FIXED_POINTS, FIXED_VERSION, HINT_EVERY, MISSING_HINT, SELF_CHECK_NAME } from '../src/self-check.ts'
 import { TemplateStore } from '../src/store.ts'
 
 type Steered = { content?: Array<{ text?: string }>; source?: { kind?: string; scheduled?: string; present?: boolean } }
@@ -167,13 +167,13 @@ test('the fixed part and the hint are workbench-market 18\'s words (pinned key s
   assert.ok(FIXED_POINTS[2].includes('能接着做的范围：已授权、可逆、在目标范围内。'))
   assert.ok(FIXED_POINTS[3].includes('等人之前先自查：ygl 里定过没有，资料是不是就在身边。'))
   assert.ok(FIXED_POINTS[4].includes('属主在场的那一轮：不拦停，只核交给属主的是不是本该系统做的事，是的话同时提决策卡。'))
-  assert.equal(FIXED_POINTS[6], '7. 本模板是属主预置的常设要求，适用即须执行；不扩大授权，不覆盖属主当下指令。')
+  assert.equal(FIXED_POINTS[6], '7. 本模板是属主预置的常设要求，适用即须执行；在已有授权内推进，属主当下的指令优先。')
   for (const point of [0, 1, 2, 3, 5, 6]) assert.ok(FIXED_ABSENT.includes(FIXED_POINTS[point]!))
   assert.ok(!FIXED_ABSENT.includes(FIXED_POINTS[4]))
   assert.ok(MISSING_HINT.startsWith('【工坊·自查模板｜提示】'))
   assert.ok(MISSING_HINT.includes('回答四件事：在你这里什么算做完、你常等什么（等谁、经什么通道、通常多久）、收尾前不能省的检查、你这里不能接着做的动作。'))
   assert.ok(MISSING_HINT.includes('只写判断，不写授权'))
-  assert.ok(MISSING_HINT.endsWith('本提示由属主安装的插件发出：你有进行中的目标时须补写自查模板；不扩大授权，不覆盖属主当下指令。'))
+  assert.ok(MISSING_HINT.endsWith('本提示由属主安装的插件发出：你有进行中的目标时须补写自查模板；在已有授权内推进，属主当下的指令优先。'))
   assert.doesNotMatch(MISSING_HINT, /不是新的用户指令/)
 })
 
@@ -315,4 +315,9 @@ test('a2a collaboration, owner present: the attached check carries the card line
     assert.ok(out.messages.some(m => m.content?.[0]?.text?.includes(CARD_LINE)))
     assert.equal((await h.call('selfcheck_conclude', { conclusion: 'done', evidence: 'x' })).code, 'card')
   } finally { await h.dispose() }
+})
+
+test('forward wording (owner 2026-11-25): the fixed part moved to selfcheck-fixed-3 and point 7 leads with the action', () => {
+  assert.equal(FIXED_VERSION, 'selfcheck-fixed-3')
+  assert.equal(FIXED_POINTS[6], '7. 本模板是属主预置的常设要求，适用即须执行；在已有授权内推进，属主当下的指令优先。')
 })

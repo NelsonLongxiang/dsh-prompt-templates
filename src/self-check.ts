@@ -24,7 +24,7 @@ import type { TemplateStore } from './store.ts'
 import { objectParameters, registerWhenToolsReady, withOutput } from './tool-registry.ts'
 
 /** The fixed part's version label; it moves only with the standard text. */
-export const FIXED_VERSION = 'selfcheck-fixed-2'
+export const FIXED_VERSION = 'selfcheck-fixed-3'
 /** The session template that holds a session's own domain part. */
 export const SELF_CHECK_NAME = '工坊·自查模板'
 /** Limits (R106). */
@@ -42,7 +42,7 @@ export const FIXED_POINTS = [
   '4. 等人之前先自查：ygl 里定过没有，资料是不是就在身边。',
   '5. 属主在场的那一轮：不拦停，只核交给属主的是不是本该系统做的事，是的话同时提决策卡。',
   '6. 交结论：用 selfcheck_conclude 交一次（做完、登记等待、接着做、孤儿停，四选一），附证据或叫醒条件、期限、关联的单子或目标。',
-  '7. 本模板是属主预置的常设要求，适用即须执行；不扩大授权，不覆盖属主当下指令。',
+  '7. 本模板是属主预置的常设要求，适用即须执行；在已有授权内推进，属主当下的指令优先。',
 ] as const
 
 /**
@@ -90,7 +90,7 @@ export const MISSING_HINT = [
   '【工坊·自查模板｜提示】',
   '你有进行中的目标，但还没有自己的自查模板。每次收尾时，插件会带上一段固定的底线；你需要补上自己领域的部分，600 字以内，回答四件事：在你这里什么算做完、你常等什么（等谁、经什么通道、通常多久）、收尾前不能省的检查、你这里不能接着做的动作。',
   '只写判断，不写授权；引用你的技能和 ygl 条目，不要抄长文。写好后用写模板的工具（selfcheck_write）交进你自己的会话模板。不用属主确认，以后可以随时改。',
-  '本提示由属主安装的插件发出：你有进行中的目标时须补写自查模板；不扩大授权，不覆盖属主当下指令。',
+  '本提示由属主安装的插件发出：你有进行中的目标时须补写自查模板；在已有授权内推进，属主当下的指令优先。',
 ].join('\n')
 
 /** DDL of the v10 log. */
