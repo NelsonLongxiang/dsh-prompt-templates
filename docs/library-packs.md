@@ -47,7 +47,8 @@
 同一宿主上的其他插件通过 `ctx.promptTemplates` 使用：
 
 - **只读，所有插件都能用：** `library()`、`templates(sessionId)`、`interventions({ sessionId, since, source, limit })`。返回的形状和只读路由一样，只给摘要，不给正文。`library()` 的每张卡带 `category`，以及 `kind`（open-a2a-net #902 S1）：版本号以 `atelier-` 开头、分类是「工坊」、或有一份存档版本来自 agent-atelier 卡包的，是 `workshop`（工坊卡），其余是 `template`。
-- **投卡：** `cast({ sessionId, templateId, reason, basis? })`。
+- **投卡：** `cast({ sessionId, templateId, reason, basis?, mode? })`。
+  - **方式（#902 S3）：** `mode` 默认 `insert`，在会话的下一步投进去；`queue` 等到下一轮的第一步才投，不插进正在进行的一轮。其他值回 `mode`。`castQueue` 的每行带 `mode`；`cast_queue` 表新增 `mode` 列，默认 `insert`，只加不改。
   - **认调用方：** 调用方不认参数里写的字串，认的是 cordis 加载器给调用插件那条 fiber 盖的 entry，也就是 profile 里配置的包名。只认 `@nelsonlongxiang/dsh-open-a2a-net`，别的调用方回 `caller`。
   - **开关：** 部署配置 `cast.enabled` 默认关，关着时回 `disabled`。关着时每一步也不读队列；关之前排下的卡不会投进去，满 1 小时后记为 `expired`。
   - **能投什么：** 卡必须是全局卡，或者这个会话自己的卡；`reason` 必须写，1～500 字。

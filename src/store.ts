@@ -207,6 +207,8 @@ export class TemplateStore {
       // #902 S1: the durable cast queue, and the basis a cast was given (guarded: added once, older builds ignore both).
       this.db.exec(CAST_QUEUE_SQL)
       if (!(this.db.prepare('PRAGMA table_info(interventions)').all() as Array<{ name: string }>).some(col => col.name === 'basis')) this.db.exec('ALTER TABLE interventions ADD COLUMN basis TEXT')
+      // #902 S3: a queued cast's mode (insert at the next step, or queue for the next turn's first step).
+      if (!(this.db.prepare('PRAGMA table_info(cast_queue)').all() as Array<{ name: string }>).some(col => col.name === 'mode')) this.db.exec("ALTER TABLE cast_queue ADD COLUMN mode TEXT NOT NULL DEFAULT 'insert'")
       this.db.exec('COMMIT')
       if (dbPath !== ':memory:') {
         try { chmodSync(dbPath, 0o600) } catch { /* best-effort */ }

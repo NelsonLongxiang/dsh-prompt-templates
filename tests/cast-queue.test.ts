@@ -107,3 +107,22 @@ test('library cards say workshop for an atelier card and template otherwise', as
     } finally { store.close() }
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
+
+test('#902 S3 mode: insert goes in at the next step; queue waits for the first step of a turn; anything else is refused', async () => {
+  const dir = createTestDirectory('pt-castq-')
+  const h = await node(dir)
+  try {
+    const card = makeCard(dir, { name: 'c', content: 'body {{session}}', scope: 'global' })
+    const a2a = await h.callerCtx(A2A)
+    assert.equal((a2a.promptTemplates.cast({ sessionId: 's1', templateId: card.id, reason: 'r', mode: 'later' as never }) as { code: string }).code, 'mode')
+    assert.equal(a2a.promptTemplates.cast({ sessionId: 's1', templateId: card.id, reason: 'r', mode: 'queue' }).ok, true)
+    assert.equal((await h.preStep('s1', 3, 2)).messages.length, 1, 'a queue cast does not cut into a turn under way')
+    assert.equal((await h.preStep('s1', 3, 5)).messages.length, 1)
+    const items = (a2a.promptTemplates.castQueue({ sessionId: 's1' }) as { items: Array<{ state: string; mode: string }> }).items
+    assert.deepEqual(items.map(r => [r.state, r.mode]), [['waiting', 'queue']])
+    const next = await h.preStep('s1', 4, 1)
+    assert.equal(next.messages.length, 2, 'it goes in at the first step of the next turn')
+    assert.equal(a2a.promptTemplates.cast({ sessionId: 's2', templateId: card.id, reason: 'r' }).ok, true)
+    assert.equal((await h.preStep('s2', 3, 4)).messages.length, 2, 'insert (the default) goes in mid-turn')
+  } finally { await h.stop(); rmSync(dir, { recursive: true, force: true }) }
+})
