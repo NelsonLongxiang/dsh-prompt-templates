@@ -61,6 +61,8 @@ export interface InterventionView {
   readonly step: number | null
   /** ISO 8601 time. */
   readonly at: string
+  /** #902 S1: the basis a plugin cast was given (a ticket, an event, or `none: …`); null otherwise and on older rows. */
+  readonly basis?: string | null
 }
 
 /** What a caller records; `seq` and `at` are the log's. */
@@ -91,9 +93,9 @@ export class InterventionLog {
     if (input.source !== 'plugin' && input.caller !== null) throw new Error('only a plugin intervention has a caller')
     const at = input.at ?? new Date().toISOString()
     const result = this.#db.prepare(`INSERT INTO interventions
-      (session_id, source, method, caller, template_id, template_name, template_version, content_sha256, turn, step, at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(input.session_id, input.source, input.method, input.caller, input.template_id, input.template_name, input.template_version, input.content_sha256, input.turn, input.step, at)
+      (session_id, source, method, caller, template_id, template_name, template_version, content_sha256, turn, step, at, basis)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(input.session_id, input.source, input.method, input.caller, input.template_id, input.template_name, input.template_version, input.content_sha256, input.turn, input.step, at, input.basis ?? null)
     return { ...input, seq: Number(result.lastInsertRowid), at }
   }
 

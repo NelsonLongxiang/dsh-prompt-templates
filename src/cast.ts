@@ -19,6 +19,7 @@ import type { LibraryCard, TemplateStore } from './store.ts'
 import type { SelfCheckRow } from './self-check.ts'
 import { expandTemplateVariables } from './variables.ts'
 import { EVIDENCE_QUEUE_MAX, type EvidenceRow, type EvidenceState } from './evidence-ready.ts'
+import type { CastRow, CastState, CastView } from './cast-queue.ts'
 
 /** The service name other plugins read: `ctx.promptTemplates`. */
 export const SERVICE_NAME = 'promptTemplates'
@@ -42,14 +43,18 @@ export function callerOf(ctx: Context): string | undefined {
   return undefined
 }
 
-/** One queued cast. */
-interface Queued { readonly templateId: string; readonly name: string; readonly version: string | null; readonly content: string; readonly caller: string; readonly reason: string; readonly at: number }
+/** One cast as the message renders it (a durable queue row, #902 S1). */
+type Queued = Pick<CastRow, 'template_id' | 'name' | 'version' | 'content' | 'caller' | 'reason' | 'basis'>
 
 /** Source of a cast message in the session log. */
 export interface CastSource { readonly kind: 'user'; readonly scheduled: 'prompt-template-cast'; readonly turn: number; readonly step: number; readonly templates: ReadonlyArray<{ id: string; name: string; caller: string }> }
 
 /** What a cast returns. */
-export type CastResult = { ok: true; queued: number } | { ok: false; code: 'disabled' | 'caller' | 'template' | 'session' | 'full' | 'reason' | 'already-queued'; error: string }
+export type CastResult = { ok: true; queued: number; id: string } | { ok: false; code: 'disabled' | 'caller' | 'template' | 'session' | 'full' | 'reason' | 'basis' | 'already-queued'; error: string }
+
+/** What reading or withdrawing queued casts returns (#902 S1; recognized caller only). */
+export type CastQueueResult = { ok: true; items: CastView[] } | { ok: false; code: 'caller' | 'state'; error: string }
+export type CastWithdrawResult = { ok: true; withdrawn: boolean } | { ok: false; code: 'caller' | 'session'; error: string }
 
 /** The service's public face: reads open to any plugin, and cast. Nothing else is reachable on it. */
 export interface PromptTemplatesService {
@@ -61,7 +66,12 @@ export interface PromptTemplatesService {
   selfChecks(sessionId: string): SelfCheckRow[]
   /** Whether the wrap-up self-check is on in this deployment (a reader must not take an empty log for a missing check when it is off). */
   selfCheckEnabled(): boolean
-  cast(input: { sessionId: string; templateId: string; reason: string }): CastResult
+  /** Cast a card; `basis` (#902 S1) is the ticket, event or `none: …` it rests on, one line of at most 200 characters. */
+  cast(input: { sessionId: string; templateId: string; reason: string; basis?: string }): CastResult
+  /** #902 S1: read queued casts (newest first, no text); recognized caller only. */
+  castQueue(filter?: { sessionId?: string; state?: CastState; limit?: number }): CastQueueResult
+  /** #902 S1: withdraw one waiting cast of a session; recognized caller only. */
+  castWithdraw(input: { sessionId: string; id: string }): CastWithdrawResult
   /** #81: hand in one evidence reference for a session's next actionable step (recognized caller, cast.enabled). */
   evidenceReady(input: { sessionId: string; ticketId: string; version: string; ref: string; action: string }): EvidenceReadyResult
   /** #81: read back one session's references and their states (recognized caller only). */
@@ -93,11 +103,11 @@ export function renderCastMessage(turn: number, step: number, cards: readonly Qu
       text: [
         `⚙️ 投卡 · 第 ${String(turn)} 轮 · ${cards.map(card => card.name).join('、')}`,
         '',
-        ...cards.flatMap(card => [`（投卡方：${card.caller}；原因：${card.reason}）`, expandTemplateVariables(card.content, { sessionId, turn }), '']),
+        ...cards.flatMap(card => [`（投卡方：${card.caller}；原因：${card.reason}${card.basis ? `；依据：${card.basis}` : ''}）`, expandTemplateVariables(card.content, { sessionId, turn }), '']),
         CAST_BINDING_LINE,
       ].join('\n').trimEnd(),
     }],
-    source: { kind: 'user', scheduled: 'prompt-template-cast', turn, step, templates: cards.map(card => ({ id: card.templateId, name: card.name, caller: card.caller })) } satisfies CastSource as unknown as UserMessage['source'],
+    source: { kind: 'user', scheduled: 'prompt-template-cast', turn, step, templates: cards.map(card => ({ id: card.template_id, name: card.name, caller: card.caller })) } satisfies CastSource as unknown as UserMessage['source'],
   })
 }
 
@@ -108,28 +118,17 @@ function evidenceField(value: unknown, max: number): string | undefined {
 }
 
 /**
- * Provide the service and deliver queued casts at a session's next admitted step. The store, the switch and the queues
- * live in this closure only: the service object other plugins hold carries the five public methods and cordis' own
- * `ctx`/`name`, never the store or a way to read or drain a queue (#28 review). Delivery is recorded as `source: plugin`
- * with the caller; a fault is reported once and never fails the step. Queues are in memory: a restart drops casts that
- * have not gone in yet (the caller can check the intervention log), and a cast waits at most an hour.
+ * Provide the service and deliver queued casts at a session's next admitted step. The store and the switch live in this
+ * closure only: the service object other plugins hold carries its public methods and cordis' own `ctx`/`name`, never the
+ * store or a way to drain a queue (#28 review); reading and withdrawing queued casts is for a recognized caller only.
+ * Delivery is recorded as `source: plugin` with the caller and the cast's basis; a fault is reported once and never
+ * fails the step. #902 S1: the queue is a table in the plugin's database, so a restart keeps what waits; a cast waits at
+ * most an hour, then is marked expired.
  */
 export function registerCast(ctx: Context, store: () => TemplateStore, enabled: () => boolean, selfCheckEnabled: () => boolean = () => false): PromptTemplatesService {
-  const queues = new Map<string, Queued[]>()
-  // Expired casts never count toward the host-wide cap: they are dropped first (#28 review).
-  const total = (now: number): number => {
-    let n = 0
-    for (const [sessionId, q] of [...queues]) {
-      const live = q.filter(card => now - card.at < CAST_WAIT_MS)
-      if (live.length === 0) queues.delete(sessionId); else { queues.set(sessionId, live); n += live.length }
-    }
-    return n
-  }
-  const take = (sessionId: string, now: number): Queued[] => {
-    const queue = queues.get(sessionId) ?? []
-    queues.delete(sessionId)
-    return queue.filter(card => now - card.at < CAST_WAIT_MS)
-  }
+  // #902 S1: the queue is the store's table, so a restart keeps what waits; a cast waits at most CAST_WAIT_MS.
+  const waiting = (sessionId: string | undefined, now: number): CastRow[] => { store().castQueue.expire(now, CAST_WAIT_MS); return store().castQueue.waiting(sessionId) }
+  const recognized = (c: Context): string | undefined => { const caller = callerOf(c); return caller !== undefined && PLUGIN_CALLERS.includes(caller) ? caller : undefined }
 
   class Face extends Service {
     constructor(c: Context) { super(c, SERVICE_NAME) }
@@ -153,7 +152,7 @@ export function registerCast(ctx: Context, store: () => TemplateStore, enabled: 
      * (PLUGIN_CALLERS) may cast, and only while `cast.enabled` is on. The card must be a global template or one of that
      * session's own; one copy of a card waits per session. The reason is put on one line and must be 1..500 characters.
      */
-    cast(input: { sessionId: string; templateId: string; reason: string }): CastResult {
+    cast(input: { sessionId: string; templateId: string; reason: string; basis?: string }): CastResult {
       if (!enabled()) return { ok: false, code: 'disabled', error: 'casting is off on this host (cast.enabled)' }
       const caller = callerOf(this.ctx)
       if (caller === undefined || !PLUGIN_CALLERS.includes(caller)) return { ok: false, code: 'caller', error: 'only a plugin this host recognizes may cast a card' }
@@ -161,15 +160,33 @@ export function registerCast(ctx: Context, store: () => TemplateStore, enabled: 
       if (sessionId === '') return { ok: false, code: 'session', error: 'name the session to cast into' }
       const reason = oneLine(String(input?.reason ?? ''))
       if (reason === '' || reason.length > 500) return { ok: false, code: 'reason', error: 'give a reason of 1..500 characters on one line' }
+      const basis = input?.basis === undefined ? null : oneLine(String(input.basis))
+      if (basis !== null && (basis === '' || basis.length > 200)) return { ok: false, code: 'basis', error: 'give a basis of 1..200 characters on one line, or none' }
       const template = store().get(String(input?.templateId ?? ''))
       if (template === undefined || (template.scope === 'session' && template.session_id !== sessionId)) return { ok: false, code: 'template', error: 'no such card for that session' }
-      const live = total(Date.now())
-      const queue = queues.get(sessionId) ?? []
-      if (queue.some(card => card.templateId === template.id)) return { ok: false, code: 'already-queued', error: 'that card already waits for this session' }
-      if (queue.length >= CAST_QUEUE_MAX || live >= CAST_QUEUE_TOTAL_MAX) return { ok: false, code: 'full', error: `at most ${String(CAST_QUEUE_MAX)} cast cards can wait for one session` }
-      queue.push({ templateId: template.id, name: template.name, version: template.version ?? null, content: template.content, caller, reason, at: Date.now() })
-      queues.set(sessionId, queue)
-      return { ok: true, queued: queue.length }
+      const now = Date.now()
+      const queue = waiting(sessionId, now)
+      if (queue.some(card => card.template_id === template.id)) return { ok: false, code: 'already-queued', error: 'that card already waits for this session' }
+      if (queue.length >= CAST_QUEUE_MAX || waiting(undefined, now).length >= CAST_QUEUE_TOTAL_MAX) return { ok: false, code: 'full', error: `at most ${String(CAST_QUEUE_MAX)} cast cards can wait for one session` }
+      const row = store().castQueue.add({ session_id: sessionId, template_id: template.id, name: template.name, version: template.version ?? null, content: template.content, caller, reason, basis, at: new Date(now).toISOString() })
+      return { ok: true, queued: queue.length + 1, id: row.id }
+    }
+
+    castQueue(filter: { sessionId?: string; state?: CastState; limit?: number } = {}): CastQueueResult {
+      if (recognized(this.ctx) === undefined) return { ok: false, code: 'caller', error: 'only a plugin this host recognizes may read the cast queue' }
+      if (filter.state !== undefined && !['waiting', 'delivered', 'withdrawn', 'expired'].includes(filter.state)) return { ok: false, code: 'state', error: 'state must be waiting, delivered, withdrawn or expired' }
+      store().castQueue.expire(Date.now(), CAST_WAIT_MS)
+      return { ok: true, items: store().castQueue.list({ ...(filter.sessionId !== undefined ? { sessionId: String(filter.sessionId) } : {}), ...(filter.state !== undefined ? { state: filter.state } : {}), ...(filter.limit !== undefined ? { limit: filter.limit } : {}) }) }
+    }
+
+    castWithdraw(input: { sessionId: string; id: string }): CastWithdrawResult {
+      if (recognized(this.ctx) === undefined) return { ok: false, code: 'caller', error: 'only a plugin this host recognizes may withdraw a cast' }
+      const sessionId = String(input?.sessionId ?? '').trim()
+      const id = String(input?.id ?? '').trim()
+      if (sessionId === '' || id === '') return { ok: false, code: 'session', error: 'name the session and the queued cast' }
+      // Only a cast still waiting for that very session: an id from another session withdraws nothing.
+      const mine = waiting(sessionId, Date.now()).some(row => row.id === id)
+      return { ok: true, withdrawn: mine && store().castQueue.end([id], 'withdrawn', new Date().toISOString()).length === 1 }
     }
 
     /** #81: one evidence reference for the session's next actionable step. A repeat returns the existing state unchanged. */
@@ -201,17 +218,22 @@ export function registerCast(ctx: Context, store: () => TemplateStore, enabled: 
   let faultReported = false
   ctx.on('agent/pre-step', async ({ agent, messages, turn, step }, next): Promise<PreStepDecision> => {
     const decision = await next()
-    if (decision.kind === 'reject' || messages.length === 0) return decision
+    // Casting off: nothing can be queued, so the step does not read the store at all (#902 S1).
+    if (decision.kind === 'reject' || messages.length === 0 || !enabled()) return decision
     try {
       const sessionId = String(agent.session.header.id)
-      const cards = take(sessionId, Date.now())
+      const now = Date.now()
+      const queued = waiting(sessionId, now)
+      if (queued.length === 0) return decision
+      // Ended before rendering, so a second step can never deliver the same row again.
+      const cards = store().castQueue.end(queued.map(row => row.id), 'delivered', new Date(now).toISOString())
       if (cards.length === 0) return decision
       const message = renderCastMessage(turn, typeof step === 'number' ? step : 1, cards, sessionId)
       try {
         const at = new Date().toISOString()
         for (const card of cards) {
-          store().interventions.record({ session_id: sessionId, source: 'plugin', method: null, caller: card.caller, template_id: card.templateId, template_name: card.name,
-            template_version: card.version, content_sha256: contentDigest(expandTemplateVariables(card.content, { sessionId, turn })), turn, step: typeof step === 'number' ? step : null, at })
+          store().interventions.record({ session_id: sessionId, source: 'plugin', method: null, caller: card.caller, template_id: card.template_id, template_name: card.name,
+            template_version: card.version, content_sha256: contentDigest(expandTemplateVariables(card.content, { sessionId, turn })), turn, step: typeof step === 'number' ? step : null, at, basis: card.basis })
         }
       } catch (error) { console.error('[dsh-prompt-templates] intervention log skipped a cast:', error) }
       return { ...decision, messages: [...decision.messages, message] }

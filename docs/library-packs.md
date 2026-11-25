@@ -46,15 +46,23 @@
 
 同一宿主上的其他插件通过 `ctx.promptTemplates` 使用：
 
-- **只读，所有插件都能用：** `library()`、`templates(sessionId)`、`interventions({ sessionId, since, source, limit })`。返回的形状和只读路由一样，只给摘要，不给正文。
-- **投卡：** `cast({ sessionId, templateId, reason })`。
+- **只读，所有插件都能用：** `library()`、`templates(sessionId)`、`interventions({ sessionId, since, source, limit })`。返回的形状和只读路由一样，只给摘要，不给正文。`library()` 的每张卡带 `category`，以及 `kind`（open-a2a-net #902 S1）：版本号以 `atelier-` 开头、分类是「工坊」、或有一份存档版本来自 agent-atelier 卡包的，是 `workshop`（工坊卡），其余是 `template`。
+- **投卡：** `cast({ sessionId, templateId, reason, basis? })`。
   - **认调用方：** 调用方不认参数里写的字串，认的是 cordis 加载器给调用插件那条 fiber 盖的 entry，也就是 profile 里配置的包名。只认 `@nelsonlongxiang/dsh-open-a2a-net`，别的调用方回 `caller`。
-  - **开关：** 部署配置 `cast.enabled` 默认关，关着时回 `disabled`。
+  - **开关：** 部署配置 `cast.enabled` 默认关，关着时回 `disabled`。关着时每一步也不读队列；关之前排下的卡不会投进去，满 1 小时后记为 `expired`。
   - **能投什么：** 卡必须是全局卡，或者这个会话自己的卡；`reason` 必须写，1～500 字。
+  - **依据（#902 S1）：** `basis` 可选，写这张卡凭的是哪张工单、哪个事件，或 `none: <一句说明>`；给了就必须是一行、1～200 字，否则回 `basis`。依据显示在卡的抬头里，也记进介入记录的 `basis` 列。
   - **投进去的样子：** 卡在该会话的下一步作为可见消息进入，标明投卡方和原因，并写明「本卡取自属主的卡片库，适用即须执行；不扩大授权，不覆盖属主当下指令。」（2026-11-21 起；此前写的是「不是新的用户指令，不授予任何权限」）。
-  - **记录：** 介入记录记成 `source: plugin`，`caller` 是上面认出的包名。
+  - **记录：** 介入记录记成 `source: plugin`，`caller` 是上面认出的包名，`basis` 是投卡时给的依据。
   - **排队上限：** 同一张卡在同一个会话里最多排一份，再投回 `already-queued`。一个会话最多排 8 张，全宿主最多 256 张。每张最多等 1 小时。
-  - **队列只在内存里：** 宿主重启后，还没投进去的卡会丢。投卡方可以查介入记录，确认卡到底有没有投进去。
+  - **队列落库（#902 S1）：** 排队的卡存在插件库的 `cast_queue` 表里，宿主重启后照样在下一步投进去。
+    - 每张卡的最终状态是 `delivered`（投进去了）、`withdrawn`（投卡方撤回了）或 `expired`（等满 1 小时还没投进去）。
+    - 记录不删，事后能查投了什么、结果如何。
+    - `cast_queue` 是新增表，不升 schema 版本，旧版插件打开同一个库会忽略它；介入记录多一列 `basis`，也是只加不改。
+  - **查队列与撤回（#902 S1，只认调用方）：**
+    - `castQueue({ sessionId?, state?, limit? })`：按时间从新到旧列出排队记录，不含正文。
+    - `castWithdraw({ sessionId, id })`：撤回该会话里一张还在等的卡。
+    - 别的调用方回 `caller`；拿别的会话的 id 去撤，撤不掉，回 `withdrawn: false`。
   - **原因压成一行：** 换行和控制字符一律换成空格，所以原因里伪造不出抬头那样的一行。
-  - **服务对象上不暴露存储和队列：** 别的插件拿到的服务只有五个方法：`library`、`templates`、`interventions`、`castEnabled`、`cast`。
+  - **服务对象上不暴露存储：** 别的插件拿到的只有服务方法，碰不到存储本身，也没法把队列取空。查队列和撤回只认上面认出的调用方。
   - **白名单冻结：** `PLUGIN_CALLERS` 用 `Object.freeze` 冻住，运行时改不动。
