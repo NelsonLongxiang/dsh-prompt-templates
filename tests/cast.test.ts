@@ -28,9 +28,19 @@ async function harness(castEnabled: boolean) {
     if (pkg !== undefined) (inner as unknown as { fiber: { entry?: unknown } }).fiber.entry = { options: { name: pkg } }
     return inner!
   }
-  const preStep = async (sessionId: string, turn: number, step = 1) => await ctx.waterfall('agent/pre-step', {
-    agent: { session: { header: { id: sessionId }, snapshotEvents: () => [] } }, messages: [{ role: 'user' }], turn, step, signal: new AbortController().signal,
-  }, async () => ({ kind: 'enter', messages: [{ id: 'downstream' }] })) as { kind: string; messages: Array<{ source?: { scheduled?: string }; content?: Array<{ text?: string }> }> }
+  // #902 review: the session's log keeps what a step took in, so the plugin can confirm a cast landed; land: false drops it.
+  const logs = new Map<string, Array<{ type: string; data: { source: unknown } }>>()
+  const preStep = async (sessionId: string, turn: number, step = 1, land = true) => {
+    const out = await ctx.waterfall('agent/pre-step', {
+      agent: { session: { header: { id: sessionId }, snapshotEvents: () => logs.get(sessionId) ?? [] } }, messages: [{ role: 'user' }], turn, step, signal: new AbortController().signal,
+    }, async () => ({ kind: 'enter', messages: [{ id: 'downstream' }] })) as { kind: string; messages: Array<{ source?: { scheduled?: string }; content?: Array<{ text?: string }> }> }
+    if (land) {
+      const log = logs.get(sessionId) ?? []
+      logs.set(sessionId, log)
+      for (const message of out.messages as Array<{ source?: unknown }>) if (message.source !== undefined) log.push({ type: 'user/message', data: { source: message.source } })
+    }
+    return out
+  }
   const dispose = async () => { await fiber.dispose(); rmSync(dir, { recursive: true, force: true }) }
   // Cards are made through a second connection to the same file, as the routes would.
   const makeCard = (data: Parameters<TemplateStore['create']>[0]) => { const store = new TemplateStore(join(dir, 'db.sqlite3')); try { return store.create(data) } finally { store.close() } }
@@ -133,7 +143,10 @@ test('#28 review: one copy of a card waits per session', async () => {
     assert.deepEqual(castOk(a2a.promptTemplates.cast({ sessionId: 'other', templateId: card.id, reason: 'r' })), { ok: true, queued: 1 })
     const text = (await h.preStep('s', 1)).messages[1]?.content?.[0]?.text ?? ''
     assert.equal(text.split('body').length - 1, 1)
-    // Once delivered, the card may be cast again.
+    // Handed over but not yet confirmed: still one copy.
+    assert.equal((a2a.promptTemplates.cast({ sessionId: 's', templateId: card.id, reason: 'r3' }) as { code: string }).code, 'already-queued')
+    await h.preStep('s', 1, 2)
+    // Once the session's log confirms it was delivered, the card may be cast again.
     assert.deepEqual(castOk(a2a.promptTemplates.cast({ sessionId: 's', templateId: card.id, reason: 'r3' })), { ok: true, queued: 1 })
     assert.ok(CAST_QUEUE_MAX >= 1)
   } finally { await h.dispose() }

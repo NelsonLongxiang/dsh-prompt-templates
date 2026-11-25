@@ -23,9 +23,19 @@ async function node(dir: string) {
     if (pkg !== undefined) (inner as unknown as { fiber: { entry?: unknown } }).fiber.entry = { options: { name: pkg } }
     return inner!
   }
-  const preStep = async (sessionId: string, turn: number, step = 1) => await ctx.waterfall('agent/pre-step', {
-    agent: { session: { header: { id: sessionId }, snapshotEvents: () => [] } }, messages: [{ role: 'user' }], turn, step, signal: new AbortController().signal,
-  }, async () => ({ kind: 'enter', messages: [{ id: 'downstream' }] })) as { kind: string; messages: Array<{ source?: { scheduled?: string }; content?: Array<{ text?: string }> }> }
+  // #902 review: the session's log keeps what a step took in, so the plugin can confirm a cast landed; land: false drops it.
+  const logs = new Map<string, Array<{ type: string; data: { source: unknown } }>>()
+  const preStep = async (sessionId: string, turn: number, step = 1, land = true) => {
+    const out = await ctx.waterfall('agent/pre-step', {
+      agent: { session: { header: { id: sessionId }, snapshotEvents: () => logs.get(sessionId) ?? [] } }, messages: [{ role: 'user' }], turn, step, signal: new AbortController().signal,
+    }, async () => ({ kind: 'enter', messages: [{ id: 'downstream' }] })) as { kind: string; messages: Array<{ source?: { scheduled?: string }; content?: Array<{ text?: string }> }> }
+    if (land) {
+      const log = logs.get(sessionId) ?? []
+      logs.set(sessionId, log)
+      for (const message of out.messages as Array<{ source?: unknown }>) if (message.source !== undefined) log.push({ type: 'user/message', data: { source: message.source } })
+    }
+    return out
+  }
   return { callerCtx, preStep, stop: async () => { await fiber.dispose() } }
 }
 
@@ -124,5 +134,46 @@ test('#902 S3 mode: insert goes in at the next step; queue waits for the first s
     assert.equal(next.messages.length, 2, 'it goes in at the first step of the next turn')
     assert.equal(a2a.promptTemplates.cast({ sessionId: 's2', templateId: card.id, reason: 'r' }).ok, true)
     assert.equal((await h.preStep('s2', 3, 4)).messages.length, 2, 'insert (the default) goes in mid-turn')
+  } finally { await h.stop(); rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('#902 review (#86 B1): a cast is delivered only once the session log shows it; a lost send waits again and goes in once', async () => {
+  const dir = createTestDirectory('pt-castq-')
+  const h = await node(dir)
+  try {
+    const card = makeCard(dir, { name: 'c', content: 'body {{session}}', scope: 'global' })
+    const a2a = await h.callerCtx(A2A)
+    assert.equal(a2a.promptTemplates.cast({ sessionId: 's1', templateId: card.id, reason: 'r', basis: 'none: x', mode: 'queue', origin: 'team:t1 observer:o1 mode:trigger' }).ok, true)
+    // The step fails before the message lands: the row is only sent, nothing is recorded, and withdraw cannot claim it.
+    assert.equal((await h.preStep('s1', 2, 1, false)).messages.length, 2)
+    const sent = (a2a.promptTemplates.castQueue({ sessionId: 's1' }) as { items: Array<{ id: string; state: string; sent_at: string | null }> }).items
+    assert.equal(sent[0]?.state, 'waiting'); assert.ok(sent[0]?.sent_at !== null)
+    assert.equal((a2a.promptTemplates.castWithdraw({ sessionId: 's1', id: sent[0]!.id }) as { withdrawn: boolean }).withdrawn, false)
+    assert.equal(a2a.promptTemplates.interventions({ sessionId: 's1' }).length, 0)
+    // Next turn: not in the log, so it waits again and goes in; the step after confirms it.
+    assert.equal((await h.preStep('s1', 3, 1)).messages.length, 2)
+    assert.equal((await h.preStep('s1', 3, 2)).messages.length, 1)
+    const rows = a2a.promptTemplates.interventions({ sessionId: 's1' })
+    assert.equal(rows.length, 1)
+    assert.deepEqual([rows[0]!.mode, rows[0]!.origin, rows[0]!.turn, rows[0]!.step], ['queue', 'team:t1 observer:o1 mode:trigger', 3, 1])
+    const done = (a2a.promptTemplates.castQueue({ sessionId: 's1', origin: 'team:t1 observer:o1 mode:trigger' }) as { items: Array<{ state: string }> }).items
+    assert.deepEqual(done.map(r => r.state), ['delivered'])
+    assert.equal((a2a.promptTemplates.castQueue({ sessionId: 's1', origin: 'team:other' }) as { items: unknown[] }).items.length, 0)
+    assert.deepEqual(a2a.promptTemplates.castCapabilities(), { modes: ['insert', 'queue'], origin: true, confirmedDelivery: true })
+    assert.equal((a2a.promptTemplates.cast({ sessionId: 's1', templateId: card.id, reason: 'r', origin: '' }) as { code: string }).code, 'origin')
+  } finally { await h.stop(); rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('#902 review: withdraw with an origin takes back only that caster\'s row; ended rows keep no text', async () => {
+  const dir = createTestDirectory('pt-castq-')
+  const h = await node(dir)
+  try {
+    const card = makeCard(dir, { name: 'c', content: 'secret body', scope: 'global' })
+    const a2a = await h.callerCtx(A2A)
+    const out = a2a.promptTemplates.cast({ sessionId: 's1', templateId: card.id, reason: 'r', origin: 'team:a' }) as { id: string }
+    assert.equal((a2a.promptTemplates.castWithdraw({ sessionId: 's1', id: out.id, origin: 'team:b' }) as { withdrawn: boolean }).withdrawn, false)
+    assert.equal((a2a.promptTemplates.castWithdraw({ sessionId: 's1', id: out.id, origin: 'team:a' }) as { withdrawn: boolean }).withdrawn, true)
+    const store = new TemplateStore(join(dir, 'db.sqlite3'))
+    try { assert.equal((store.db.prepare('SELECT content FROM cast_queue WHERE id = ?').get(out.id) as { content: string }).content, '') } finally { store.close() }
   } finally { await h.stop(); rmSync(dir, { recursive: true, force: true }) }
 })

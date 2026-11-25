@@ -63,6 +63,10 @@ export interface InterventionView {
   readonly at: string
   /** #902 S1: the basis a plugin cast was given (a ticket, an event, or `none: …`); null otherwise and on older rows. */
   readonly basis?: string | null
+  /** #902 review (#88 B1): how a plugin cast went in — `insert` or `queue`; null otherwise and on older rows. */
+  readonly mode?: string | null
+  /** #902 review: the caller's label for a plugin cast (the a2a plugin's team, observer and requested mode); null otherwise. */
+  readonly origin?: string | null
 }
 
 /** What a caller records; `seq` and `at` are the log's. */
@@ -93,9 +97,9 @@ export class InterventionLog {
     if (input.source !== 'plugin' && input.caller !== null) throw new Error('only a plugin intervention has a caller')
     const at = input.at ?? new Date().toISOString()
     const result = this.#db.prepare(`INSERT INTO interventions
-      (session_id, source, method, caller, template_id, template_name, template_version, content_sha256, turn, step, at, basis)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(input.session_id, input.source, input.method, input.caller, input.template_id, input.template_name, input.template_version, input.content_sha256, input.turn, input.step, at, input.basis ?? null)
+      (session_id, source, method, caller, template_id, template_name, template_version, content_sha256, turn, step, at, basis, mode, origin)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(input.session_id, input.source, input.method, input.caller, input.template_id, input.template_name, input.template_version, input.content_sha256, input.turn, input.step, at, input.basis ?? null, input.mode ?? null, input.origin ?? null)
     return { ...input, seq: Number(result.lastInsertRowid), at }
   }
 

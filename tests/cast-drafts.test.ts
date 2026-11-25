@@ -22,9 +22,19 @@ async function node(dir: string) {
     if (pkg !== undefined) (inner as unknown as { fiber: { entry?: unknown } }).fiber.entry = { options: { name: pkg } }
     return inner!
   }
-  const preStep = async (sessionId: string, turn: number, step = 1) => await ctx.waterfall('agent/pre-step', {
-    agent: { session: { header: { id: sessionId }, snapshotEvents: () => [] } }, messages: [{ role: 'user' }], turn, step, signal: new AbortController().signal,
-  }, async () => ({ kind: 'enter', messages: [{ id: 'downstream' }] })) as { kind: string; messages: Array<{ content?: Array<{ text?: string }> }> }
+  // #902 review: the session's log keeps what a step took in, so the plugin can confirm a cast landed; land: false drops it.
+  const logs = new Map<string, Array<{ type: string; data: { source: unknown } }>>()
+  const preStep = async (sessionId: string, turn: number, step = 1, land = true) => {
+    const out = await ctx.waterfall('agent/pre-step', {
+      agent: { session: { header: { id: sessionId }, snapshotEvents: () => logs.get(sessionId) ?? [] } }, messages: [{ role: 'user' }], turn, step, signal: new AbortController().signal,
+    }, async () => ({ kind: 'enter', messages: [{ id: 'downstream' }] })) as { kind: string; messages: Array<{ content?: Array<{ text?: string }> }> }
+    if (land) {
+      const log = logs.get(sessionId) ?? []
+      logs.set(sessionId, log)
+      for (const message of out.messages as Array<{ source?: unknown }>) if (message.source !== undefined) log.push({ type: 'user/message', data: { source: message.source } })
+    }
+    return out
+  }
   return { callerCtx, preStep, stop: async () => { await fiber.dispose() } }
 }
 

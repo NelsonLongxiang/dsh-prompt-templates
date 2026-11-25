@@ -44,13 +44,13 @@ export function callerOf(ctx: Context): string | undefined {
 }
 
 /** One cast as the message renders it (a durable queue row, #902 S1). */
-type Queued = Pick<CastRow, 'template_id' | 'name' | 'version' | 'content' | 'caller' | 'reason' | 'basis'>
+type Queued = Pick<CastRow, 'template_id' | 'name' | 'version' | 'content' | 'caller' | 'reason' | 'basis'> & { readonly id?: string }
 
 /** Source of a cast message in the session log. */
-export interface CastSource { readonly kind: 'user'; readonly scheduled: 'prompt-template-cast'; readonly turn: number; readonly step: number; readonly templates: ReadonlyArray<{ id: string; name: string; caller: string }> }
+export interface CastSource { readonly kind: 'user'; readonly scheduled: 'prompt-template-cast'; readonly turn: number; readonly step: number; readonly templates: ReadonlyArray<{ id: string; name: string; caller: string }>; /** #902 review: the queue rows this message carries, so the session's log confirms their delivery. */ readonly casts?: readonly string[] }
 
 /** What a cast returns. */
-export type CastResult = { ok: true; queued: number; id: string } | { ok: false; code: 'disabled' | 'caller' | 'template' | 'session' | 'full' | 'reason' | 'basis' | 'mode' | 'already-queued'; error: string }
+export type CastResult = { ok: true; queued: number; id: string } | { ok: false; code: 'disabled' | 'caller' | 'template' | 'session' | 'full' | 'reason' | 'basis' | 'mode' | 'origin' | 'already-queued'; error: string }
 
 /** What writing an author session's card returns (#902 S2). */
 export type DraftResult = { ok: true; id: string; name: string; content_sha256: string; created: boolean } | { ok: false; code: 'caller' | 'session' | 'card' | 'input' | 'name'; error: string }
@@ -65,16 +65,21 @@ export interface PromptTemplatesService {
   templates(sessionId: string): LibraryCard[]
   interventions(filter?: { sessionId?: string; since?: string; source?: InterventionSource; limit?: number }): InterventionView[]
   castEnabled(): boolean
+  /**
+   * #902 review (#910 B1): what this build's cast does, so a caller offers only what it can rely on: the delivery modes,
+   * whether a cast takes an origin label, and whether delivery is confirmed from the session's log.
+   */
+  castCapabilities(): { modes: readonly string[]; origin: boolean; confirmedDelivery: boolean }
   /** One session's wrap-up self-check log (read-only, PT-4). */
   selfChecks(sessionId: string): SelfCheckRow[]
   /** Whether the wrap-up self-check is on in this deployment (a reader must not take an empty log for a missing check when it is off). */
   selfCheckEnabled(): boolean
   /** Cast a card; `basis` (#902 S1) is the ticket, event or `none: …` it rests on, one line of at most 200 characters. */
-  cast(input: { sessionId: string; templateId: string; reason: string; basis?: string; authorSession?: string; mode?: CastMode }): CastResult
-  /** #902 S1: read queued casts (newest first, no text); recognized caller only. */
-  castQueue(filter?: { sessionId?: string; state?: CastState; limit?: number }): CastQueueResult
+  cast(input: { sessionId: string; templateId: string; reason: string; basis?: string; authorSession?: string; mode?: CastMode; origin?: string }): CastResult
+  /** #902 S1: read queued casts (newest first, no text); recognized caller only. `origin` keeps only rows with that label. */
+  castQueue(filter?: { sessionId?: string; state?: CastState; limit?: number; origin?: string }): CastQueueResult
   /** #902 S1: withdraw one waiting cast of a session; recognized caller only. */
-  castWithdraw(input: { sessionId: string; id: string }): CastWithdrawResult
+  castWithdraw(input: { sessionId: string; id: string; origin?: string }): CastWithdrawResult
   /**
    * #902 S2: create (no id) or edit (id) a card in one session's own templates for that session's caster (the a2a
    * plugin writes the team observer's own cards); recognized caller only. The card is an ordinary session template: its
@@ -118,8 +123,25 @@ export function renderCastMessage(turn: number, step: number, cards: readonly Qu
         CAST_BINDING_LINE,
       ].join('\n').trimEnd(),
     }],
-    source: { kind: 'user', scheduled: 'prompt-template-cast', turn, step, templates: cards.map(card => ({ id: card.template_id, name: card.name, caller: card.caller })) } satisfies CastSource as unknown as UserMessage['source'],
+    source: { kind: 'user', scheduled: 'prompt-template-cast', turn, step, templates: cards.map(card => ({ id: card.template_id, name: card.name, caller: card.caller })), casts: cards.flatMap(card => (card.id !== undefined ? [card.id] : [])) } satisfies CastSource as unknown as UserMessage['source'],
   })
+}
+
+/**
+ * #902 review (#86 B1): the queue rows the session's own log shows went in, with the turn and step of the message that
+ * carried them. Reads `snapshotEvents()` (or the older `events`); a session without either shows none.
+ */
+export function castsInLog(session: unknown): Map<string, { turn: number | null; step: number | null }> {
+  const found = new Map<string, { turn: number | null; step: number | null }>()
+  const s = session as { snapshotEvents?: () => ReadonlyArray<{ type?: string; data?: { source?: unknown } }>; events?: ReadonlyArray<{ type?: string; data?: { source?: unknown } }> }
+  const events = (typeof s?.snapshotEvents === 'function' ? s.snapshotEvents() : s?.events) ?? []
+  for (const event of events) {
+    if (event?.type !== 'user/message') continue
+    const source = event.data?.source as { scheduled?: unknown; casts?: unknown; turn?: unknown; step?: unknown } | undefined
+    if (source?.scheduled !== 'prompt-template-cast' || !Array.isArray(source.casts)) continue
+    for (const id of source.casts) if (typeof id === 'string') found.set(id, { turn: typeof source.turn === 'number' ? source.turn : null, step: typeof source.step === 'number' ? source.step : null })
+  }
+  return found
 }
 
 /** A field of an evidence reference (#81): one line, 1..max characters, or undefined. */
@@ -147,6 +169,7 @@ export function registerCast(ctx: Context, store: () => TemplateStore, enabled: 
     templates(sessionId: string): LibraryCard[] { return store().library().filter(card => card.scope === 'session' && card.session_id === sessionId) }
     interventions(filter: { sessionId?: string; since?: string; source?: InterventionSource; limit?: number } = {}): InterventionView[] { return store().interventions.list(filter) }
     castEnabled(): boolean { return enabled() }
+    castCapabilities(): { modes: readonly string[]; origin: boolean; confirmedDelivery: boolean } { return { modes: ['insert', 'queue'], origin: true, confirmedDelivery: true } }
     /**
      * One session's self-check log. The a2a plugin (the observer's reader) gets the rows whole; any other plugin gets a
      * summary only — session, time, kind and conclusion — never the evidence, wake, deadline or ticket text (#29 review).
@@ -163,7 +186,7 @@ export function registerCast(ctx: Context, store: () => TemplateStore, enabled: 
      * (PLUGIN_CALLERS) may cast, and only while `cast.enabled` is on. The card must be a global template or one of that
      * session's own; one copy of a card waits per session. The reason is put on one line and must be 1..500 characters.
      */
-    cast(input: { sessionId: string; templateId: string; reason: string; basis?: string; authorSession?: string; mode?: CastMode }): CastResult {
+    cast(input: { sessionId: string; templateId: string; reason: string; basis?: string; authorSession?: string; mode?: CastMode; origin?: string }): CastResult {
       if (!enabled()) return { ok: false, code: 'disabled', error: 'casting is off on this host (cast.enabled)' }
       const caller = callerOf(this.ctx)
       if (caller === undefined || !PLUGIN_CALLERS.includes(caller)) return { ok: false, code: 'caller', error: 'only a plugin this host recognizes may cast a card' }
@@ -175,6 +198,8 @@ export function registerCast(ctx: Context, store: () => TemplateStore, enabled: 
       if (mode !== 'insert' && mode !== 'queue') return { ok: false, code: 'mode', error: 'mode is insert (the next step) or queue (the first step of the next turn)' }
       const basis = input?.basis === undefined ? null : oneLine(String(input.basis))
       if (basis !== null && (basis === '' || basis.length > 200)) return { ok: false, code: 'basis', error: 'give a basis of 1..200 characters on one line, or none' }
+      const origin = input?.origin === undefined ? null : oneLine(String(input.origin))
+      if (origin !== null && (origin === '' || origin.length > 200)) return { ok: false, code: 'origin', error: 'origin is the caller\'s label: 1..200 characters on one line' }
       const template = store().get(String(input?.templateId ?? ''))
       // #902 S2: a recognized caller may also cast a card of the author session it names (the a2a plugin checks who that is).
       const author = input?.authorSession === undefined ? '' : String(input.authorSession).trim()
@@ -185,24 +210,26 @@ export function registerCast(ctx: Context, store: () => TemplateStore, enabled: 
       const queue = waiting(sessionId, now)
       if (queue.some(card => card.template_id === template.id)) return { ok: false, code: 'already-queued', error: 'that card already waits for this session' }
       if (queue.length >= CAST_QUEUE_MAX || waiting(undefined, now).length >= CAST_QUEUE_TOTAL_MAX) return { ok: false, code: 'full', error: `at most ${String(CAST_QUEUE_MAX)} cast cards can wait for one session` }
-      const row = store().castQueue.add({ session_id: sessionId, template_id: template.id, name: authored ? `定制·${template.name}` : template.name, version: template.version ?? null, content: template.content, caller, reason, basis, at: new Date(now).toISOString(), mode })
+      const row = store().castQueue.add({ session_id: sessionId, template_id: template.id, name: authored ? `定制·${template.name}` : template.name, version: template.version ?? null, content: template.content, caller, reason, basis, at: new Date(now).toISOString(), mode, origin })
       return { ok: true, queued: queue.length + 1, id: row.id }
     }
 
-    castQueue(filter: { sessionId?: string; state?: CastState; limit?: number } = {}): CastQueueResult {
+    castQueue(filter: { sessionId?: string; state?: CastState; limit?: number; origin?: string } = {}): CastQueueResult {
       if (recognized(this.ctx) === undefined) return { ok: false, code: 'caller', error: 'only a plugin this host recognizes may read the cast queue' }
       if (filter.state !== undefined && !['waiting', 'delivered', 'withdrawn', 'expired'].includes(filter.state)) return { ok: false, code: 'state', error: 'state must be waiting, delivered, withdrawn or expired' }
       store().castQueue.expire(Date.now(), CAST_WAIT_MS)
-      return { ok: true, items: store().castQueue.list({ ...(filter.sessionId !== undefined ? { sessionId: String(filter.sessionId) } : {}), ...(filter.state !== undefined ? { state: filter.state } : {}), ...(filter.limit !== undefined ? { limit: filter.limit } : {}) }) }
+      return { ok: true, items: store().castQueue.list({ ...(filter.sessionId !== undefined ? { sessionId: String(filter.sessionId) } : {}), ...(filter.state !== undefined ? { state: filter.state } : {}), ...(filter.limit !== undefined ? { limit: filter.limit } : {}), ...(filter.origin !== undefined ? { origin: String(filter.origin) } : {}) }) }
     }
 
-    castWithdraw(input: { sessionId: string; id: string }): CastWithdrawResult {
+    castWithdraw(input: { sessionId: string; id: string; origin?: string }): CastWithdrawResult {
       if (recognized(this.ctx) === undefined) return { ok: false, code: 'caller', error: 'only a plugin this host recognizes may withdraw a cast' }
       const sessionId = String(input?.sessionId ?? '').trim()
       const id = String(input?.id ?? '').trim()
       if (sessionId === '' || id === '') return { ok: false, code: 'session', error: 'name the session and the queued cast' }
-      // Only a cast still waiting for that very session: an id from another session withdraws nothing.
-      const mine = waiting(sessionId, Date.now()).some(row => row.id === id)
+      // Only a cast still waiting for that very session (and, when given, with that origin), not yet handed to a step:
+      // an id from another session or caster withdraws nothing, and a card that may already have gone in is not claimed back.
+      const origin = input?.origin === undefined ? undefined : String(input.origin)
+      const mine = waiting(sessionId, Date.now()).some(row => row.id === id && row.sent_at === null && (origin === undefined || row.origin === origin))
       return { ok: true, withdrawn: mine && store().castQueue.end([id], 'withdrawn', new Date().toISOString()).length === 1 }
     }
 
@@ -272,21 +299,32 @@ export function registerCast(ctx: Context, store: () => TemplateStore, enabled: 
     try {
       const sessionId = String(agent.session.header.id)
       const now = Date.now()
+      // #902 review (#86 B1): first settle what an earlier step handed over. A row the session's log shows went in is
+      // delivered (and recorded then); one that is not there did not land, and waits again.
+      const pending = waiting(sessionId, now)
+      const sent = pending.filter(row => row.sent_at !== null)
+      if (sent.length > 0) {
+        const landed = castsInLog(agent.session)
+        const done = sent.filter(row => landed.has(row.id))
+        const lost = sent.filter(row => !landed.has(row.id))
+        const at = new Date(now).toISOString()
+        for (const card of store().castQueue.end(done.map(row => row.id), 'delivered', at)) {
+          const where = landed.get(card.id)!
+          try {
+            store().interventions.record({ session_id: sessionId, source: 'plugin', method: null, caller: card.caller, template_id: card.template_id, template_name: card.name,
+              template_version: card.version, content_sha256: contentDigest(expandTemplateVariables(card.content, { sessionId, turn: where.turn ?? turn })), turn: where.turn, step: where.step, at, basis: card.basis, mode: card.mode, origin: card.origin })
+          } catch (error) { console.error('[dsh-prompt-templates] intervention log skipped a cast:', error) }
+        }
+        if (lost.length > 0) store().castQueue.unsend(lost.map(row => row.id))
+      }
       // #902 S3: a `queue` cast waits for the first step of a turn, so it never cuts into a turn under way.
       const first = typeof step !== 'number' || step <= 1
-      const queued = waiting(sessionId, now).filter(row => row.mode !== 'queue' || first)
+      const queued = waiting(sessionId, now).filter(row => row.sent_at === null && (row.mode !== 'queue' || first))
       if (queued.length === 0) return decision
-      // Ended before rendering, so a second step can never deliver the same row again.
-      const cards = store().castQueue.end(queued.map(row => row.id), 'delivered', new Date(now).toISOString())
-      if (cards.length === 0) return decision
-      const message = renderCastMessage(turn, typeof step === 'number' ? step : 1, cards, sessionId)
-      try {
-        const at = new Date().toISOString()
-        for (const card of cards) {
-          store().interventions.record({ session_id: sessionId, source: 'plugin', method: null, caller: card.caller, template_id: card.template_id, template_name: card.name,
-            template_version: card.version, content_sha256: contentDigest(expandTemplateVariables(card.content, { sessionId, turn })), turn, step: typeof step === 'number' ? step : null, at, basis: card.basis })
-        }
-      } catch (error) { console.error('[dsh-prompt-templates] intervention log skipped a cast:', error) }
+      // Marked sent before the message goes out, so a second step never hands the same row over twice; it becomes
+      // delivered only once the session's log shows it (above, at the next step).
+      store().castQueue.markSent(queued.map(row => row.id), new Date(now).toISOString())
+      const message = renderCastMessage(turn, typeof step === 'number' ? step : 1, queued, sessionId)
       return { ...decision, messages: [...decision.messages, message] }
     } catch (error) {
       if (!faultReported) { faultReported = true; console.error('[dsh-prompt-templates] cast skipped this step; further faults stay silent:', error) }
