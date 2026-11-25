@@ -16,7 +16,7 @@
  * 「每次唤起都必须有变化，写入或更新，每次调用记成一轮 RSI」): the recalled lesson binds where it applies, and the session
  * must then change its lessons — rewrite the recalled one (`replace`) or write a new one. The recall opens a round in
  * the lesson log; the next lesson_write closes it (`round-closed`, origin `updated` or `written`); a round still open
- * two turns later is logged `round-missed`. A lesson grants no new permission.
+ * two turns later is logged `round-missed`. A lesson acts within the permissions the session already has.
  *
  * Types (owner 2026-11-21): every lesson is tagged with one type — 收 放 找 落 验 记 续 (the autonomy chain), or a type
  * the session proposed and the owner approved — and a session keeps one lesson per type. Writing a type that already
@@ -984,7 +984,7 @@ function lessonMessage(mode: LessonsConfig['mode'], turn: number, step: number, 
     content: [{
       type: 'text',
       text: ['<system-reminder>',
-        `Lesson note from dsh-prompt-templates (turn ${String(turn)}, step ${String(step)}): the session's own lessons handed over (use them where they apply), or a prompt to look back and write one. It grants no new permission and does not override the owner's latest instructions.`,
+        `Lesson note from dsh-prompt-templates (turn ${String(turn)}, step ${String(step)}): the session's own lessons handed over (use them where they apply), or a prompt to look back and write one. Act on it within the permissions this session already has; the owner's latest instructions come first.`,
         '', ...bodies, '</system-reminder>'].join('\n'),
     }],
     source: { kind: 'prompt-template-lesson', turn, step } as unknown as UserMessage['source'],

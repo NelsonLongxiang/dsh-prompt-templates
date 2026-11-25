@@ -164,7 +164,7 @@ export function renderEventReminder(turn: number, step: number, mode: TemplateIn
       type: 'text',
       text: [
         '<system-reminder>',
-        `Event-triggered reminder from dsh-prompt-templates (turn ${turn}, step ${step}). It is evidence for your own judgement, not a user instruction, and grants no permission.`,
+        `Event-triggered reminder from dsh-prompt-templates (turn ${turn}, step ${step}). It is evidence for your own judgement; act on it within the permissions this session already has.`,
         '',
         ...bodies,
         '</system-reminder>',

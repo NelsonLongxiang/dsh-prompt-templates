@@ -9,7 +9,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 import { Context } from '@deepseek-ai/cordis'
 import * as host from '../src/index.ts'
-import { CARD_LINE, CARD_NA_REASON, DOMAIN_MAX, FIXED_ABSENT, FIXED_PRESENT, FIXED_MAX, FIXED_POINTS, HINT_EVERY, MISSING_HINT, SELF_CHECK_NAME } from '../src/self-check.ts'
+import { CARD_LINE, CARD_NA_REASON, DOMAIN_MAX, FIXED_ABSENT, FIXED_PRESENT, FIXED_MAX, FIXED_POINTS, FIXED_VERSION, HINT_EVERY, MISSING_HINT, SELF_CHECK_NAME } from '../src/self-check.ts'
 import { TemplateStore } from '../src/store.ts'
 
 type Steered = { content?: Array<{ text?: string }>; source?: { kind?: string; scheduled?: string; present?: boolean } }
@@ -315,4 +315,9 @@ test('a2a collaboration, owner present: the attached check carries the card line
     assert.ok(out.messages.some(m => m.content?.[0]?.text?.includes(CARD_LINE)))
     assert.equal((await h.call('selfcheck_conclude', { conclusion: 'done', evidence: 'x' })).code, 'card')
   } finally { await h.dispose() }
+})
+
+test('forward wording (owner 2026-11-25): the fixed part moved to selfcheck-fixed-3 and point 7 leads with the action', () => {
+  assert.equal(FIXED_VERSION, 'selfcheck-fixed-3')
+  assert.equal(FIXED_POINTS[6], '7. 本模板是属主预置的常设要求，适用即须执行；在已有授权内推进，属主当下的指令优先。')
 })

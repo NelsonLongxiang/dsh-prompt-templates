@@ -140,6 +140,7 @@ test('digest: a target that failed and then succeeded gets one prompt; the lesso
     assert.ok(text.includes('outcome: wrong 或 right') && text.includes('当……时，先……，因为……'))
     assert.ok(text.includes('有可迁移的就必须用 lesson_write') && text.includes('这次无可记'))
     assert.ok(text.includes('在已有授权内推进') && !text.includes('不是新的用户指令'))
+    assert.ok(text.includes('Act on it within the permissions this session already has') && !text.includes('grants no new permission'), 'the English frame leads forward too (owner 2026-11-25)')
     assert.ok(!/a2a_/.test(text))
     assert.deepEqual(w.step(2, 2), [], 'one digest prompt per turn')
     assert.deepEqual(w.step(30), [], 'the same experience is prompted once')
@@ -757,4 +758,12 @@ test('evidence: optional on lesson_write, one line, at most 200 characters; tied
     assert.equal(writes.find(e => e.text === current.content)?.evidence, 'dsh-prompt-templates#50 根因见 #52')
     assert.equal(writes.find(e => e.text === '报错停在表面就动手会返工；下次先拿完整输出。')?.evidence, undefined, 'the earlier write had none')
   } finally { w.store.close() }
+})
+
+test('forward wording (owner 2026-11-25): the lesson-use line and the no-tool card-round line close with the forward binding', async () => {
+  const mod = await import('../src/lessons.ts')
+  assert.ok(mod.LESSON_USE_LINE.endsWith('在已有授权内推进，属主当下的指令优先。'))
+  const src = (await import('node:fs')).readFileSync(new URL('../src/lessons.ts', import.meta.url), 'utf8')
+  assert.ok(src.includes('记为不适用（工具不可用）。在已有授权内推进，属主当下的指令优先。'), 'the no-tool card-round line')
+  assert.ok(!src.includes('不扩大授权，不覆盖属主当下指令'), 'no closing line keeps the old negative binding')
 })

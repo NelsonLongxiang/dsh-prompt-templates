@@ -483,3 +483,9 @@ test('master switch: config false seeds off and the observer honors the stored f
     assert.equal(h.step(4, 1).length, 1, 'flipping the stored master enables observation mid-flight')
   } finally { store.close() }
 })
+
+test('forward wording (owner 2026-11-25): the English event-reminder frame leads with the action', async () => {
+  const src = (await import('node:fs')).readFileSync(new URL('../src/event-inject.ts', import.meta.url), 'utf8')
+  assert.ok(src.includes('It is evidence for your own judgement; act on it within the permissions this session already has.'))
+  assert.ok(!src.includes('grants no permission') && !src.includes('not a user instruction'))
+})
