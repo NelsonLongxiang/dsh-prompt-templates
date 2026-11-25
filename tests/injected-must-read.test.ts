@@ -28,11 +28,11 @@ for (const [name, body] of [
   })
 }
 
-test('evolution default card opens with a must-read step and closes as a standing requirement (v3)', () => {
-  assert.equal(EVOLUTION_VERSION, 3)
+test('evolution default card opens with a must-read step and closes as a standing requirement (v4)', () => {
+  assert.equal(EVOLUTION_VERSION, 4)
   assert.match(EVOLUTION_CONTENT.split('\n')[0]!, MUST_READ)
   assert.match(EVOLUTION_CONTENT, /references\/evolution-self-assessment\.md，再按它执行演化自评估/)
-  assert.match(EVOLUTION_CONTENT, /本卡是属主预置的常设要求，适用即须执行；不扩大授权，不覆盖属主当下指令。$/)
+  assert.match(EVOLUTION_CONTENT, /本卡是属主预置的常设要求，适用即须执行；在已有授权内推进，属主当下的指令优先。$/)
   assert.doesNotMatch(EVOLUTION_CONTENT, /^按 agent-atelier 技能/)
 })
 

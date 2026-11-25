@@ -109,7 +109,7 @@ export function oneLine(text: string): string {
 }
 
 /** Closing line of a cast (owner 2026-11-21): the card comes from the owner's library, so it binds where it applies. */
-export const CAST_BINDING_LINE = '本卡取自属主的卡片库，适用即须执行；不扩大授权，不覆盖属主当下指令。'
+export const CAST_BINDING_LINE = '本卡取自属主的卡片库，适用即须执行；在已有授权内推进，属主当下的指令优先。'
 
 /** The visible message a cast becomes. */
 export function renderCastMessage(turn: number, step: number, cards: readonly Queued[], sessionId: string): UserMessage {

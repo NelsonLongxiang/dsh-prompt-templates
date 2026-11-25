@@ -173,7 +173,7 @@ test('M04: a reminder is sent once per evidence revision, then cooldown and per-
     assert.match(text, /^⚙️ 事件提醒 · 第 1 轮第 2 步/)
     assert.ok(text.includes('repeated-preparation@1'))
     assert.ok(!text.includes('abc'), 'assignment values never reach the prompt')
-    assert.ok(text.includes('不扩大授权'))
+    assert.ok(text.includes('在已有授权内推进'))
     // 0.16: every reminder ends with the host-neutral hand-off line, naming no a2a tool.
     assert.ok(text.trimEnd().endsWith('按提醒查过仍解不开的，按所在环境的上报方式交出去，写清已查处、缺的那一句背景。'))
     assert.ok(!/a2a_/.test(text), 'the plugin does not bind to a2a')
@@ -239,7 +239,7 @@ test('T2: once reminding has run out and the pattern still repeats, one hand-off
     assert.ok(text.includes('已提醒 2 次，提醒后仍重复 2 次'))
     assert.ok(text.includes('交给属主或评审'))
     assert.ok(text.includes('插件不再就此提醒'))
-    assert.ok(text.includes('不扩大授权'))
+    assert.ok(text.includes('在已有授权内推进'))
     assert.ok(!text.includes('abc'), 'assignment values never reach the prompt')
     assert.ok(!/a2a_/.test(text), 'the plugin does not bind to a2a')
     // Not another reminder: the episode's own count, state and revision are untouched.

@@ -80,7 +80,7 @@ test('reads are open to any plugin; cast is the recognized caller\'s only, and o
     const text = step.messages[1]?.content?.[0]?.text ?? ''
     assert.ok(text.includes('look at sess-1'))
     assert.ok(text.includes(`投卡方：${A2A}`))
-    assert.ok(text.includes('本卡取自属主的卡片库，适用即须执行；不扩大授权，不覆盖属主当下指令。') && !text.includes('不是新的用户指令'))
+    assert.ok(text.includes('本卡取自属主的卡片库，适用即须执行；在已有授权内推进，属主当下的指令优先。') && !text.includes('不是新的用户指令'))
     assert.equal((await h.preStep('sess-1', 3, 3)).messages.length, 1, 'delivered once')
     const rows = a2a.promptTemplates.interventions({ sessionId: 'sess-1' })
     assert.deepEqual(rows.map(r => [r.source, r.caller, r.template_id, r.turn, r.step]), [['plugin', A2A, made.id, 3, 2]])

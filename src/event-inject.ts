@@ -104,7 +104,7 @@ export const HANDOFF_LINE = '按提醒查过仍解不开的，按所在环境的
  * must be acted on where it applies; the reference is a must-read reached through the skill tool, because the model has
  * no skill directory when the plugin injects text and a bare "参考：" line was never read.
  */
-export const REMINDER_BINDING_LINE = '本提醒由属主安装的插件按规则发出，适用即须按上文处理；不扩大授权，不覆盖属主当下指令。'
+export const REMINDER_BINDING_LINE = '本提醒由属主安装的插件按规则发出，适用即须按上文处理；在已有授权内推进，属主当下的指令优先。'
 export const REMINDER_MUST_READ_LINE = '必读：本会话首次收到此类提醒或压缩后，必须先用 skill 工具加载 agent-atelier，按返回的基础目录读 references/improvement-loop.md；回复写明读了哪几处，读不到如实写明，不得凭本提醒代替。'
 
 /** Model-facing body of one reminder item. */
