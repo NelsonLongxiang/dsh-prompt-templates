@@ -137,33 +137,64 @@ test('#902 S3 mode: insert goes in at the next step; queue waits for the first s
   } finally { await h.stop(); rmSync(dir, { recursive: true, force: true }) }
 })
 
-test('#902 review (#86 B1): a cast is delivered only once the session log shows it; a lost send waits again and goes in once', async () => {
+test('#902 review (#86 B1, #89 B1): delivered only once the log shows it; a send the log does not show stays sent, never sent twice', async () => {
   const dir = createTestDirectory('pt-castq-')
   const h = await node(dir)
   try {
     const card = makeCard(dir, { name: 'c', content: 'body {{session}}', scope: 'global' })
     const a2a = await h.callerCtx(A2A)
     assert.equal(a2a.promptTemplates.cast({ sessionId: 's1', templateId: card.id, reason: 'r', basis: 'none: x', mode: 'queue', origin: 'team:t1 observer:o1 mode:trigger' }).ok, true)
-    // The step fails before the message lands: the row is only sent, nothing is recorded, and withdraw cannot claim it.
+    // The step's message does not reach the log: the row is only sent, nothing is recorded, and withdraw cannot claim it.
     assert.equal((await h.preStep('s1', 2, 1, false)).messages.length, 2)
     const sent = (a2a.promptTemplates.castQueue({ sessionId: 's1' }) as { items: Array<{ id: string; state: string; sent_at: string | null }> }).items
     assert.equal(sent[0]?.state, 'waiting'); assert.ok(sent[0]?.sent_at !== null)
     assert.equal((a2a.promptTemplates.castWithdraw({ sessionId: 's1', id: sent[0]!.id }) as { withdrawn: boolean }).withdrawn, false)
+    // Absence in the log is not proof: later steps and turns never hand it over again, and nothing is recorded.
+    assert.equal((await h.preStep('s1', 3, 1)).messages.length, 1)
+    assert.equal((await h.preStep('s1', 4, 1)).messages.length, 1)
     assert.equal(a2a.promptTemplates.interventions({ sessionId: 's1' }).length, 0)
-    // Next turn: not in the log, so it waits again and goes in; the step after confirms it.
-    assert.equal((await h.preStep('s1', 3, 1)).messages.length, 2)
-    assert.equal((await h.preStep('s1', 3, 2)).messages.length, 1)
-    const rows = a2a.promptTemplates.interventions({ sessionId: 's1' })
-    assert.equal(rows.length, 1)
-    assert.deepEqual([rows[0]!.mode, rows[0]!.origin, rows[0]!.turn, rows[0]!.step], ['queue', 'team:t1 observer:o1 mode:trigger', 3, 1])
-    const done = (a2a.promptTemplates.castQueue({ sessionId: 's1', origin: 'team:t1 observer:o1 mode:trigger' }) as { items: Array<{ state: string }> }).items
-    assert.deepEqual(done.map(r => r.state), ['delivered'])
-    assert.equal((a2a.promptTemplates.castQueue({ sessionId: 's1', origin: 'team:other' }) as { items: unknown[] }).items.length, 0)
+    assert.equal((a2a.promptTemplates.castQueue({ sessionId: 's1' }) as { items: Array<{ state: string }> }).items[0]?.state, 'waiting')
     assert.deepEqual(a2a.promptTemplates.castCapabilities(), { modes: ['insert', 'queue'], origin: true, confirmedDelivery: true })
     assert.equal((a2a.promptTemplates.cast({ sessionId: 's1', templateId: card.id, reason: 'r', origin: '' }) as { code: string }).code, 'origin')
   } finally { await h.stop(); rmSync(dir, { recursive: true, force: true }) }
 })
 
+test('#89 review: a landed cast is delivered with mode and origin recorded once; a failed record is retried at the next step, not lost or doubled', async () => {
+  const dir = createTestDirectory('pt-castq-')
+  const h = await node(dir)
+  try {
+    const card = makeCard(dir, { name: 'c', content: 'body', scope: 'global' })
+    const a2a = await h.callerCtx(A2A)
+    assert.equal(a2a.promptTemplates.cast({ sessionId: 's1', templateId: card.id, reason: 'r', mode: 'queue', origin: 'team:t1 observer:o1 mode:trigger' }).ok, true)
+    assert.equal((await h.preStep('s1', 3, 1)).messages.length, 2)
+    // The next step's record fails once (the store is made to throw on the intervention insert).
+    const { InterventionLog } = await import('../src/interventions.ts')
+    const real = InterventionLog.prototype.record
+    let fail = true
+    InterventionLog.prototype.record = function (this: InstanceType<typeof InterventionLog>, input) { if (fail) { fail = false; throw new Error('disk full') } return real.call(this, input) }
+    try {
+      await h.preStep('s1', 3, 2)
+      assert.equal(a2a.promptTemplates.interventions({ sessionId: 's1' }).length, 0)
+      assert.equal((a2a.promptTemplates.castQueue({ sessionId: 's1' }) as { items: Array<{ state: string }> }).items[0]?.state, 'waiting', 'rolled back with the record')
+      await h.preStep('s1', 3, 3)
+    } finally { InterventionLog.prototype.record = real }
+    const rows = a2a.promptTemplates.interventions({ sessionId: 's1' })
+    assert.equal(rows.length, 1)
+    assert.deepEqual([rows[0]!.mode, rows[0]!.origin, rows[0]!.turn, rows[0]!.step], ['queue', 'team:t1 observer:o1 mode:trigger', 3, 1])
+    await h.preStep('s1', 3, 4)
+    assert.equal(a2a.promptTemplates.interventions({ sessionId: 's1' }).length, 1)
+    const done = (a2a.promptTemplates.castQueue({ sessionId: 's1', origin: 'team:t1 observer:o1 mode:trigger' }) as { items: Array<{ state: string }> }).items
+    assert.deepEqual(done.map(r => r.state), ['delivered'])
+    assert.equal((a2a.promptTemplates.castQueue({ sessionId: 's1', origin: 'team:other' }) as { items: unknown[] }).items.length, 0)
+  } finally { await h.stop(); rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('#89 review B1: a session whose log cannot be read leaves a sent row sent (unknown), never delivered or resent', async () => {
+  const { castsInLog } = await import('../src/cast.ts')
+  assert.equal(castsInLog({ header: { id: 's' } }), undefined)
+  assert.equal(castsInLog({ snapshotEvents: () => { throw new Error('gone') } }), undefined)
+  assert.deepEqual([...castsInLog({ snapshotEvents: () => [{ type: 'user/message', data: { source: { scheduled: 'prompt-template-cast', casts: ['x'], turn: 2, step: 1 } } }] })!.entries()], [['x', { turn: 2, step: 1 }]])
+})
 test('#902 review: withdraw with an origin takes back only that caster\'s row; ended rows keep no text', async () => {
   const dir = createTestDirectory('pt-castq-')
   const h = await node(dir)

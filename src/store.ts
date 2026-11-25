@@ -237,6 +237,15 @@ export class TemplateStore {
   }
 
   /** Close the underlying database handle. */
+  /**
+   * #89 review B2: run `fn` in one transaction over the plugin's file, so two writes (a queue row's end and its
+   * intervention record) land together or not at all.
+   */
+  transaction<T>(fn: () => T): T {
+    this.db.exec('BEGIN IMMEDIATE')
+    try { const out = fn(); this.db.exec('COMMIT'); return out } catch (error) { try { this.db.exec('ROLLBACK') } catch { /* already rolled back */ } throw error }
+  }
+
   close(): void {
     this.db.close()
   }

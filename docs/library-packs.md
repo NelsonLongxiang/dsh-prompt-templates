@@ -49,7 +49,7 @@
 - **只读，所有插件都能用：** `library()`、`templates(sessionId)`、`interventions({ sessionId, since, source, limit })`。返回的形状和只读路由一样，只给摘要，不给正文。`library()` 的每张卡带 `category`，以及 `kind`（open-a2a-net #902 S1）：版本号以 `atelier-` 开头、分类是「工坊」、或有一份存档版本来自 agent-atelier 卡包的，是 `workshop`（工坊卡），其余是 `template`。
 - **投卡：** `cast({ sessionId, templateId, reason, basis?, mode? })`。
   - **方式（#902 S3）：** `mode` 默认 `insert`，在会话的下一步投进去；`queue` 等到下一轮的第一步才投，不插进正在进行的一轮。其他值回 `mode`。`castQueue` 的每行带 `mode`；`cast_queue` 表新增 `mode` 列，默认 `insert`，只加不改。
-  - **送达以会话日志为准（#902 补评审）：** 卡交给某一步时只记「已交出」（`sent_at`），仍是 `waiting`；下一步看到会话日志里有这条投卡消息（消息来源带 `casts` 行号），才记 `delivered` 并写介入记录。日志里没有的，说明那一步没落地，退回等待、再投一次。已交出未确认的卡不能撤回，也不会过期。
+  - **送达以会话日志为准（#902 补评审）：** 卡交给某一步时只记「已交出」（`sent_at`），仍是 `waiting`；下一步看到会话日志里有这条投卡消息（消息来源带 `casts` 行号），才记 `delivered`，介入记录在同一个事务里写入（两者都成或都不成；记录写不进去，下一步重试，只记一条）。日志里看不到的、或日志读不到的，一律保持「已交出未确认」，不当作没投、也不重投。已交出未确认的卡不能撤回，也不会过期。
   - **调用方标签（#902 补评审）：** `cast` 可带 `origin`（一行、1～200 字，调用方自己的标签，a2a 插件写团队、观察者和请求的方式）。`castQueue` 可按 `origin` 过滤，`castWithdraw` 带 `origin` 时只撤这个标签的行。
   - **介入记录：** 新增 `mode`（实际送达方式 insert/queue）和 `origin` 两列，只加不改。行结束（送达、撤回、过期）时清掉卡正文，介入记录只留摘要。
   - **能力声明：** `castCapabilities()` 返回 `{ modes: ['insert','queue'], origin: true, confirmedDelivery: true }`，调用方据此决定开放哪些方式。

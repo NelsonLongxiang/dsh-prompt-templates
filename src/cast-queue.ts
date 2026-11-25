@@ -4,9 +4,11 @@
  * `withdrawn` (the caster took it back) or `expired` (it waited longer than the wait limit). Rows are never deleted, so
  * what was cast and what became of it can be read back; the card text is cleared when a row ends.
  *
- * #902 review (#86 B1): a row handed to a step is only marked `sent` (sent_at); it becomes `delivered` once the session's
- * own log shows the cast message naming it. A row sent but not in the log at the session's next step (the step failed,
- * or the host stopped first) goes back to waiting, so a card is never marked delivered on a send that did not land.
+ * #902 review (#86 B1, #89 review B1): a row handed to a step is only marked `sent` (sent_at); it becomes `delivered`
+ * once the session's own log shows the cast message naming it, and its intervention record is written in the same
+ * transaction. A sent row the log does not show yet stays sent: absence is not proof the card did not land (a log can be
+ * unreadable, compacted, or the turn may have had no further step), so it is never sent again on that ground. A sent row
+ * cannot be withdrawn and does not expire; the caller sees it as handed over, not confirmed.
  * @module @nelsonlongxiang/dsh-prompt-templates/cast-queue
  */
 
@@ -75,11 +77,6 @@ export class CastQueueStore {
   /** Mark waiting rows as handed to a step (still waiting until the session's log shows them). */
   markSent(ids: readonly string[], at: string): void {
     for (const id of ids) this.#db.prepare("UPDATE cast_queue SET sent_at = ? WHERE id = ? AND state = 'waiting'").run(at, id)
-  }
-
-  /** Put sent rows back to waiting (their send did not land). */
-  unsend(ids: readonly string[]): void {
-    for (const id of ids) this.#db.prepare("UPDATE cast_queue SET sent_at = NULL WHERE id = ? AND state = 'waiting'").run(id)
   }
 
   /** Waiting rows: for one session, or across all sessions. */

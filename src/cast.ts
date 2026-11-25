@@ -129,12 +129,16 @@ export function renderCastMessage(turn: number, step: number, cards: readonly Qu
 
 /**
  * #902 review (#86 B1): the queue rows the session's own log shows went in, with the turn and step of the message that
- * carried them. Reads `snapshotEvents()` (or the older `events`); a session without either shows none.
+ * carried them. Reads `snapshotEvents()` (or the older `events`); a session without either, or whose log cannot be
+ * read, answers undefined (unknown).
  */
-export function castsInLog(session: unknown): Map<string, { turn: number | null; step: number | null }> {
+export function castsInLog(session: unknown): Map<string, { turn: number | null; step: number | null }> | undefined {
   const found = new Map<string, { turn: number | null; step: number | null }>()
   const s = session as { snapshotEvents?: () => ReadonlyArray<{ type?: string; data?: { source?: unknown } }>; events?: ReadonlyArray<{ type?: string; data?: { source?: unknown } }> }
-  const events = (typeof s?.snapshotEvents === 'function' ? s.snapshotEvents() : s?.events) ?? []
+  // #89 review B1: no log to read is unknown, not "nothing landed".
+  let events: ReadonlyArray<{ type?: string; data?: { source?: unknown } }> | undefined
+  try { events = typeof s?.snapshotEvents === 'function' ? s.snapshotEvents() : s?.events } catch { return undefined }
+  if (!Array.isArray(events)) return undefined
   for (const event of events) {
     if (event?.type !== 'user/message') continue
     const source = event.data?.source as { scheduled?: unknown; casts?: unknown; turn?: unknown; step?: unknown } | undefined
@@ -300,22 +304,24 @@ export function registerCast(ctx: Context, store: () => TemplateStore, enabled: 
       const sessionId = String(agent.session.header.id)
       const now = Date.now()
       // #902 review (#86 B1): first settle what an earlier step handed over. A row the session's log shows went in is
-      // delivered (and recorded then); one that is not there did not land, and waits again.
+      // delivered, and its intervention record goes in the same transaction (#89 review B2: both or neither, so a failed
+      // record is tried again at the next step and written once). A row the log does not show stays sent (#89 review B1).
       const pending = waiting(sessionId, now)
       const sent = pending.filter(row => row.sent_at !== null)
-      if (sent.length > 0) {
-        const landed = castsInLog(agent.session)
-        const done = sent.filter(row => landed.has(row.id))
-        const lost = sent.filter(row => !landed.has(row.id))
+      const landed = sent.length > 0 ? castsInLog(agent.session) : undefined
+      if (landed !== undefined) {
         const at = new Date(now).toISOString()
-        for (const card of store().castQueue.end(done.map(row => row.id), 'delivered', at)) {
-          const where = landed.get(card.id)!
+        for (const row of sent.filter(r => landed.has(r.id))) {
+          const where = landed.get(row.id)!
           try {
-            store().interventions.record({ session_id: sessionId, source: 'plugin', method: null, caller: card.caller, template_id: card.template_id, template_name: card.name,
-              template_version: card.version, content_sha256: contentDigest(expandTemplateVariables(card.content, { sessionId, turn: where.turn ?? turn })), turn: where.turn, step: where.step, at, basis: card.basis, mode: card.mode, origin: card.origin })
-          } catch (error) { console.error('[dsh-prompt-templates] intervention log skipped a cast:', error) }
+            store().transaction(() => {
+              for (const card of store().castQueue.end([row.id], 'delivered', at)) {
+                store().interventions.record({ session_id: sessionId, source: 'plugin', method: null, caller: card.caller, template_id: card.template_id, template_name: card.name,
+                  template_version: card.version, content_sha256: contentDigest(expandTemplateVariables(card.content, { sessionId, turn: where.turn ?? turn })), turn: where.turn, step: where.step, at, basis: card.basis, mode: card.mode, origin: card.origin })
+              }
+            })
+          } catch (error) { console.error('[dsh-prompt-templates] a delivered cast stays sent until its record can be written:', error) }
         }
-        if (lost.length > 0) store().castQueue.unsend(lost.map(row => row.id))
       }
       // #902 S3: a `queue` cast waits for the first step of a turn, so it never cuts into a turn under way.
       const first = typeof step !== 'number' || step <= 1
