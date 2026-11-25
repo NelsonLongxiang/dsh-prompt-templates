@@ -28,6 +28,7 @@ import { INTERVENTIONS_SQL, InterventionLog, contentDigest } from './interventio
 import { SELF_CHECK_CARDS_SQL, SELF_CHECK_SQL, SelfCheckLog } from './self-check.ts'
 import { LESSONS_SQL, LESSON_EVIDENCE_SQL, LESSON_HITS_SQL, LESSON_OUTCOME_SQL, LESSON_TYPES_SQL, LessonStore } from './lessons.ts'
 import { EVIDENCE_READY_SQL, EvidenceReadyStore } from './evidence-ready.ts'
+import { CAST_QUEUE_SQL, CastQueueStore } from './cast-queue.ts'
 
 /** v9: the version label of a template's text. */
 const TEMPLATE_VERSION_SQL = 'ALTER TABLE templates ADD COLUMN version TEXT'
@@ -136,6 +137,8 @@ export class TemplateStore {
   readonly lessons: LessonStore
   /** Evidence-ready references (#81; additive table, no version bump). */
   readonly evidence: EvidenceReadyStore
+  /** The durable cast queue (#902 S1; additive table, no version bump). */
+  readonly castQueue: CastQueueStore
 
   constructor(dbPath: string, options: TemplateStoreOptions = {}) {
     this.#injectMaxEvery = options.injectMaxEvery ?? DEFAULT_INJECT_MAX_EVERY
@@ -201,6 +204,9 @@ export class TemplateStore {
       this.db.exec(SELF_CHECK_CARDS_SQL)
       this.db.exec(LESSON_OUTCOME_SQL)
       this.db.exec(EVIDENCE_READY_SQL)
+      // #902 S1: the durable cast queue, and the basis a cast was given (guarded: added once, older builds ignore both).
+      this.db.exec(CAST_QUEUE_SQL)
+      if (!(this.db.prepare('PRAGMA table_info(interventions)').all() as Array<{ name: string }>).some(col => col.name === 'basis')) this.db.exec('ALTER TABLE interventions ADD COLUMN basis TEXT')
       this.db.exec('COMMIT')
       if (dbPath !== ':memory:') {
         try { chmodSync(dbPath, 0o600) } catch { /* best-effort */ }
@@ -210,6 +216,7 @@ export class TemplateStore {
       this.selfChecks = new SelfCheckLog(this.db)
       this.lessons = new LessonStore(this.db)
       this.evidence = new EvidenceReadyStore(this.db)
+      this.castQueue = new CastQueueStore(this.db)
     } catch (error) {
       // A failed constructor has no owner to close it later. Preserve the
       // original fault even when initialization failed before BEGIN.
@@ -408,17 +415,19 @@ export class TemplateStore {
 
   /** The card library, read-only (observer phase 1): what each card is and whether it is on, without its text. */
   library(): LibraryCard[] {
-    const rows = this.db.prepare('SELECT id, name, version, scope, session_id, inject_enabled, inject_every, mode, content FROM templates ORDER BY scope, position, created_at')
-      .all() as unknown as Array<{ id: string; name: string; version: string | null; scope: PromptScope; session_id: string | null; inject_enabled: number; inject_every: number | null; mode: TemplateInjectMode; content: string }>
+    const rows = this.db.prepare('SELECT id, name, version, scope, session_id, inject_enabled, inject_every, mode, category, content FROM templates ORDER BY scope, position, created_at')
+      .all() as unknown as Array<{ id: string; name: string; version: string | null; scope: PromptScope; session_id: string | null; inject_enabled: number; inject_every: number | null; mode: TemplateInjectMode; category: string | null; content: string }>
     const versions = this.db.prepare('SELECT template_id, version, name, content_sha256, source, stored_at FROM template_versions ORDER BY stored_at, version')
       .all() as unknown as Array<{ template_id: string; version: string; name: string; content_sha256: string; source: string | null; stored_at: string }>
     const of = (id: string): StoredVersion[] => versions.filter(v => v.template_id === id).map(({ template_id: _t, name: _n, ...v }) => v)
-    const cards: LibraryCard[] = rows.map(({ content, ...row }) => ({ ...row, active_version: row.version ?? null, inject_enabled: row.inject_enabled === 1, content_sha256: contentDigest(content), stored_versions: of(row.id), stored_only: false }))
+    const workshop = (version: string | null, category: string | null, stored: readonly StoredVersion[]): 'workshop' | 'template' =>
+      (version ?? '').startsWith('atelier-') || category === '工坊' || stored.some(v => (v.source ?? '').startsWith('agent-atelier')) ? 'workshop' : 'template'
+    const cards: LibraryCard[] = rows.map(({ content, category, ...row }) => ({ ...row, category: category ?? null, active_version: row.version ?? null, inject_enabled: row.inject_enabled === 1, content_sha256: contentDigest(content), stored_versions: of(row.id), stored_only: false, kind: workshop(row.version, category, of(row.id)) }))
     // A pack card the host does not have: listed with its stored versions, with no active text (nothing can send it).
     const known = new Set(rows.map(row => row.id))
     for (const id of [...new Set(versions.map(v => v.template_id))].filter(id => !known.has(id))) {
       const first = versions.find(v => v.template_id === id)!
-      cards.push({ id, name: first.name, active_version: null, scope: 'global', session_id: null, inject_enabled: false, inject_every: null, mode: 'visible', content_sha256: null, stored_versions: of(id), stored_only: true })
+      cards.push({ id, name: first.name, active_version: null, scope: 'global', session_id: null, inject_enabled: false, inject_every: null, mode: 'visible', content_sha256: null, stored_versions: of(id), stored_only: true, category: null, kind: workshop(null, null, of(id)) })
     }
     return cards
   }
@@ -603,6 +612,13 @@ export interface LibraryCard {
   readonly stored_versions: readonly StoredVersion[]
   /** A pack card this host has no template for: stored, never sent. */
   readonly stored_only: boolean
+  /** The card's category (null for none or a stored-only card). */
+  readonly category: string | null
+  /**
+   * #902 S1: `workshop` for an agent-atelier card (an `atelier-*` version, the 工坊 category, or a version stored from an
+   * agent-atelier pack), otherwise `template`.
+   */
+  readonly kind: 'workshop' | 'template'
 }
 
 /** One stored version of a card. */
