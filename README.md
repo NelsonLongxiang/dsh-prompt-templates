@@ -33,7 +33,7 @@ No Python toolchain required — since 0.3.0 the host half persists templates th
 - **Wrap-up self-check and card casting** (0.17) — the self-check adds one step before a working session would end its turn; it is on by default since 0.19.0; opt out with `selfCheck.enabled: false`. `cast.enabled` (off by default) lets named plugins cast one card into a session. See [the self-check contract](docs/self-check.md)
 - **Lessons and handoff notice** (0.18) — lessons are on by default since 0.19.0 (opt out with `lessons.enabled: false`) and let a session write one- or two-sentence lessons (its own session templates under the 体会 category) that are recalled in matching situations; the handoff notice follows the event-reminder switches (off by default): once an episode exhausts its reminders and repeats, one notice asks the session to stop self-correcting and hand over. Details: `docs/spec-lesson-inject.md` and `docs/release-notes-0.18.0.md` in the source repository
 
-In 0.25.0, the next wrap-up check after upgrade uses `selfcheck-fixed-3`. The v4 evolution default is for sessions that have yet to enroll. Enrolled sessions retain their existing card. See the [0.25.0 release notes](docs/release-notes-0.25.0.md).
+In 0.25.0, the next wrap-up check after upgrade uses `selfcheck-fixed-3`. The v4 evolution default is for sessions that have yet to enroll. Enrolled sessions retain their existing card. See the [0.25.0 release notes](https://github.com/NelsonLongxiang/dsh-prompt-templates/blob/888add480692904b9cd6f92495052eb2be808a12/docs/release-notes-0.25.0.md).
 
 ## Sharing (cross-instance copy)
 

@@ -33,7 +33,7 @@ dsh plugin --profile web add @nelsonlongxiang/dsh-prompt-templates
 - **收尾自查与投卡**（0.17）——收尾自查让有活的会话在本来结束的一轮多走一步；0.19.0 起默认开，写 `selfCheck.enabled: false` 关闭。`cast.enabled`（默认关）让点名的插件向会话投一张卡。见[收尾自查合同](docs/self-check.md)
 - **体会与交接通知**（0.18）——体会自 0.19.0 起默认开（写 `lessons.enabled: false` 关闭），让会话写下一两句体会（存为它自己的会话模板，归「体会」分类），同类情境下带回；交接通知跟随事件提醒的开关（默认关）：提醒次数用完后同一问题再重复，发一次通知，请会话停止自行反复修正、交给属主。细节见源码仓的 `docs/spec-lesson-inject.md` 与 `docs/release-notes-0.18.0.md`
 
-0.25.0 的 `selfcheck-fixed-3` 在升级后下一次收尾自查生效。演化默认卡 v4 面向尚未入册的会话，已入册的会话保留原卡。见 [0.25.0 发布说明](docs/release-notes-0.25.0.md)。
+0.25.0 的 `selfcheck-fixed-3` 在升级后下一次收尾自查生效。演化默认卡 v4 面向尚未入册的会话，已入册的会话保留原卡。见 [0.25.0 发布说明](https://github.com/NelsonLongxiang/dsh-prompt-templates/blob/888add480692904b9cd6f92495052eb2be808a12/docs/release-notes-0.25.0.md)。
 
 ## 分享（跨实例复制）
 
