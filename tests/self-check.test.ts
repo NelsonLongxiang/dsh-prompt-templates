@@ -161,7 +161,7 @@ test('a session without its domain part is hinted visibly, every 30 turns, at mo
 
 test('the fixed part and the hint are workbench-market 18\'s words (pinned key sentences)', () => {
   assert.equal(FIXED_POINTS.length, 7)
-  assert.ok(FIXED_POINTS[0].includes('停只有两种合法的形态：做完（说出证据），或登记等待'))
+  assert.ok(FIXED_POINTS[0].includes('停只有两种合法的形态：做完（说出证据：实测、读回或当前头），或登记等待'))
   assert.ok(FIXED_POINTS[0].includes('写在回复里不算'), 'a question written in the reply is not registered')
   assert.ok(FIXED_POINTS[1].includes('叫醒的必须是能开新一轮的东西（a2a 的消息或定时任务）'))
   assert.ok(FIXED_POINTS[2].includes('能接着做的范围：已授权、可逆、在目标范围内。'))
@@ -317,7 +317,17 @@ test('a2a collaboration, owner present: the attached check carries the card line
   } finally { await h.dispose() }
 })
 
-test('forward wording (owner 2026-11-25): the fixed part moved to selfcheck-fixed-3 and point 7 leads with the action', () => {
-  assert.equal(FIXED_VERSION, 'selfcheck-fixed-3')
+test('forward wording (owner 2026-11-25): point 7 leads with the action', () => {
   assert.equal(FIXED_POINTS[6], '7. 本模板是属主预置的常设要求，适用即须执行；在已有授权内推进，属主当下的指令优先。')
+})
+
+test('goal, evidence and upkeep (owner 2026-11-26): the fixed part moved to selfcheck-fixed-4', () => {
+  assert.equal(FIXED_VERSION, 'selfcheck-fixed-4')
+  assert.ok(FIXED_POINTS[0].includes('做完（说出证据：实测、读回或当前头）'), 'point 1 names what counts as evidence')
+  assert.ok(FIXED_POINTS[2].startsWith('3. 先说这一步推进哪个目标、还差什么。'), 'point 3 asks for the goal first')
+  assert.ok(FIXED_POINTS[5].includes('改动让技能、文档过时的，已跟上或已记待办'), 'point 6 asks whether skills and docs kept up')
+  for (const text of [FIXED_ABSENT, FIXED_PRESENT]) assert.ok(text.includes('selfcheck-fixed-4'))
+  assert.ok(FIXED_ABSENT.includes(FIXED_POINTS[2]!) && FIXED_ABSENT.includes(FIXED_POINTS[5]!))
+  assert.ok(FIXED_PRESENT.includes(FIXED_POINTS[5]!), 'the owner-present turn also gets the upkeep question')
+  assert.ok(FIXED_ABSENT.length <= FIXED_MAX && FIXED_PRESENT.length <= FIXED_MAX)
 })

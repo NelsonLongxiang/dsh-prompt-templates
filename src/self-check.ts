@@ -24,7 +24,7 @@ import type { TemplateStore } from './store.ts'
 import { objectParameters, registerWhenToolsReady, withOutput } from './tool-registry.ts'
 
 /** The fixed part's version label; it moves only with the standard text. */
-export const FIXED_VERSION = 'selfcheck-fixed-3'
+export const FIXED_VERSION = 'selfcheck-fixed-4'
 /** The session template that holds a session's own domain part. */
 export const SELF_CHECK_NAME = '工坊·自查模板'
 /** Limits (R106). */
@@ -34,14 +34,14 @@ export const HINT_EVERY = 30, HINT_MAX = 3
 export const CONCLUSIONS = ['done', 'waiting', 'continue', 'orphan'] as const
 export type Conclusion = typeof CONCLUSIONS[number]
 
-/** The fixed part's seven points, as workbench-market 18 「自查模板」 words them (R106). */
+/** The fixed part's seven points, as workbench-market 18 「自查模板」 words them (R106); owner 2026-11-26 (fixed-4) added the goal to point 3, the kind of evidence to point 1 and keeping skills and docs current to point 6. */
 export const FIXED_POINTS = [
-  '1. 停只有两种合法的形态：做完（说出证据），或登记等待（已经经单子、决策卡或回执通道交出去；写在回复里不算）。',
+  '1. 停只有两种合法的形态：做完（说出证据：实测、读回或当前头），或登记等待（已经经单子、决策卡或回执通道交出去；写在回复里不算）。',
   '2. 要等，就说出叫醒条件和期限；叫醒的必须是能开新一轮的东西（a2a 的消息或定时任务）。',
-  '3. 能接着做的范围：已授权、可逆、在目标范围内。',
+  '3. 先说这一步推进哪个目标、还差什么。能接着做的范围：已授权、可逆、在目标范围内。',
   '4. 等人之前先自查：ygl 里定过没有，资料是不是就在身边。',
   '5. 属主在场的那一轮：不拦停，只核交给属主的是不是本该系统做的事，是的话同时提决策卡。',
-  '6. 交结论：用 selfcheck_conclude 交一次（做完、登记等待、接着做、孤儿停，四选一），附证据或叫醒条件、期限、关联的单子或目标。',
+  '6. 交结论：用 selfcheck_conclude 交一次（做完、登记等待、接着做、孤儿停，四选一），附证据或叫醒条件、期限、关联的单子或目标；改动让技能、文档过时的，已跟上或已记待办。',
   '7. 本模板是属主预置的常设要求，适用即须执行；在已有授权内推进，属主当下的指令优先。',
 ] as const
 
