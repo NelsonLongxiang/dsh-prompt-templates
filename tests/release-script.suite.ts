@@ -81,6 +81,18 @@ function fixture(t: { after(fn: () => void): void }, space = false, removedGuard
   return { root, remote, base, git, prepare, commit, run, calls, pubs, dir, env }
 }
 
+test('release preflight preserves empty and populated identity argv under nounset', () => {
+  const line = readFileSync(join(project, 'scripts', 'release.sh'), 'utf8').split('\n').find(line => line.startsWith('plan=$(guard inspect '))!
+  assert.ok(line, 'exercise the actual release preflight line')
+  for (const populated of [false, true]) {
+    const setup = populated ? 'identity_args=(--merged-prepared "identity with spaces.json")' : 'identity_args=()'
+    const script = 'set -euo pipefail\nsubject="synthetic subject"\n' + setup + '\nguard() { printf "%s\\n" "$#" "$@"; }\n' + line + '\nprintf "%s\\n" "$plan"'
+    const r = spawnSync('bash', ['-c', script], { encoding: 'utf8', timeout: 10_000 })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.deepEqual(r.stdout.trim().split('\n'), populated ? ['4', 'inspect', 'synthetic subject', '--merged-prepared', 'identity with spaces.json'] : ['2', 'inspect', 'synthetic subject'])
+  }
+})
+
 for (const detached of [false, true]) test('rejects ' + (detached ? 'detached HEAD' : 'feature branch') + ' before verify or publish', t => {
   const f = fixture(t)
   if (detached) f.git('switch', '-q', '--detach'); else f.git('switch', '-qc', 'feature')

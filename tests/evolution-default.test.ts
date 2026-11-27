@@ -131,6 +131,60 @@ test('concurrent first v5 migration rechecks version while holding write lock', 
   s.close()
 })
 
+test('first migration waits through a writer held beyond the normal five-second busy timeout', async () => {
+  const file = path()
+  new TemplateStore(file).close()
+  const existing = new TemplateStore(file)
+  const saved = existing.create({ name: 'owner data', content: 'must survive migration' })
+  existing.close()
+  const old = new DatabaseSync(file)
+  old.exec('ALTER TABLE templates DROP COLUMN system_prompt; DROP TABLE evolution_defaults; DROP TABLE event_master; PRAGMA user_version=5')
+  old.close()
+  // A separate worker owns the write lock. The main thread must remain free
+  // while synchronous constructors wait, and all workers settle before cleanup.
+  const holder = new Worker(`const { parentPort } = require('node:worker_threads'); const { DatabaseSync } = require('node:sqlite');
+     const db = new DatabaseSync(${JSON.stringify(file)}); db.exec('PRAGMA journal_mode=WAL; BEGIN IMMEDIATE');
+     parentPort.postMessage('locked'); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 6500);
+     db.exec('COMMIT'); db.close();`, { eval: true })
+  const holderDone = new Promise<void>((resolve, reject) => {
+    holder.on('error', reject)
+    holder.on('exit', code => code === 0 ? resolve() : reject(new Error(`holder exit ${code}`)))
+  })
+  await new Promise<void>((resolve, reject) => { holder.once('message', () => resolve()); holder.once('error', reject) })
+  const source = new URL('../src/store.ts', import.meta.url).href
+  const openers = Array.from({ length: 4 }, () => new Promise<void>((resolve, reject) => {
+    const worker = new Worker(`import { TemplateStore } from ${JSON.stringify(source)}; const s = new TemplateStore(${JSON.stringify(file)}); s.ensureEvolutionDefault('same', 1); s.close();`, { eval: true })
+    worker.on('error', reject)
+    worker.on('exit', code => code === 0 ? resolve() : reject(new Error(`worker exit ${code}`)))
+  }))
+  const results = await Promise.allSettled([holderDone, ...openers])
+  for (const result of results) assert.equal(result.status, 'fulfilled', result.status === 'rejected' ? String(result.reason) : '')
+  const s = new TemplateStore(file)
+  assert.equal(s.list().length, 2)
+  assert.equal(s.get(saved.id)!.content, 'must survive migration')
+  assert.equal(s.list().filter(row => row.name === EVOLUTION_NAME).length, 1)
+  const version = s.db.prepare('PRAGMA user_version').get() as { user_version: number }
+  assert.equal(version.user_version, 12)
+  assert.equal(s.db.prepare('PRAGMA busy_timeout').get()!.timeout, 5000, 'ordinary writes keep their existing five-second budget')
+  s.close()
+})
+
+test('a writer beyond the initialization budget fails closed without changing the old schema', () => {
+  const file = path()
+  new TemplateStore(file).close()
+  const owner = new DatabaseSync(file)
+  owner.exec('ALTER TABLE templates DROP COLUMN system_prompt; DROP TABLE evolution_defaults; DROP TABLE event_master; PRAGMA user_version=5; BEGIN IMMEDIATE')
+  const started = performance.now()
+  try {
+    assert.throws(() => new TemplateStore(file), (error: any) => error.errcode === 5)
+    assert.ok(performance.now() - started >= 29_000, 'must use the bounded initialization budget, not the ordinary five seconds')
+    assert.equal(owner.prepare('PRAGMA user_version').get()!.user_version, 5)
+  } finally { owner.exec('ROLLBACK'); owner.close() }
+  const reopened = new TemplateStore(file)
+  assert.equal(reopened.db.prepare('PRAGMA user_version').get()!.user_version, 12)
+  reopened.close()
+})
+
 test('explicit make-global keeps global scheduling but feature opt-out still suppresses managed row', () => {
   const s = new TemplateStore(':memory:')
   s.ensureEvolutionDefault('a', 200)

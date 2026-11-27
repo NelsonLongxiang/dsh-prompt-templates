@@ -18,7 +18,9 @@ guard master
 [ "$dry" = 0 ] || [ "$dry" = 1 ] || { echo "DRYRUN must be 0 or 1" >&2; exit 2; }
 
 echo "== release identity + tag preflight =="
-plan=$(guard inspect "$subject" "${identity_args[@]}")
+# bash 3.2 + nounset rejects an empty array even after identity_args=().
+# The conditional expansion emits zero args when empty, preserving quoted identity paths.
+plan=$(guard inspect "$subject" ${identity_args[@]+"${identity_args[@]}"})
 ver=$(guard field "$plan" version)
 notes=$(guard field "$plan" notes)
 mode=$(guard field "$plan" mode)

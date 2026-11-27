@@ -155,10 +155,29 @@ export class TemplateStore {
     this.db = new DatabaseSync(dbPath)
     try {
       this.db.exec('PRAGMA busy_timeout=5000')
-      this.db.exec('PRAGMA journal_mode=WAL')
+      // First openers can queue behind a migrator on a busy host (#110).
+      // One bounded budget covers journal setup AND acquiring the migration
+      // lock, not the migration body: never replay DDL or a partial transaction.
+      const deadline = performance.now() + 30_000
+      const acquire = (sql: string) => {
+        for (;;) {
+          const remaining = Math.max(1, Math.ceil(deadline - performance.now()))
+          this.db.exec(`PRAGMA busy_timeout=${Math.min(5000, remaining)}`)
+          try { this.db.exec(sql); return } catch (error) {
+            // SQLite extended codes keep the primary code in the low byte.
+            // Only BUSY is contention from another connection, not corruption,
+            // malformed schema, SQLITE_LOCKED, or arbitrary initialization faults.
+            const code = (error as { errcode?: number }).errcode
+            if (typeof code !== 'number' || (code & 0xff) !== 5 || performance.now() >= deadline) throw error
+            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.min(25, Math.max(0, deadline - performance.now())))
+          }
+        }
+      }
+      acquire('PRAGMA journal_mode=WAL')
       // Inspect and migrate under the same write lock so concurrent first
       // openers never act on a stale schema version.
-      this.db.exec('BEGIN IMMEDIATE')
+      acquire('BEGIN IMMEDIATE')
+      this.db.exec('PRAGMA busy_timeout=5000')
       const onDisk = Number((this.db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
       if (onDisk === 0) {
         this.db.exec(SCHEMA_V4_SQL)
