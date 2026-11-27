@@ -64,6 +64,56 @@ test('category tabs show globals and only the attached session categories after 
   assert.ok(labels('a').includes('global category'))
 })
 
+for (const scope of ['global','session'] as const) {
+  for (const categorized of [false,true]) test('new template inherits '+scope+' '+(categorized?'category':'default tab')+' and manual scope remains editable', async t => {
+    const render=renderer(t),slots:unknown[]=[],created:unknown[]=[],face=libraryFace(async()=>({ok:true,value:null}))
+    face.create=async request=>{created.push(request);return{ok:true,value:null}}
+    face.librarySelection.select('a',categorized?'cat:'+scope+':内容:分类':scope)
+    const library=()=>TemplateLibrary({sessionId:'a',face,t:key=>key})
+    render(library,slots)
+    slots[1]=[{name:'内容:分类',scope,session_id:scope==='session'?'a':null}]
+    let tree=render(library,slots)
+    elements(tree).find(e=>e.type==='button'&&Array.isArray(e.props.children)&&e.props.children.includes('panel.add'))!.props.onClick()
+    tree=render(library,slots)
+    const form=elements(tree).find(e=>typeof e.type==='function'&&e.type.name==='TemplateForm'&&e.props.allowScope)!
+    assert.ok(form)
+    const formSlots:unknown[]=[]
+    const draw=()=>render(()=>(form.type as Function)(form.props),formSlots)
+    let body=draw()
+    assert.equal(elements(body).find(e=>e.type==='select'&&e.props['aria-label']==='scope')!.props.value,scope)
+    assert.equal(elements(body).find(e=>e.type==='select'&&e.props['aria-label']==='panel.category')!.props.value,categorized?'内容:分类':'')
+    const fields=elements(body)
+    fields.find(e=>e.type==='input'&&e.props['aria-label']==='panel.addName')!.props.onChange({target:{value:'new draft'}})
+    fields.find(e=>e.type==='textarea')!.props.onChange({target:{value:'body'}})
+    body=draw()
+    elements(body).find(e=>e.props.children==='panel.addSave')!.props.onClick()
+    await new Promise(resolve=>setImmediate(resolve))
+    assert.equal(created.length,1)
+    assert.deepEqual(created[0],{name:'new draft',content:'body',scope,session_id:scope==='session'?'a':null,category:categorized?'内容:分类':null,inject_enabled:false,inject_every:null,mode:'inject'})
+    // Manual scope edits still clear a category from the previous partition.
+    body=draw();elements(body).find(e=>e.type==='select'&&e.props['aria-label']==='scope')!.props.onChange({target:{value:scope==='global'?'session':'global'}})
+    assert.equal(elements(draw()).find(e=>e.type==='select'&&e.props['aria-label']==='panel.category')!.props.value,'')
+  })
+}
+
+test('new template cancel does not create and missing or foreign categories seed the global fallback', t => {
+  const render=renderer(t),slots:unknown[]=[],face=libraryFace(async()=>({ok:true,value:null}))
+  let writes=0;face.create=async()=>{writes++;return{ok:true,value:null}}
+  face.librarySelection.select('a','cat:session:foreign')
+  const library=()=>TemplateLibrary({sessionId:'a',face,t:key=>key})
+  render(library,slots);slots[1]=[{name:'foreign',scope:'session',session_id:'b'}]
+  let tree=render(library,slots)
+  elements(tree).find(e=>e.type==='button'&&Array.isArray(e.props.children)&&e.props.children.includes('panel.add'))!.props.onClick()
+  tree=render(library,slots)
+  const form=elements(tree).find(e=>typeof e.type==='function'&&e.type.name==='TemplateForm'&&e.props.allowScope)!
+  const body=render(()=>(form.type as Function)(form.props),[])
+  assert.equal(elements(body).find(e=>e.props['aria-label']==='scope')!.props.value,'global')
+  assert.equal(elements(body).find(e=>e.props['aria-label']==='panel.category')!.props.value,'')
+  elements(body).find(e=>e.props.children==='panel.addCancel')!.props.onClick()
+  assert.equal(writes,0)
+  assert.equal(elements(render(library,slots)).some(e=>typeof e.type==='function'&&e.type.name==='TemplateForm'),false)
+})
+
 test('category form shows server errors, releases busy on rejection, and can cancel afterwards',async t=>{
   let reject=false
   const render=renderer(t),slots:unknown[]=[],face=libraryFace(async()=>{if(reject)throw Error('transport rejected');return{ok:false,error:{code:'conflict',message:'category exists'}}})

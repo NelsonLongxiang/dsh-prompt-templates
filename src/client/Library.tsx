@@ -1378,6 +1378,8 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
         )}
         {showAdd && (
           <TemplateForm
+            key={sessionId ?? 'no-session'}
+            initial={{ name: '', content: '', scope: activeCategory?.scope ?? (effectiveTab === 'session' ? 'session' : 'global'), category: activeCategory?.name ?? null }}
             sessionId={sessionId}
             categories={visibleCategories}
             t={t}
