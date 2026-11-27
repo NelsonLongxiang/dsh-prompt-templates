@@ -297,7 +297,7 @@ async function handle(
     // Category tabs: GET/POST /categories, DELETE /categories/:name?scope&session_id.
     if (resource === 'categories') {
       if (rest.length === 0 && method === 'GET') {
-        return json(res, 200, { items: client().listCategories() })
+        return json(res, 200, { items: client().listCategories(url.searchParams.get('session_id') ?? undefined) })
       }
       if (rest.length === 0 && method === 'POST') {
         const body = await readJson(req)

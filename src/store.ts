@@ -551,11 +551,13 @@ export class TemplateStore {
     }
   }
 
-  /** List user categories: global ones plus one session's, ordered by name. */
+  /** List all categories for the library, or globals plus one explicitly named session. */
   listCategories(sessionId?: string): CategoryView[] {
+    const filter = sessionId === undefined ? '' : ' WHERE session_id IS NULL OR session_id IS ?'
+    const args = sessionId === undefined ? [] : [sessionId]
     return (this.db.prepare(
-      "SELECT name, scope, session_id FROM categories WHERE session_id IS NULL OR session_id IS ? ORDER BY name",
-    ).all(sessionId ?? null) as unknown as Array<{ name: string, scope: PromptScope, session_id: string | null }>)
+      'SELECT name, scope, session_id FROM categories' + filter + ' ORDER BY name, scope, session_id',
+    ).all(...args) as unknown as Array<{ name: string, scope: PromptScope, session_id: string | null }>)
       .map(row => ({ ...row }))
   }
 

@@ -454,11 +454,12 @@ function TemplateForm({ initial, allowScope, sessionId, categories, t, submitLab
 }
 
 /** Inline form creating one category tab: name + scope (global, or the current session). */
-function CategoryForm({ sessionId, createCategory, t, onDone }: {
+function CategoryForm({ sessionId, createCategory, t, onDone, onCancel }: {
   sessionId: string | null
-  createCategory: (request: { name: string, scope: 'global' | 'session', session_id: string | null }) => Promise<{ ok: boolean }>
+  createCategory: TemplateLibraryFace['createCategory']
   t: (key: PromptTemplateKey) => string
-  onDone: () => void
+  onDone: (category: CategoryView) => void
+  onCancel: () => void
 }) {
   const [name, setName] = useState('')
   const [scope, setScope] = useState<'global' | 'session'>('global')
@@ -467,18 +468,20 @@ function CategoryForm({ sessionId, createCategory, t, onDone }: {
 
   const submit = async (): Promise<void> => {
     const trimmed = name.trim()
-    if (trimmed === '') return
+    if (trimmed === '' || busy) return
     if (scope === 'session' && sessionId === null) { setError(t('panel.error')); return }
     setBusy(true)
     setError(null)
-    const result = await createCategory({
-      name: trimmed,
-      scope,
-      session_id: scope === 'session' ? sessionId : null,
-    })
-    setBusy(false)
-    if (!result.ok) { setError(t('panel.error')); return }
-    onDone()
+    const category: CategoryView = { name: trimmed, scope, session_id: scope === 'session' ? sessionId : null }
+    try {
+      const result = await createCategory(category)
+      if (!result.ok) { setError(result.error.message); return }
+      onDone(category)
+    } catch (error) {
+      setError(String(error))
+    } finally {
+      setBusy(false)
+    }
   }
 
   return (
@@ -500,6 +503,9 @@ function CategoryForm({ sessionId, createCategory, t, onDone }: {
         </label>
         <div className={css.addActions}>
           {error !== null && <span className={css.error} role="alert">{error}</span>}
+          <button type="button" className={css.cancelBtn} onClick={onCancel} disabled={busy}>
+            {t('panel.addCancel')}
+          </button>
           <button type="button" className={css.saveBtn} onClick={() => void submit()} disabled={busy || name.trim() === ''}>
             {t('panel.addSave')}
           </button>
@@ -1327,10 +1333,19 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
       </div>
       {showCatForm && (
         <CategoryForm
+          key={sessionId ?? 'no-session'}
           sessionId={sessionId}
           createCategory={createCategory}
           t={t}
-          onDone={() => { setShowCatForm(false); void loadCategories() }}
+          onCancel={() => { setShowCatForm(false) }}
+          onDone={(category) => {
+            setCategories(current => [...current.filter(cat => !(cat.scope === category.scope && cat.session_id === category.session_id && cat.name === category.name)), category])
+            setShowCatForm(false)
+            setQuery('')
+            setGlobalOnly(false)
+            setActiveTab(`cat:${category.scope}:${category.name}`)
+            void loadCategories()
+          }}
         />
       )}
       <div className={css.body}>

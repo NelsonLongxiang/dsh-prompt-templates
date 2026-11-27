@@ -225,6 +225,12 @@ test('apply mounts routes when the web server appears and serves template CRUD',
       name: 'local', scope: 'session', session_id: 'sess-a',
     })
     assert.equal(sessionCategory.status, 200, JSON.stringify(sessionCategory.body))
+    const listedAfterCreate = await request(handler, 'GET', CATEGORIES)
+    assert.ok(listedAfterCreate.body.items.some((cat: { name: string; scope: string; session_id: string | null }) => cat.name === 'local' && cat.scope === 'session' && cat.session_id === 'sess-a'), 'a successful session category must survive the browser list reload')
+    const otherCategory = await request(handler, 'POST', CATEGORIES, { name: 'other', scope: 'session', session_id: 'sess-b' })
+    assert.equal(otherCategory.status, 200)
+    const scopedCategories = await request(handler, 'GET', CATEGORIES + '?session_id=sess-a')
+    assert.deepEqual(scopedCategories.body.items, [{ name: 'local', scope: 'session', session_id: 'sess-a' }, { name: 'work', scope: 'global', session_id: null }])
     const removedSessionCategory = await request(handler, 'DELETE', `${CATEGORIES}/local?scope=session&session_id=sess-a`)
     assert.deepEqual(removedSessionCategory.body, { deleted: true })
 
