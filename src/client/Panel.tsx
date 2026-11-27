@@ -47,7 +47,7 @@ export type PromptPanelProps =
 export function PromptPanel(props: PromptPanelProps) {
   const {
     useStore, refresh, refreshCategories, createCategory, removeCategory,
-    create, update, remove, makeGlobal,
+    create, update, remove, makeGlobal, librarySelection,
     insert, send, interject, injectStatus, injectionHistory, eventPolicies, setEventMaster, updateEventPolicy, eventEpisodes, targetSession, targetVersion, subscribeTarget,
     panelPosition, savePanelPosition, resetPanelPosition,
     actions, t,
@@ -139,7 +139,7 @@ export function PromptPanel(props: PromptPanelProps) {
   // The library verbs are the face minus the overlay-only placement knobs.
   const libraryFace: TemplateLibraryFace = {
     refresh, refreshCategories, createCategory, removeCategory,
-    create, update, remove, makeGlobal,
+    create, update, remove, makeGlobal, librarySelection,
     insert, send, interject, injectStatus, injectionHistory,
     eventPolicies, setEventMaster, updateEventPolicy, eventEpisodes,
   }
