@@ -5,6 +5,37 @@
  * @module dsh-prompt-templates/types
  */
 
+/** Why one lesson class contributes fewer (or no) texts to the next-step preview. */
+export type SystemLessonReason = 'master-off' | 'depth-zero' | 'unapproved-type' | 'legacy-untyped' | 'no-lessons' | 'untagged' | 'no-right' | 'depth-limit' | 'balance-limit' | 'budget'
+export interface SystemLessonSummary {
+  readonly type: string
+  readonly right: number
+  readonly wrong: number
+  readonly untagged: number
+  readonly selected_right: number
+  readonly selected_wrong: number
+  readonly included_right: number
+  readonly included_wrong: number
+  readonly reasons: readonly SystemLessonReason[]
+}
+/** Current plugin contribution, never a claim about historical model requests or the full host prompt. */
+export interface SystemPromptPreview {
+  readonly session_id: string
+  readonly captured_at: string
+  readonly status: 'ready' | 'disabled' | 'empty' | 'unavailable'
+  readonly enabled: boolean
+  readonly lesson_depth: number
+  readonly max_chars: number
+  readonly order: number
+  readonly text: string
+  /** Same UTF-16 code-unit count used by the actual renderer's budget. */
+  readonly chars: number
+  readonly budget_applied: boolean
+  readonly templates: number
+  readonly lessons: readonly SystemLessonSummary[]
+  readonly error_code?: 'store-uninitialized' | 'read-failed' | 'service-unavailable'
+}
+
 /** Scope partition of one template: global or private to one session. */
 export type PromptScope = 'global' | 'session'
 

@@ -153,6 +153,60 @@ test('another database connection invalidates cached templates and outcome chang
   } finally {first.close();second.close()}
 })
 
+test('next-step preview uses the actual text path, expands variables at request time, and does not write',t=>{
+  const store=memory(t),row=store.create({name:'preview',content:'at {{time}} {{session}} {{unknown}}'})
+  store.update(row.id,{system_prompt:true,confirm_global:true})
+  lesson(store,'找',2,3);lesson(store,'custom',1,1)
+  let cfg={...DEFAULT_SYSTEM_PROMPT,enabled:true,lessonDepth:5}
+  const provider=createSystemPromptProvider(()=>store,()=>cfg)
+  const before=store.revision(),now=new Date(2026,10,27,9,15)
+  const view=provider.preview('a',now)
+  assert.equal(view.status,'ready');assert.equal(view.text,provider('a',now));assert.equal(view.chars,view.text.length)
+  assert.match(view.text,/09:15 a {{unknown}}/)
+  const finding=view.lessons.find(i=>i.type==='找')!
+  assert.equal(finding.right,2);assert.equal(finding.wrong,3);assert.equal(finding.untagged,1)
+  assert.equal(finding.included_right,2);assert.equal(finding.included_wrong,1)
+  assert.ok(finding.reasons.includes('balance-limit'));assert.ok(finding.reasons.includes('untagged'))
+  assert.ok(view.lessons.find(i=>i.type==='custom')!.reasons.includes('unapproved-type'))
+  assert.equal(provider.preview('b',now).lessons.some(i=>i.type==='custom'),false)
+  assert.equal(store.revision(),before)
+  cfg={...cfg,enabled:false};const disabled=provider.preview('a',now)
+  assert.equal(disabled.text,'');assert.equal(disabled.chars,0);assert.equal(disabled.status,'disabled')
+  assert.ok(disabled.lessons.find(i=>i.type==='找')!.reasons.includes('master-off'))
+  cfg={...cfg,enabled:true,lessonDepth:0};const zero=provider.preview('a',now)
+  assert.ok(zero.lessons.find(i=>i.type==='找')!.reasons.includes('depth-zero'))
+})
+
+test('preview explains budget removal and preserves strict majority after rendering',t=>{
+  const store=memory(t);lesson(store,'找',2,3)
+  const row=store.create({name:'long',content:'long'.repeat(1000)})
+  store.update(row.id,{system_prompt:true,confirm_global:true})
+  const p=createSystemPromptProvider(()=>store,()=>({...DEFAULT_SYSTEM_PROMPT,enabled:true,lessonDepth:5,maxChars:500}))
+  const v=p.preview('a',new Date(0));assert.equal(v.text,p('a',new Date(0)))
+  assert.ok(v.chars<=500);assert.equal(v.budget_applied,true)
+  assert.ok(v.lessons.find(i=>i.type==='找')!.reasons.includes('budget'))
+  for(const summary of v.lessons)assert.ok(summary.included_right===0?summary.included_wrong===0:summary.included_right>summary.included_wrong)
+})
+
+test('preview reports read failures without empty-success claims or leaking exception text',t=>{
+  const store=memory(t),p=createSystemPromptProvider(()=>{throw Error('secret diagnostic path')},()=>({...DEFAULT_SYSTEM_PROMPT,enabled:true}))
+  const result=p.preview('a',new Date(0))
+  assert.equal(result.status,'unavailable');assert.equal(result.text,'');assert.equal(result.error_code,'read-failed')
+  assert.equal(JSON.stringify(result).includes('secret diagnostic path'),false)
+})
+
+test('preview distinguishes no-right, depth exclusion and absent types',t=>{
+  const store=memory(t);lesson(store,'收',0,3);lesson(store,'放',4,4)
+  const p=createSystemPromptProvider(()=>store,()=>({...DEFAULT_SYSTEM_PROMPT,enabled:true,lessonDepth:3}))
+  const v=p.preview('a');assert.equal(v.lessons.find(l=>l.type==='收')!.included_right,0)
+  assert.ok(v.lessons.find(l=>l.type==='收')!.reasons.includes('no-right'))
+  const depthReasons=v.lessons.find(l=>l.type==='放')!.reasons
+  assert.ok(depthReasons.includes('depth-limit'))
+  assert.equal(depthReasons.length,new Set(depthReasons).size,'a diagnostic reason is displayed only once per class')
+  assert.ok(v.lessons.find(l=>l.type==='找')!.reasons.includes('no-lessons'))
+  assert.deepEqual(v.lessons.map(l=>l.type),['收','放','找','落','验','记','续'])
+})
+
 test('read failure always returns a string without making model assembly fail',()=>{
   const error=console.error;console.error=()=>{}
   try { assert.equal(createSystemPromptProvider(()=>{throw Error('test read failed')},()=>({...DEFAULT_SYSTEM_PROMPT,enabled:true}))('a'),'') } finally {console.error=error}

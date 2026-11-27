@@ -42,7 +42,7 @@ import s from '@deepseek-ai/schemastery'
 // type mount stays — an empty type import keeps it without pulling the
 // deleted helper).
 import type { } from '@deepseek-ai/dsh-settings'
-import { DEFAULT_SYSTEM_PROMPT, registerSystemPrompt, type SystemPromptConfig } from './system-prompt.ts'
+import { DEFAULT_SYSTEM_PROMPT, createSystemPromptProvider, registerSystemPrompt, type SystemPromptConfig } from './system-prompt.ts'
 import { DEFAULT_EVENT_INJECT_CONFIG, registerEventInject } from './event-inject.ts'
 import { EventRuleError } from './event-store.ts'
 import type { EventPolicyUpdate } from './event-store.ts'
@@ -61,7 +61,7 @@ declare module '@deepseek-ai/cordis' {
     promptTemplates: PromptTemplatesService
   }
 }
-import type { InjectionHistoryEntry, TemplateView } from './types.ts'
+import type { InjectionHistoryEntry, TemplateView, SystemPromptPreview } from './types.ts'
 
 export type * from './types.ts'
 
@@ -216,7 +216,19 @@ export function apply(ctx: Context, config: Config): void {
     const value = config.systemPrompt
     return { ...DEFAULT_SYSTEM_PROMPT, ...(value && 'get' in value ? value.get() : value) }
   }
-  const systemReady = registerSystemPrompt(ctx, client, systemConfig)
+  const promptProvider = createSystemPromptProvider(client, systemConfig)
+  const systemReady = registerSystemPrompt(ctx, client, systemConfig, promptProvider)
+  const previewSystem = (sessionId: string): SystemPromptPreview => {
+    const cfg = systemConfig()
+    // A diagnostic GET must not create a database or run boot migrations.
+    if (!store) return { session_id: sessionId, captured_at: new Date().toISOString(), status: 'unavailable', enabled: cfg.enabled, lesson_depth: cfg.lessonDepth, max_chars: cfg.maxChars, order: cfg.order, text: '', chars: 0, budget_applied: false, templates: 0, lessons: [], error_code: 'store-uninitialized' }
+    const view = promptProvider.preview(sessionId)
+    const service = ctx.get('systemPrompt') as { variable?: unknown; section?: unknown } | undefined
+    if (cfg.enabled && (typeof service?.variable !== 'function' || typeof service?.section !== 'function')) {
+      return { ...view, status: 'unavailable', text: '', chars: 0, budget_applied: false, error_code: 'service-unavailable', lessons: view.lessons.map(summary => ({ ...summary, included_right: 0, included_wrong: 0 })) }
+    }
+    return view
+  }
   registerLessons(ctx, client, () => lessonsConfig, () => systemReady() && systemConfig().lessonDepth > 0)
   registerEventInject(ctx, eventInjectConfig, () => client().events, () => client().interventions)
   // #81: evidence-ready reminders at the next actionable step; off with casting (cast.enabled).
@@ -251,7 +263,7 @@ export function apply(ctx: Context, config: Config): void {
           const agents = registry?.list?.()
           return agents ? { running: agents.filter(a => a.status === 'running').length, live: agents.length } : { running: null, live: null }
         } catch { return { running: null, live: null } }
-      }) },
+      }, previewSystem) },
     }), 'prompt-templates: api routes')
   }
   registerRoutes()
@@ -273,6 +285,7 @@ async function handle(
   lessonsConfig: () => LessonsConfig = () => DEFAULT_LESSONS_CONFIG,
   runtime?: () => RuntimeView,
   systemImpact?: () => { running: number | null; live: number | null },
+  systemPreview?: (sessionId: string) => SystemPromptPreview,
 ): Promise<void> {
   const url = new URL(req.url ?? '/', 'http://x')
   const segments = url.pathname.split('/').filter(part => part !== '')
@@ -284,6 +297,14 @@ async function handle(
   const rest = segments.slice(3)
   const method = req.method ?? 'GET'
   try {
+    if (resource === 'system-preview' && rest.length === 0) {
+      if (method !== 'GET') return json(res, 405, errorBody('method-not-allowed', method))
+      const sessions = url.searchParams.getAll('session_id')
+      const sessionId = sessions[0]
+      if (sessions.length !== 1 || !sessionId || sessionId.trim() === '' || sessionId.length > 256) return json(res, 400, errorBody('bad-session', 'one non-empty session_id is required'))
+      if (!systemPreview) return json(res, 503, errorBody('unavailable', 'preview unavailable'))
+      return json(res, 200, { preview: systemPreview(sessionId) })
+    }
     if (resource === 'system-impact' && rest.length === 0) {
       if (method !== 'GET') return json(res, 405, errorBody('method-not-allowed', method))
       return json(res, 200, systemImpact?.() ?? { running: null, live: null })

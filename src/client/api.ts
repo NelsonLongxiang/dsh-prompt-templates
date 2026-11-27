@@ -5,7 +5,7 @@
  * consumes, so callers never see transport details.
  */
 
-import type { CategoryView, InjectionHistoryEntry, InjectionStatusView, TemplateInjectMode, TemplateView } from '../types.ts'
+import type { CategoryView, InjectionHistoryEntry, InjectionStatusView, TemplateInjectMode, TemplateView, SystemPromptPreview } from '../types.ts'
 
 /** Business error carried by a failed call. */
 export interface TemplateError {
@@ -325,6 +325,18 @@ export function attachLessonVerdict(templateId: string, verdict: 'pass' | 'fail'
 
 export function setLessonPinned(templateId: string, pinned: boolean): Promise<TemplateActionResult> {
   return mutate('PATCH', `/lessons/${encodeURIComponent(templateId)}`, { pinned })
+}
+
+/** Explicit on-demand GET: never enables a switch or requests a model response. */
+export async function getSystemPromptPreview(sessionId: string): Promise<SystemPromptPreview | null> {
+  try {
+    const response = await fetch(`${BASE}/system-preview?session_id=${encodeURIComponent(sessionId)}`, { cache: 'no-store' })
+    if (!response.ok) return null
+    const body = await response.json() as { preview?: SystemPromptPreview }
+    const view = body.preview
+    if (!view || view.session_id !== sessionId || typeof view.text !== 'string' || view.chars !== view.text.length || !Array.isArray(view.lessons) || !['ready','disabled','empty','unavailable'].includes(view.status)) return null
+    return view
+  } catch { return null }
 }
 
 /** Run one mutating request and settle it into the action envelope. */

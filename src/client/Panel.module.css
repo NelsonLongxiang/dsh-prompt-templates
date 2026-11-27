@@ -81,6 +81,11 @@
 }
 
 /* The ⟳N badge is a button now; it opens the history dropdown. */
+.systemPreview { padding: 8px; max-height: 55vh; overflow: auto; flex: 0 1 auto; min-height: 0; border-bottom: 1px solid var(--dsw-alias-border-inverted); font-size: 11px; }
+.systemPreview textarea { box-sizing: border-box; width: 100%; resize: vertical; background: var(--dsw-alias-bg-base); color: var(--dsw-alias-label-primary); }
+.previewTable { overflow-x: auto; }
+.previewTable th, .previewTable td { padding: 4px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--dsw-alias-border-inverted); }
+
 .injectBadgeButton {
   border: none;
   font: inherit;
