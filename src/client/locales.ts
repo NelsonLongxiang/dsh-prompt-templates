@@ -2,6 +2,21 @@
 
 /** Chinese dictionary. */
 export const zh = {
+  'panel.systemSwitch': "加入系统提示词",
+  'panel.systemShort': "常驻",
+  'panel.systemGlobalHint': "加入所有会话的系统提示词：点击后需确认",
+  'panel.systemSessionHint': "加入本会话的系统提示词",
+  'panel.systemDuplicate': "正文已常驻，定时那一下会重复正文",
+  'panel.systemOnTitle': "把《{name}》加入所有会话的系统提示词？",
+  'panel.systemOffTitle': "从所有会话移除《{name}》的常驻正文？",
+  'panel.systemDeleteTitle': "删除所有会话常驻的《{name}》？",
+  'panel.systemEditWarn': "保存后所有会话下一步就用新内容",
+  'panel.systemPromoted': "已设为全局，加入系统提示词的开关已关闭，需要时在全局行上重新打开（会二次确认）",
+  'panel.systemBadge': "全局常驻 {count}",
+  'panel.systemAcknowledge': "我知道这会改变所有会话的系统提示词",
+  'panel.systemConfirm': "确认",
+  'panel.systemImpact': "影响本宿主所有会话（含子代理、团队会话），以及共用同一个库的其他 profile。当前运行会话数：{running}；宿主已加载会话：{live}，其他 profile 的运行数不可知；下一步起受影响。正文 {chars} 字；会使所有会话提示词缓存失效一次。",
+  'panel.systemUnknown': "未知",
   'panel.title': '快捷提示词',
   'panel.dragHint': '拖动移动，双击复位',
   'panel.sendNow': '直接发送',
@@ -124,6 +139,21 @@ export const zh = {
 
 /** English dictionary. */
 export const en = {
+  'panel.systemSwitch': "Include in system prompt",
+  'panel.systemShort': "System",
+  'panel.systemGlobalHint': "Include in every session: confirmation required",
+  'panel.systemSessionHint': "Include in this session system prompt",
+  'panel.systemDuplicate': "Already in system prompt; scheduled injection repeats the text",
+  'panel.systemOnTitle': "Include “{name}” in every session system prompt?",
+  'panel.systemOffTitle': "Remove “{name}” from every session system prompt?",
+  'panel.systemDeleteTitle': "Delete globally active “{name}”?",
+  'panel.systemEditWarn': "Saving changes the next step of every session",
+  'panel.systemPromoted': "Made global with system opt-in off. Enable it on the global row with confirmation.",
+  'panel.systemBadge': "Global system {count}",
+  'panel.systemAcknowledge': "I understand this changes every session system prompt",
+  'panel.systemConfirm': "Confirm",
+  'panel.systemImpact': "Affects every session on this host (including subagents and teams) and profiles sharing this database. Running: {running}; loaded on this host: {live}. Other profiles are unknown. Takes effect next step. Template: {chars} characters; prompt caches change once.",
+  'panel.systemUnknown': "unknown",
   'panel.title': 'Quick prompts',
   'panel.dragHint': 'Drag to move, double-click to reset',
   'panel.sendNow': 'Send now',

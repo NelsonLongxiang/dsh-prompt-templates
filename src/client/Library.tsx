@@ -81,11 +81,11 @@ function TemplateRow({ template, onInsert, onSend, onInterject, onEdit, onDelete
       </button>
       {template.category !== '体会' && (
         <button type="button" className={css.systemSwitch} data-scope={template.scope}
-          aria-pressed={template.system_prompt === true} aria-label="加入系统提示词"
-          title={template.scope === 'global' ? '加入所有会话的系统提示词：点击后需确认' : '加入本会话的系统提示词'}
-          onClick={() => { onToggleSystem(template) }}>常驻</button>
+          aria-pressed={template.system_prompt === true} aria-label={t('panel.systemSwitch')}
+          title={t(template.scope === 'global' ? 'panel.systemGlobalHint' : 'panel.systemSessionHint')}
+          onClick={() => { onToggleSystem(template) }}>{t('panel.systemShort')}</button>
       )}
-      {template.system_prompt && template.inject_enabled && <span title="正文已常驻，定时那一下会重复正文">⚠</span>}
+      {template.system_prompt && template.inject_enabled && <span title={t('panel.systemDuplicate')}>⚠</span>}
       {full && (
         <button
           type="button"
@@ -899,14 +899,14 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
       const result = await update(template.id, { system_prompt: !template.system_prompt, ...(template.scope === 'global' ? { confirm_global: true } : {}) })
       if (result.ok) { setRowError(null); await load() } else setRowError(result.error.message)
     }
-    if (template.scope === 'global') requestGlobal(template, (template.system_prompt ? '从所有会话移除《' : '把《') + template.name + (template.system_prompt ? '》的常驻正文？' : '》加入所有会话的系统提示词？'), change)
+    if (template.scope === 'global') requestGlobal(template, t(template.system_prompt ? 'panel.systemOffTitle' : 'panel.systemOnTitle').replace('{name}', template.name), change)
     else await change()
   }
 
   const handleRemove = useCallback(async (id: string) => {
     const template = templates.find(row => row.id === id)
     if (template?.scope === 'global' && template.system_prompt) {
-      requestGlobal(template, '删除所有会话常驻的《' + template.name + '》？', async () => { const result = await remove(id, true); if (result.ok) await load(); else setRowError(result.error.message) })
+      requestGlobal(template, t('panel.systemDeleteTitle').replace('{name}', template.name), async () => { const result = await remove(id, true); if (result.ok) await load(); else setRowError(result.error.message) })
       return
     }
     const result = await remove(id)
@@ -915,7 +915,7 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
 
   const handleMakeGlobal = useCallback(async (id: string) => {
     const result = await makeGlobal(id)
-    if (result.ok) { setNotice('已设为全局，加入系统提示词的开关已关闭，需要时在全局行上重新打开（会二次确认）'); void load() }
+    if (result.ok) { setNotice(t('panel.systemPromoted')); void load() }
   }, [makeGlobal, load])
 
   // Flip one row's auto-inject switch. First-time setup (no interval yet)
@@ -1003,7 +1003,7 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
               ...(injectEnabled ? { inject_every: injectEvery, mode } : {}),
             }
             if (row.scope === 'global' && row.system_prompt) {
-              requestGlobal(row, '保存后所有会话下一步就用新内容', async () => {
+              requestGlobal(row, t('panel.systemEditWarn'), async () => {
                 const result = await update(row.id, { ...patch, confirm_global: true })
                 if (result.ok) { setEditingId(null); await load() } else setRowError(result.error.message)
               })
@@ -1067,7 +1067,7 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
           <span className={css.countBadge} data-template-count title={needle !== '' ? t('panel.searchCount') : t('panel.tabCount')}>
             {countLabel}
           </span>
-          {templates.some(row => row.scope === 'global' && row.system_prompt) && <button type="button" className={css.globalBadge} aria-pressed={globalOnly} onClick={() => { setGlobalOnly(value => !value) }}>全局常驻 {templates.filter(row => row.scope === 'global' && row.system_prompt).length}</button>}
+          {templates.some(row => row.scope === 'global' && row.system_prompt) && <button type="button" className={css.globalBadge} aria-pressed={globalOnly} onClick={() => { setGlobalOnly(value => !value) }}>{t('panel.systemBadge').replace('{count}', String(templates.filter(row => row.scope === 'global' && row.system_prompt).length))}</button>}
           {injected !== null && (
             <button
               type="button"
@@ -1106,12 +1106,12 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
         {headerExtra}
       </div>
       {globalConfirmation !== null && <RiskConfirmation open title={globalConfirmation.title}
-        description={'影响本宿主所有会话（含子代理、团队会话），以及共用同一个库的其他 profile。当前运行会话数：' + (impact.running ?? '未知') + '；宿主已加载会话：' + (impact.live ?? '未知') + '，其他 profile 的运行数不可知；下一步起受影响。正文 ' + globalConfirmation.template.content.length + ' 字；会使所有会话提示词缓存失效一次。'}
-        acknowledgeLabel="我知道这会改变所有会话的系统提示词" acknowledged={acknowledged} disabled={confirmBusy}
-        onAcknowledgedChange={setAcknowledged} cancelLabel="取消" closeLabel="关闭" confirmLabel="确认"
+        description={t('panel.systemImpact').replace('{running}', String(impact.running ?? t('panel.systemUnknown'))).replace('{live}', String(impact.live ?? t('panel.systemUnknown'))).replace('{chars}', String(globalConfirmation.template.content.length))}
+        acknowledgeLabel={t('panel.systemAcknowledge')} acknowledged={acknowledged} disabled={confirmBusy}
+        onAcknowledgedChange={setAcknowledged} cancelLabel={t('panel.addCancel')} closeLabel={t('panel.addCancel')} confirmLabel={t('panel.systemConfirm')}
         onCancel={() => { if (!confirmBusy) setGlobalConfirmation(null) }}
         onConfirm={() => { if (!acknowledged || confirmBusy) return; setConfirmBusy(true); void globalConfirmation.action().finally(() => { setConfirmBusy(false); setGlobalConfirmation(null) }) }} />}
-      {editingId !== null && templates.some(row => row.id === editingId && row.scope === 'global' && row.system_prompt) && <div className={css.notice}>保存后所有会话下一步就用新内容</div>}
+      {editingId !== null && templates.some(row => row.id === editingId && row.scope === 'global' && row.system_prompt) && <div className={css.notice}>{t('panel.systemEditWarn')}</div>}
       {notice !== null && <div className={css.notice} role="status">{notice}</div>}
       {manualShare !== null && (
         <section className={css.importForm} data-prompt-share-manual aria-label={t('panel.shareManualTitle')}>
