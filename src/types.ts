@@ -36,6 +36,15 @@ export interface SystemPromptPreview {
   readonly error_code?: 'store-uninitialized' | 'read-failed' | 'service-unavailable'
 }
 
+/** Latest opt-in workshop sync observation. No credentials, repository paths or raw Git output. */
+export interface WorkshopSyncEntry { name: string; category: string | null; reason?: string }
+export interface WorkshopSyncResult {
+  started_at: string; finished_at: string | null; commit: string | null
+  status: 'disabled' | 'running' | 'ok' | 'skipped' | 'error'
+  added: WorkshopSyncEntry[]; updated: WorkshopSyncEntry[]; skipped: WorkshopSyncEntry[]; error: string | null
+}
+export interface WorkshopSyncStatus { enabled: boolean; running: boolean; last: WorkshopSyncResult | null }
+
 /** Scope partition of one template: global or private to one session. */
 export type PromptScope = 'global' | 'session'
 

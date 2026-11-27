@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { resolveLibraryTab } from './library-state.ts'
 import { SystemPreview } from './SystemPreview.tsx'
+import { WorkshopSync } from './WorkshopSync.tsx'
 import { planTemplateReorder } from './reorder.ts'
 import { RiskConfirmation, IconNewChatOutlineRegular, IconCopyOutlineRegular, IconDownloadOutlineRegular, IconEditOutlineRegular, IconGlobeOutlineRegular, IconPlusOutlineRegular, IconQueueOutlineRegular, IconSendOutlineRegular, IconTrashOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { CategoryView, InjectionHistoryEntry, InjectionStatusView, TemplateInjectMode, TemplateView } from '../types.ts'
@@ -626,6 +627,7 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
   // Badge dropdown: the recent-injection history for the target session,
   // fetched on demand (on open, on target change, and whenever a new
   // injection lands while open) so the 30s badge poll stays O(1).
+  const [syncOpen, setSyncOpen] = useState(false)
   const [previewOpen, setPreviewOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [history, setHistory] = useState<readonly InjectionHistoryEntry[]>([])
@@ -1077,6 +1079,7 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
           </span>
           {templates.some(row => row.scope === 'global' && row.system_prompt) && <button type="button" className={css.globalBadge} aria-pressed={globalOnly} onClick={() => { setGlobalOnly(value => !value) }}>{t('panel.systemBadge').replace('{count}', String(templates.filter(row => row.scope === 'global' && row.system_prompt).length))}</button>}
           <button type="button" className={css.importBtn} disabled={sessionId === null} aria-label={t('panel.previewTitle')} title={t('panel.previewTitle')} aria-expanded={previewOpen} onClick={() => { setPreviewOpen(open => !open) }}>☷</button>
+          <button type="button" className={css.importBtn} aria-label={t('panel.syncTitle')} title={t('panel.syncTitle')} aria-expanded={syncOpen} onClick={() => setSyncOpen(open => !open)}>⇅</button>
           {injected !== null && (
             <button
               type="button"
@@ -1114,6 +1117,7 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
         </span>
         {headerExtra}
       </div>
+      {syncOpen && <WorkshopSync t={t} />}
       {previewOpen && sessionId !== null && <SystemPreview key={sessionId} sessionId={sessionId} t={t} />}
       {globalConfirmation !== null && <RiskConfirmation open title={globalConfirmation.title}
         description={t('panel.systemImpact').replace('{running}', String(impact.running ?? t('panel.systemUnknown'))).replace('{live}', String(impact.live ?? t('panel.systemUnknown'))).replace('{chars}', String(globalConfirmation.template.content.length))}

@@ -29,6 +29,7 @@ import { SELF_CHECK_CARDS_SQL, SELF_CHECK_SQL, SELF_CHECK_WAIT_SQL, SelfCheckLog
 import { LESSONS_SQL, LESSON_EVIDENCE_SQL, LESSON_HITS_SQL, LESSON_OUTCOME_SQL, LESSON_TYPES_SQL, LessonStore } from './lessons.ts'
 import { EVIDENCE_READY_SQL, EvidenceReadyStore } from './evidence-ready.ts'
 import { CAST_QUEUE_SQL, CastQueueStore } from './cast-queue.ts'
+import type { WorkshopSyncResult } from './workshop-sync.ts'
 
 /** v9: the version label of a template's text. */
 const TEMPLATE_VERSION_SQL = 'ALTER TABLE templates ADD COLUMN version TEXT'
@@ -210,6 +211,7 @@ export class TemplateStore {
       this.db.exec(LESSON_EVIDENCE_SQL)
       this.db.exec(SELF_CHECK_CARDS_SQL)
       this.db.exec(SELF_CHECK_WAIT_SQL)
+      this.db.exec('CREATE TABLE IF NOT EXISTS workshop_sync_result (id INTEGER PRIMARY KEY CHECK(id=1), payload TEXT NOT NULL)')
       this.db.exec(LESSON_OUTCOME_SQL)
       this.db.exec(EVIDENCE_READY_SQL)
       // #902 S1: the durable cast queue, and the basis a cast was given (guarded: added once, older builds ignore both).
@@ -254,6 +256,15 @@ export class TemplateStore {
     try { const out = fn(); this.db.exec('COMMIT'); return out } catch (error) { try { this.db.exec('ROLLBACK') } catch { /* already rolled back */ } throw error }
   }
 
+  /** One bounded latest synchronization record; no credentials/paths/command output. */
+  saveWorkshopSyncResult(result: WorkshopSyncResult): void {
+    this.db.prepare('INSERT INTO workshop_sync_result VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload').run(JSON.stringify(result))
+  }
+  workshopSyncResult(): WorkshopSyncResult | null {
+    const row = this.db.prepare('SELECT payload FROM workshop_sync_result WHERE id=1').get() as { payload: string } | undefined
+    if (!row) return null
+    try { return JSON.parse(row.payload) as WorkshopSyncResult } catch { return null }
+  }
   close(): void {
     this.db.close()
   }
