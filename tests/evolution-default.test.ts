@@ -75,7 +75,7 @@ test('v5 migration changes no templates; enrollment records source/version and p
   const original = s.create({ name: 'mine', content: 'private', inject_enabled: false })
   s.close()
   const old = new DatabaseSync(file)
-  old.exec('DROP TABLE evolution_defaults; DROP TABLE event_master; PRAGMA user_version=5')
+  old.exec('ALTER TABLE templates DROP COLUMN system_prompt; DROP TABLE evolution_defaults; DROP TABLE event_master; PRAGMA user_version=5')
   old.close()
   const migrated = new TemplateStore(file)
   assert.deepEqual(migrated.list(), [original])
@@ -118,7 +118,7 @@ test('concurrent first v5 migration rechecks version while holding write lock', 
   const file = path()
   new TemplateStore(file).close()
   const old = new DatabaseSync(file)
-  old.exec('DROP TABLE evolution_defaults; DROP TABLE event_master; PRAGMA user_version=5')
+  old.exec('ALTER TABLE templates DROP COLUMN system_prompt; DROP TABLE evolution_defaults; DROP TABLE event_master; PRAGMA user_version=5')
   old.close()
   const source = new URL('../src/store.ts', import.meta.url).href
   await Promise.all(Array.from({ length: 4 }, () => new Promise<void>((resolve, reject) => {

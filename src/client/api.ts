@@ -95,6 +95,8 @@ export async function createTemplate(request: {
 
 /** Patch one template by id. */
 export async function updateTemplate(id: string, request: {
+  system_prompt?: boolean
+  confirm_global?: boolean
   name?: string
   content?: string
   description?: string | null
@@ -113,8 +115,8 @@ export async function makeTemplateGlobal(id: string): Promise<TemplateActionResu
 }
 
 /** Delete one template by id. */
-export async function deleteTemplate(id: string): Promise<TemplateActionResult> {
-  return mutate('DELETE', `/templates/${encodeURIComponent(id)}`)
+export async function deleteTemplate(id: string, confirmGlobal = false): Promise<TemplateActionResult> {
+  return mutate('DELETE', `/templates/${encodeURIComponent(id)}`, { confirm_global: confirmGlobal })
 }
 
 /** One event-reminder rule's policy as the panel renders it (wire shape). */

@@ -242,7 +242,7 @@ test('v10 databases migrate to v11 in place: the lesson tables are added, templa
     first.create({ name: 'keep', content: 'body' })
     first.close()
     const raw = new DatabaseSync(path)
-    raw.exec('DROP TABLE lesson_cues; DROP TABLE lesson_log; PRAGMA user_version=10')
+    raw.exec('ALTER TABLE templates DROP COLUMN system_prompt; DROP TABLE lesson_cues; DROP TABLE lesson_log; PRAGMA user_version=10')
     raw.close()
     const reopened = new TemplateStore(path)
     try {
@@ -250,7 +250,7 @@ test('v10 databases migrate to v11 in place: the lesson tables are added, templa
       assert.deepEqual(reopened.lessons.log(S), [])
     } finally { reopened.close() }
     const check = new DatabaseSync(path)
-    assert.equal((check.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, 11)
+    assert.equal((check.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, 12)
     const tables = (check.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>).map(row => row.name)
     assert.ok(tables.includes('lesson_cues') && tables.includes('lesson_log'))
     check.close()
@@ -282,6 +282,20 @@ test('§5.16 deliver: after a start the next step hands over all of the session\
     w.store.makeGlobal(c.ok ? c.id : '')
     w.state.deliverDue = 'resume'
     assert.ok(textOf(w.step(4)).includes('（共 2 条）'))
+  } finally { w.store.close() }
+})
+
+test('system lesson depth suppresses only startup/resume/compact handover, not existing tool or digest contracts', () => {
+  const w = world()
+  try {
+    w.write('当验证固定接口时，先使用既有测试。', '找')
+    w.state.deliverDue = 'compact'
+    const messages = prepareLessonMessages(w.store, w.state, ON, S, 2, 1, true)
+    assert.ok(!messages.some(message => textOf([message]).includes('【工坊·体会｜本会话】')))
+    assert.equal(w.state.deliverDue, undefined)
+    assert.equal(w.store.lessons.log(S).filter(row => row.kind === 'delivered').length, 0)
+    w.state.deliverDue = 'resume'
+    assert.ok(prepareLessonMessages(w.store, w.state, ON, S, 3, 1, false).some(message => textOf([message]).includes('【工坊·体会｜本会话】')))
   } finally { w.store.close() }
 })
 
@@ -385,7 +399,7 @@ test('host: with lessons.enabled false nothing is prompted, recalled or written'
     assert.deepEqual(await preStep(ctx, 1), [])
     assert.deepEqual(await tools.get('lesson_write')?.execute({ text: 'x', type: '找' }, { agent: agentOf(S) }), { ok: false, code: 'disabled', error: 'lessons are off on this host' })
     const read = await request(route, `${BASE}/lessons?session_id=${S}`)
-    assert.deepEqual({ items: read.body.items, log: read.body.log, schema: read.body.schema }, { items: [], log: [], schema: 11 })
+    assert.deepEqual({ items: read.body.items, log: read.body.log, schema: read.body.schema }, { items: [], log: [], schema: 12 })
   })
 })
 
@@ -458,7 +472,7 @@ test('host (B5b): GET /version reports the loaded server version from the packag
     assert.equal(read.status, 200)
     assert.equal(read.body.name, manifest.name)
     assert.equal(read.body.version, manifest.version)
-    assert.equal(read.body.schema, 11)
+    assert.equal(read.body.schema, 12)
     assert.ok(!Number.isNaN(Date.parse(read.body.loaded_at)))
     assert.deepEqual(read.body.features, { inject: true, lessons: false, selfCheck: true, cast: true, eventInject: false })
     assert.equal((await request(route, `${BASE}/version`, 'POST', {})).status, 405)

@@ -9,7 +9,7 @@
  */
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { resolveLibraryTab } from './library-state.ts'
-import { IconCopyOutlineRegular, IconDownloadOutlineRegular, IconEditOutlineRegular, IconGlobeOutlineRegular, IconPlusOutlineRegular, IconQueueOutlineRegular, IconSendOutlineRegular, IconTrashOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
+import { RiskConfirmation, IconNewChatOutlineRegular, IconCopyOutlineRegular, IconDownloadOutlineRegular, IconEditOutlineRegular, IconGlobeOutlineRegular, IconPlusOutlineRegular, IconQueueOutlineRegular, IconSendOutlineRegular, IconTrashOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { CategoryView, InjectionHistoryEntry, InjectionStatusView, TemplateInjectMode, TemplateView } from '../types.ts'
 import type { EventEpisodeWire, EventPolicyWire } from './api.ts'
 import { decideLessonType, listCardStats, listLessonPins, listPendingLessonTypes, recordManualIntervention, type CardStatWire, type LessonPinWire, type PendingLessonTypeWire, type RecurrenceWire, type VerdictsWire, attachLessonVerdict, getServerVersion } from './api.ts'
@@ -45,6 +45,7 @@ interface RowProps {
   cardYield?: CardStatWire
   /** Flip the row's auto-inject switch (rows without an interval route to the edit form). */
   onToggleInject: (template: TemplateView) => void
+  onToggleSystem: (template: TemplateView) => void
   sortable: boolean
   onDragStart: (id: string) => void
   onDropOn: (id: string) => void
@@ -53,7 +54,7 @@ interface RowProps {
   compact?: boolean
 }
 
-function TemplateRow({ template, onInsert, onSend, onInterject, onEdit, onDelete, onShare, onMakeGlobal, pin, cardYield, onToggleInject, sortable, onDragStart, onDropOn, t, compact = false }: RowProps) {
+function TemplateRow({ template, onInsert, onSend, onInterject, onEdit, onDelete, onShare, onMakeGlobal, pin, cardYield, onToggleInject, onToggleSystem, sortable, onDragStart, onDropOn, t, compact = false }: RowProps) {
   const [more, setMore] = useState(false)
   const full = !compact || more
   const injectTitle = template.inject_enabled && template.inject_every !== null
@@ -78,6 +79,13 @@ function TemplateRow({ template, onInsert, onSend, onInterject, onEdit, onDelete
         <span className={css.name}>{template.name}</span>
         <span className={css.preview}>{template.content}</span>
       </button>
+      {template.category !== '体会' && (
+        <button type="button" className={css.systemSwitch} data-scope={template.scope}
+          aria-pressed={template.system_prompt === true} aria-label="加入系统提示词"
+          title={template.scope === 'global' ? '加入所有会话的系统提示词：点击后需确认' : '加入本会话的系统提示词'}
+          onClick={() => { onToggleSystem(template) }}>常驻</button>
+      )}
+      {template.system_prompt && template.inject_enabled && <span title="正文已常驻，定时那一下会重复正文">⚠</span>}
       {full && (
         <button
           type="button"
@@ -485,8 +493,8 @@ function CategoryForm({ sessionId, createCategory, t, onDone }: {
       <div className={css.addRow}>
         <label className={css.scopeLabel}>
           <select value={scope} onChange={(e) => { setScope(e.target.value as 'global' | 'session') }} aria-label="scope">
-            <option value="global">{t('panel.global')}</option>
-            <option value="session" disabled={sessionId === null}>{t('panel.session')}</option>
+            <option value="global">🟧 {t('panel.global')}</option>
+            <option value="session" disabled={sessionId === null}>🟦 {t('panel.session')}</option>
           </select>
         </label>
         <div className={css.addActions}>
@@ -537,6 +545,18 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
   const { refresh, refreshCategories, createCategory, removeCategory, create, update, remove, makeGlobal, insert, send, interject, injectStatus, injectionHistory, eventPolicies, setEventMaster, updateEventPolicy, eventEpisodes } = face
   const [templates, setTemplates] = useState<TemplateView[]>([])
   const [categories, setCategories] = useState<CategoryView[]>([])
+  const [globalConfirmation, setGlobalConfirmation] = useState<{ template: TemplateView; title: string; action: () => Promise<unknown> } | null>(null)
+  const [acknowledged, setAcknowledged] = useState(false)
+  const [confirmBusy, setConfirmBusy] = useState(false)
+  const [impact, setImpact] = useState<{ running: number | null; live: number | null }>({ running: null, live: null })
+  const requestGlobal = (template: TemplateView, title: string, action: () => Promise<unknown>) => {
+    setAcknowledged(false); setGlobalConfirmation({ template, title, action })
+    setImpact({ running: null, live: null })
+    void fetch('/plugins/dsh-prompt-templates/system-impact', { cache: 'no-store' }).then(r => r.ok ? r.json() : null).then(value => {
+      if (value && typeof value.running === 'number' && typeof value.live === 'number') setImpact(value)
+    }).catch(() => {})
+  }
+  const [globalOnly, setGlobalOnly] = useState(false)
   const [showAdd, setShowAdd] = useState(false)
   // Live search filter over name + content, case-insensitive.
   const [query, setQuery] = useState('')
@@ -804,8 +824,10 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
     }
     if (overwrite > 0) {
       for (const pair of plan.overwrite) {
+        if (pair.target.scope === 'global' && pair.target.system_prompt) { skipped += 1; continue }
         const result = await update(pair.target.id, {
           content: pair.incoming.content,
+          system_prompt: false,
           description: pair.incoming.description,
           category: pair.incoming.category,
           // Overwrite updates content and placement, never the inject switch:
@@ -872,14 +894,28 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
     void recordManualIntervention(sessionId, template.id, 'interject')
   }, [interject, sessionId])
 
+  const handleToggleSystem = async (template: TemplateView) => {
+    const change = async () => {
+      const result = await update(template.id, { system_prompt: !template.system_prompt, ...(template.scope === 'global' ? { confirm_global: true } : {}) })
+      if (result.ok) { setRowError(null); await load() } else setRowError(result.error.message)
+    }
+    if (template.scope === 'global') requestGlobal(template, (template.system_prompt ? '从所有会话移除《' : '把《') + template.name + (template.system_prompt ? '》的常驻正文？' : '》加入所有会话的系统提示词？'), change)
+    else await change()
+  }
+
   const handleRemove = useCallback(async (id: string) => {
+    const template = templates.find(row => row.id === id)
+    if (template?.scope === 'global' && template.system_prompt) {
+      requestGlobal(template, '删除所有会话常驻的《' + template.name + '》？', async () => { const result = await remove(id, true); if (result.ok) await load(); else setRowError(result.error.message) })
+      return
+    }
     const result = await remove(id)
     if (result.ok) void load()
-  }, [remove, load])
+  }, [remove, load, templates])
 
   const handleMakeGlobal = useCallback(async (id: string) => {
     const result = await makeGlobal(id)
-    if (result.ok) void load()
+    if (result.ok) { setNotice('已设为全局，加入系统提示词的开关已关闭，需要时在全局行上重新打开（会二次确认）'); void load() }
   }, [makeGlobal, load])
 
   // Flip one row's auto-inject switch. First-time setup (no interval yet)
@@ -914,7 +950,7 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
   // With no query the active tab owns the list. A query searches across every
   // category, but never leaks another session's private templates.
   const needle = query.trim().toLowerCase()
-  const filteredRows = filterTemplateRows(templates, query, effectiveTab, activeCategory, sessionId)
+  const filteredRows = globalOnly ? templates.filter(row => row.scope === 'global' && row.system_prompt) : filterTemplateRows(templates, query, effectiveTab, activeCategory, sessionId)
   // §5.16: in the 会话模板 tab the session's lessons come first, in the chain order; plain session templates follow.
   const lessonRank = (row: TemplateView): number => {
     const info = lessonInfo.get(row.id)
@@ -959,13 +995,21 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
           submitLabel={t('panel.addSave')}
           onSubmit={async (name, content, _scope, category, injectEnabled, injectEvery, mode) => {
             // Disabling keeps the stored interval: only enabling sends a new one.
-            const result = await update(row.id, {
+            const patch = {
               name,
               content,
               category,
               inject_enabled: injectEnabled,
               ...(injectEnabled ? { inject_every: injectEvery, mode } : {}),
-            })
+            }
+            if (row.scope === 'global' && row.system_prompt) {
+              requestGlobal(row, '保存后所有会话下一步就用新内容', async () => {
+                const result = await update(row.id, { ...patch, confirm_global: true })
+                if (result.ok) { setEditingId(null); await load() } else setRowError(result.error.message)
+              })
+              return false
+            }
+            const result = await update(row.id, patch)
             return result.ok
           }}
           onDone={() => { setEditingId(null); void load() }}
@@ -999,6 +1043,7 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
           pin={lessonInfo.has(row.id) ? { onTasteAsk: () => { handleTasteAsk(row) }, onVerdict: () => { setVerdictFor(row); setVerdictRef('') }, verdicts: lessonVerdicts.get(row.id), rounds: lessonRounds.get(row.id), churn: lessonChurn.has(row.id), recurrence: lessonRecurrence.get(row.id), evidence: lessonEvidence.get(row.id) ?? null } : undefined}
           cardYield={cardYields.get(row.id)}
           onToggleInject={(tpl) => { void handleToggleInject(tpl) }}
+          onToggleSystem={(tpl) => { void handleToggleSystem(tpl) }}
           sortable={needle === ''}
           onDragStart={(id) => { dragRowRef.current = id }}
           onDropOn={(id) => { handleRowDrop(id) }}
@@ -1022,6 +1067,7 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
           <span className={css.countBadge} data-template-count title={needle !== '' ? t('panel.searchCount') : t('panel.tabCount')}>
             {countLabel}
           </span>
+          {templates.some(row => row.scope === 'global' && row.system_prompt) && <button type="button" className={css.globalBadge} aria-pressed={globalOnly} onClick={() => { setGlobalOnly(value => !value) }}>全局常驻 {templates.filter(row => row.scope === 'global' && row.system_prompt).length}</button>}
           {injected !== null && (
             <button
               type="button"
@@ -1059,6 +1105,13 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
         </span>
         {headerExtra}
       </div>
+      {globalConfirmation !== null && <RiskConfirmation open title={globalConfirmation.title}
+        description={'影响本宿主所有会话（含子代理、团队会话），以及共用同一个库的其他 profile。当前运行会话数：' + (impact.running ?? '未知') + '；宿主已加载会话：' + (impact.live ?? '未知') + '，其他 profile 的运行数不可知；下一步起受影响。正文 ' + globalConfirmation.template.content.length + ' 字；会使所有会话提示词缓存失效一次。'}
+        acknowledgeLabel="我知道这会改变所有会话的系统提示词" acknowledged={acknowledged} disabled={confirmBusy}
+        onAcknowledgedChange={setAcknowledged} cancelLabel="取消" closeLabel="关闭" confirmLabel="确认"
+        onCancel={() => { if (!confirmBusy) setGlobalConfirmation(null) }}
+        onConfirm={() => { if (!acknowledged || confirmBusy) return; setConfirmBusy(true); void globalConfirmation.action().finally(() => { setConfirmBusy(false); setGlobalConfirmation(null) }) }} />}
+      {editingId !== null && templates.some(row => row.id === editingId && row.scope === 'global' && row.system_prompt) && <div className={css.notice}>保存后所有会话下一步就用新内容</div>}
       {notice !== null && <div className={css.notice} role="status">{notice}</div>}
       {manualShare !== null && (
         <section className={css.importForm} data-prompt-share-manual aria-label={t('panel.shareManualTitle')}>
@@ -1229,26 +1282,17 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
         />
       </div>
       <div className={css.tabsBar}>
-        <button
-          type="button"
-          className={effectiveTab === 'global' ? `${css.tab} ${css.tabActive}` : css.tab}
-          onClick={() => { setActiveTab('global') }}
-        >
-          {t('panel.global')}
-        </button>
-        <button
-          type="button"
-          className={effectiveTab === 'session' ? `${css.tab} ${css.tabActive}` : css.tab}
-          onClick={() => { setActiveTab('session') }}
-          disabled={sessionId === null}
-        >
-          {t('panel.session')}
-        </button>
-        {visibleCategories.map((cat) => {
+        {(['global', 'session'] as const).map(scopeGroup => <div key={scopeGroup} className={css.scopeGroup} data-scope={scopeGroup}>
+          <button type="button" className={effectiveTab === scopeGroup ? `${css.tab} ${css.tabActive}` : css.tab}
+            onClick={() => { setGlobalOnly(false); setActiveTab(scopeGroup) }} disabled={scopeGroup === 'session' && sessionId === null}>
+            {scopeGroup === 'global' ? <IconGlobeOutlineRegular size={12} /> : <IconNewChatOutlineRegular size={12} />}
+            {t(scopeGroup === 'global' ? 'panel.global' : 'panel.session')}
+          </button>
+        {visibleCategories.filter(cat => cat.scope === scopeGroup).map((cat) => {
           const key = `cat:${cat.scope}:${cat.name}`
           return (
-            <span key={key} className={effectiveTab === key ? `${css.tab} ${css.tabActive}` : css.tab}>
-              <button type="button" onClick={() => { setActiveTab(key) }}>
+            <span key={key} data-scope={cat.scope} className={effectiveTab === key ? `${css.tab} ${css.tabActive}` : css.tab}>
+              <button type="button" onClick={() => { setGlobalOnly(false); setActiveTab(key) }}>
                 {cat.name}
               </button>
               <button
@@ -1277,15 +1321,9 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
             </span>
           )
         })}
-        <button
-          type="button"
-          className={css.tabAdd}
-          aria-label={t('panel.newCategory')}
-          title={t('panel.newCategory')}
-          onClick={() => { setShowCatForm(v => !v) }}
-        >
-          <IconPlusOutlineRegular size={10} />
-        </button>
+        </div>)}
+        <button type="button" className={css.tabAdd} aria-label={t('panel.newCategory')} title={t('panel.newCategory')}
+          onClick={() => { setShowCatForm(v => !v) }}><IconPlusOutlineRegular size={10} /></button>
       </div>
       {showCatForm && (
         <CategoryForm
@@ -1316,7 +1354,11 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
         )}
         {tabRows.length > 0 && (
           <div className={css.group} onDragOver={(e) => { e.preventDefault() }}>
-            {tabRows.map(row => renderTemplateRow(row))}
+            {needle === '' ? tabRows.map(row => renderTemplateRow(row)) : [...new Set(tabRows.map(row => row.scope + ':' + (row.category ?? '')))].map(key => {
+              const group = tabRows.filter(row => row.scope + ':' + (row.category ?? '') === key)
+              const first = group[0]!
+              return <section key={key}><div className={css.searchGroup} data-scope={first.scope}>{first.category ?? t(first.scope === 'global' ? 'panel.global' : 'panel.session')}</div>{group.map(row => renderTemplateRow(row))}</section>
+            })}
           </div>
         )}
         {showAdd && (

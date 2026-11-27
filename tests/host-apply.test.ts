@@ -166,6 +166,26 @@ async function withHost(
   }
 }
 
+test('system prompts: route enforces global confirmation, session switch and promotion reset', async () => {
+  await withHost({ systemPrompt: { enabled: true } }, {when:'before'}, async handle => {
+    const handler=handle.handler()
+    const global=(await request(handler,'POST',TEMPLATES,{name:'system global',content:'text'})).body.template
+    const url=TEMPLATES+'/'+global.id
+    assert.equal((await request(handler,'PATCH',url,{system_prompt:true})).status,409)
+    assert.equal((await request(handler,'PATCH',url,{system_prompt:true,confirm_global:'true'})).status,409)
+    assert.equal((await request(handler,'PATCH',url,{system_prompt:true,confirm_global:true})).body.template.system_prompt,true)
+    assert.equal((await request(handler,'PATCH',url,{content:'replacement'})).status,409)
+    assert.equal((await request(handler,'DELETE',url)).status,409)
+    assert.equal((await request(handler,'DELETE',url,{confirm_global:true})).status,200)
+    const own=(await request(handler,'POST',TEMPLATES,{name:'system private',content:'text',scope:'session',session_id:'a'})).body.template
+    const ownUrl=TEMPLATES+'/'+own.id
+    assert.equal((await request(handler,'PATCH',ownUrl,{system_prompt:true})).status,200)
+    assert.equal((await request(handler,'POST',ownUrl+'/make-global')).body.template.system_prompt,false)
+    const impact=await request(handler,'GET','/plugins/dsh-prompt-templates/system-impact')
+    assert.equal(impact.status,200);assert.equal(impact.body.running,null)
+  })
+})
+
 test('Config schema fills the inject defaults deployments may omit', () => {
   const decoded = host.Config({ dbPath: '/tmp/prompt-templates.sqlite3' }) as {
     dbPath?: string
@@ -587,7 +607,7 @@ test('listener faults stay inside the step, and dispose closes the store', async
 
     await withHost({}, { when: 'before' }, async (handle) => {
       const db = new DatabaseSync(handle.dbPath)
-      db.exec('PRAGMA user_version=12')
+      db.exec('PRAGMA user_version=13')
       db.close()
       const before = logged.length
       const decision = await preStep(handle.ctx, { sessionId: 'sess-a', turn: 1 })
@@ -603,7 +623,7 @@ test('listener faults stay inside the step, and dispose closes the store', async
       const response = await request(handle.handler(), 'GET', TEMPLATES)
       assert.equal(response.status, 500)
       assert.equal(response.body.error.code, 'store-error')
-      assert.match(response.body.error.message, /schema version 12/)
+      assert.match(response.body.error.message, /schema version 13/)
     })
   } finally {
     console.error = original
@@ -776,7 +796,7 @@ test('interventions: schedule, event, manual (insert, send, interject) and plugi
       const handler = handle.handler()
       const read = await request(handler, 'GET', '/plugins/dsh-prompt-templates/interventions?session_id=sess-i')
       assert.equal(read.status, 200)
-      assert.equal(read.body.schema, 11)
+      assert.equal(read.body.schema, 12)
       const items = read.body.items as Array<Record<string, unknown>>
       assert.deepEqual(items.map(i => `${String(i['source'])}:${String(i['method'])}:${String(i['caller'])}`), ['schedule:null:null', 'manual:insert:null', 'manual:send:null', 'manual:interject:null', 'event:null:null', 'plugin:null:@nelsonlongxiang/dsh-open-a2a-net'])
       assert.deepEqual([items[0]?.['turn'], items[0]?.['step'], items[0]?.['template_id']], [2, 3, templateId])
@@ -817,7 +837,7 @@ test('library: a versioned pack is stored beside the active text and never switc
     const card = (await request(handler, 'GET', `${TEMPLATES}/${id}`)).body.template
     assert.deepEqual([card.content, card.version, card.inject_enabled, card.inject_every, card.mode], ['old words', null, true, 2, 'inject'])
     const library = (await request(handler, 'GET', LIB)).body
-    assert.equal(library.schema, 11)
+    assert.equal(library.schema, 12)
     const active = library.items.find((c: { id: string }) => c.id === id)
     assert.equal(active.active_version, null)
     assert.equal(active.content_sha256, contentDigest('old words'))
@@ -845,7 +865,7 @@ test('library: a versioned pack is stored beside the active text and never switc
     await request(handler, 'POST', TEMPLATES, { name: '我的自查', content: 'check myself', scope: 'session', session_id: 'sess-own', inject_enabled: true, inject_every: 10 })
     await request(handler, 'POST', TEMPLATES, { name: '别人的', content: 'other', scope: 'session', session_id: 'sess-other' })
     const own = (await request(handler, 'GET', `${LIB}?session_id=sess-own`)).body
-    assert.equal(own.schema, 11)
+    assert.equal(own.schema, 12)
     assert.deepEqual(own.items.map((c: { name: string; scope: string; inject_every: number; active_version: null }) => [c.name, c.scope, c.inject_every, c.active_version]), [['我的自查', 'session', 10, null]])
     assert.equal(own.items[0].content, undefined)
     assert.deepEqual((await request(handler, 'GET', `${LIB}?session_id=sess-none`)).body.items, [])

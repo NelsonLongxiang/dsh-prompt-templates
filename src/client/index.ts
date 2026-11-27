@@ -123,8 +123,8 @@ export function apply(ctx: ClientContext): void {
     update: (id: string, request: { name?: string; content?: string; description?: string | null }) => {
       return updateTemplate(id, request)
     },
-    remove: (id: string) => {
-      return deleteTemplate(id)
+    remove: (id: string, confirmGlobal?: boolean) => {
+      return deleteTemplate(id, confirmGlobal)
     },
     makeGlobal: (id: string) => {
       return makeTemplateGlobal(id)

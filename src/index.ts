@@ -42,12 +42,13 @@ import s from '@deepseek-ai/schemastery'
 // type mount stays — an empty type import keeps it without pulling the
 // deleted helper).
 import type { } from '@deepseek-ai/dsh-settings'
+import { DEFAULT_SYSTEM_PROMPT, registerSystemPrompt, type SystemPromptConfig } from './system-prompt.ts'
 import { DEFAULT_EVENT_INJECT_CONFIG, registerEventInject } from './event-inject.ts'
 import { EventRuleError } from './event-store.ts'
 import type { EventPolicyUpdate } from './event-store.ts'
 import { registerAutoInject } from './inject.ts'
 import type { InjectionStatusView } from './inject.ts'
-import { DEFAULT_INJECT_MAX_EVERY, SCHEMA_VERSION, TemplateRuleError, TemplateStore } from './store.ts'
+import { DEFAULT_INJECT_MAX_EVERY, SCHEMA_VERSION, ConfirmGlobalError, TemplateRuleError, TemplateStore } from './store.ts'
 import { INTERVENTION_SOURCES, MANUAL_METHODS, contentDigest, type InterventionSource, type ManualMethod } from './interventions.ts'
 import { registerCast, type PromptTemplatesService } from './cast.ts'
 import { registerEvidenceReady } from './evidence-ready.ts'
@@ -90,6 +91,7 @@ export interface Config {
   /** Observer phase 2: the wrap-up self-check and its two tools; on by default (owner decision 2026-11-21), `enabled: false` turns it off. */
   readonly selfCheck?: { readonly enabled?: boolean }
   /** 体会 (docs/spec-lesson-inject.md): digest prompts, lesson_write and situational recall; on by default (owner decision 2026-11-21), `enabled: false` turns it off. */
+  readonly systemPrompt?: Partial<SystemPromptConfig>
   readonly lessons?: Partial<LessonsConfig>
 }
 
@@ -98,6 +100,12 @@ export const Config: s<Config> = s.object({
   injectEnabled: s.boolean().default(true),
   evolutionAssessmentEnabled: s.boolean().default(true),
   injectMaxEvery: s.number().default(DEFAULT_INJECT_MAX_EVERY),
+  systemPrompt: s.object({
+    enabled: s.boolean().default(false),
+    lessonDepth: s.natural().min(0).max(20).default(0),
+    maxChars: s.natural().min(500).max(20000).default(4000),
+    order: s.natural().min(200).max(10199).default(9000),
+  }).default({}),
   eventInject: s.object({
     enabled: s.boolean().default(DEFAULT_EVENT_INJECT_CONFIG.enabled),
     maxPerTurn: s.natural().min(1).default(DEFAULT_EVENT_INJECT_CONFIG.maxPerTurn),
@@ -204,7 +212,9 @@ export function apply(ctx: Context, config: Config): void {
   registerSelfCheck(ctx, client, () => config.selfCheck?.enabled !== false)
   // 体会 (docs/spec-lesson-inject.md, phase 1): on unless lessons.enabled is false (owner decision 2026-11-21).
   const lessonsConfig: LessonsConfig = { ...DEFAULT_LESSONS_CONFIG, ...config.lessons }
-  registerLessons(ctx, client, () => lessonsConfig)
+  const systemConfig = (): SystemPromptConfig => ({ ...DEFAULT_SYSTEM_PROMPT, ...config.systemPrompt })
+  const systemReady = registerSystemPrompt(ctx, client, systemConfig)
+  registerLessons(ctx, client, () => lessonsConfig, () => systemReady() && systemConfig().lessonDepth > 0)
   registerEventInject(ctx, eventInjectConfig, () => client().events, () => client().interventions)
   // #81: evidence-ready reminders at the next actionable step; off with casting (cast.enabled).
   registerEvidenceReady(ctx, () => client().evidence, () => config.cast?.enabled === true, () => client().interventions)
@@ -232,7 +242,13 @@ export function apply(ctx: Context, config: Config): void {
     ctx.effect(() => webServer.register({
       kind: 'prefix',
       path: '/plugins/dsh-prompt-templates',
-      handler: (req, res) => { void handle(req, res, client, inject.status, inject.history, () => client().events.masterEnabled(eventInjectConfig.enabled), () => lessonsConfig, runtime) },
+      handler: (req, res) => { void handle(req, res, client, inject.status, inject.history, () => client().events.masterEnabled(eventInjectConfig.enabled), () => lessonsConfig, runtime, () => {
+        try {
+          const registry = ctx.get('agents') as { list?: () => Array<{ status?: string }> } | undefined
+          const agents = registry?.list?.()
+          return agents ? { running: agents.filter(a => a.status === 'running').length, live: agents.length } : { running: null, live: null }
+        } catch { return { running: null, live: null } }
+      }) },
     }), 'prompt-templates: api routes')
   }
   registerRoutes()
@@ -253,6 +269,7 @@ async function handle(
   eventInjectEnabled: () => boolean,
   lessonsConfig: () => LessonsConfig = () => DEFAULT_LESSONS_CONFIG,
   runtime?: () => RuntimeView,
+  systemImpact?: () => { running: number | null; live: number | null },
 ): Promise<void> {
   const url = new URL(req.url ?? '/', 'http://x')
   const segments = url.pathname.split('/').filter(part => part !== '')
@@ -264,6 +281,10 @@ async function handle(
   const rest = segments.slice(3)
   const method = req.method ?? 'GET'
   try {
+    if (resource === 'system-impact' && rest.length === 0) {
+      if (method !== 'GET') return json(res, 405, errorBody('method-not-allowed', method))
+      return json(res, 200, systemImpact?.() ?? { running: null, live: null })
+    }
     // B5b: which server version the host loaded, when, and which features are on. Read-only.
     if (resource === 'version' && rest.length === 0) {
       if (method !== 'GET') return json(res, 405, errorBody('method-not-allowed', `${method} ${url.pathname}`))
@@ -476,11 +497,13 @@ async function handle(
       return json(res, 200, { template })
     }
     if (rest.length === 1 && method === 'DELETE') {
-      const deleted = client().delete(id)
+      const body = await readJson(req)
+      const deleted = client().delete(id, body['confirm_global'] === true)
       return json(res, 200, { deleted })
     }
     return json(res, 405, errorBody('method-not-allowed', `${method} ${url.pathname}`))
   } catch (error) {
+    if (error instanceof ConfirmGlobalError) return json(res, 409, errorBody('confirm-global', error.message))
     if (error instanceof TemplateRuleError || error instanceof EventRuleError) {
       return json(res, 400, errorBody('rule-violation', error.message))
     }

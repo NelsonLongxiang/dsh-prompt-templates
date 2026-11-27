@@ -70,8 +70,19 @@ test('invalid persisted values, null session and malformed tab names cannot brea
     assert.equal(selection.tab('a'), 'global')
     selection.select(null, 'session')
     selection.select('a', 'invalid')
+    selection.select('a', 'cat:global:' + 'x'.repeat(200000))
     assert.equal(selection.tab(null), 'global')
     assert.equal(selection.tab('a'), 'global')
+  }
+})
+
+test('malformed JSON and empty storage recover through the framework hydration boundary', t => {
+  const values = storage(t)
+  t.mock.method(console, 'error', () => {})
+  for (const raw of ['not json at all', '']) {
+    values.set('prompt-templates.library', raw)
+    assert.equal(createLibrarySelection().tab('a'), 'global')
+    assert.deepEqual(JSON.parse(values.get('prompt-templates.library')!), {recent: []})
   }
 })
 

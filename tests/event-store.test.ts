@@ -114,6 +114,7 @@ test('v7 databases migrate to the current schema: existing episodes gain 提醒�
       VALUES ('ep_old', 's', 'repeated-failure', 1, 'k', 'bash', 'f', 'notified', '[]', 2, 1, 'x', 'error:exit:3', '2026-11-01', '2026-11-01');
       ALTER TABLE event_episodes DROP COLUMN repeated_after_reminder;
       ALTER TABLE templates DROP COLUMN version;
+      ALTER TABLE templates DROP COLUMN system_prompt;
       DROP TABLE interventions;
       DROP TABLE template_versions;
       DROP TABLE self_check_log;
@@ -127,7 +128,7 @@ test('v7 databases migrate to the current schema: existing episodes gain 提醒�
       assert.ok(store.library().every(card => card.active_version === null && card.stored_versions.length === 0))
     } finally { store.close() }
     const check = new DatabaseSync(path)
-    assert.equal((check.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, 11)
+    assert.equal((check.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, 12)
     check.close()
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })

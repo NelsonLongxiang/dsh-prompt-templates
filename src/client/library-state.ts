@@ -14,7 +14,7 @@ const LIMIT = 100
 
 /** Accept only the tab grammar owned by the library; persisted storage is untrusted. */
 function validTab(tab: unknown): tab is string {
-  return typeof tab === 'string' && (tab === 'global' || tab === 'session' || /^cat:(global|session):.+$/s.test(tab))
+  return typeof tab === 'string' && tab.length <= 140 && (tab === 'global' || tab === 'session' || /^cat:(global|session):.+$/s.test(tab))
 }
 
 /** A deleted or foreign category must never restore another session's private view. */
