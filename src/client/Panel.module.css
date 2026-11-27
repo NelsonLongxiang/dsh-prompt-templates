@@ -383,9 +383,22 @@
 }
 
 .tabActive {
-  border-color: var(--dsw-alias-state-business-primary);
-  color: var(--dsw-alias-label-primary);
+  border-color: var(--scope-color);
+  background: var(--scope-color);
+  color: var(--dsw-alias-bg-base);
 }
+
+.scopeGroup { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.scopeGroup + .scopeGroup { border-left: 1px solid var(--dsw-alias-border-inverted); padding-left: 6px; }
+.scopeGroup[data-scope="global"], .searchGroup[data-scope="global"] { --scope-color: var(--dsw-alias-state-warn-primary); }
+.scopeGroup[data-scope="session"], .searchGroup[data-scope="session"] { --scope-color: var(--dsw-static-blue-450); }
+.scopeGroup .tab:not(.tabActive) { background: color-mix(in srgb, var(--scope-color) 18%, transparent); color: var(--scope-color); border-color: var(--scope-color); }
+.searchGroup { border-radius: 4px; padding: 3px 8px; background: var(--scope-color); color: var(--dsw-alias-bg-base); }
+.systemSwitch { cursor: pointer; border: 1px solid var(--dsw-alias-border-inverted); border-radius: 4px; padding: 2px 4px; background: none; color: var(--dsw-alias-label-secondary); }
+.systemSwitch[data-scope="global"] { cursor: help; --scope-color: var(--dsw-alias-state-warn-primary); }
+.systemSwitch[data-scope="session"] { --scope-color: var(--dsw-static-blue-450); }
+.systemSwitch[aria-pressed="true"] { background: var(--scope-color); color: var(--dsw-alias-bg-base); }
+.globalBadge { color: var(--dsw-alias-state-warn-primary); border: 1px solid currentColor; border-radius: 4px; cursor: pointer; background: none; }
 
 .tabDelete {
   border: none;

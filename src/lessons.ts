@@ -1026,7 +1026,7 @@ function digestAllowed(store: TemplateStore, config: LessonsConfig, sessionId: s
  * digest prompt per turn, with its cooldown. Exported for tests; the host path is the `agent/pre-step` listener below.
  * Delivery is best effort (a rejected step loses it); what was handed over is logged.
  */
-export function prepareLessonMessages(store: TemplateStore, state: LessonState, config: LessonsConfig, sessionId: string, turn: number, step: number): UserMessage[] {
+export function prepareLessonMessages(store: TemplateStore, state: LessonState, config: LessonsConfig, sessionId: string, turn: number, step: number, systemLessons = false): UserMessage[] {
   state.turn = turn
   expireRounds(store, sessionId, turn)
   const bodies: string[] = []
@@ -1036,7 +1036,7 @@ export function prepareLessonMessages(store: TemplateStore, state: LessonState, 
     const pinned = new Set(store.lessons.cues(sessionId).filter(cue => cue.pinned === 1).map(cue => cue.template_id))
     const all = lessonsOf(store, sessionId)
     const lessons = [...all.filter(l => pinned.has(l.id)), ...all.filter(l => !pinned.has(l.id))]
-    if (lessons.length > 0) {
+    if (!systemLessons && lessons.length > 0) {
       const body = renderLessonList(lessons)
       bodies.push(body)
       for (const lesson of lessons) {
@@ -1062,7 +1062,7 @@ export function prepareLessonMessages(store: TemplateStore, state: LessonState, 
 type ExecLike = { callId?: unknown; name?: unknown; arguments?: unknown; agent?: { session: { header: { id: unknown } } } }
 
 /** Register the observer, the step consumer and `lesson_write`. All of it is inert unless `config().enabled`. */
-export function registerLessons(ctx: Context, store: () => TemplateStore, config: () => LessonsConfig): void {
+export function registerLessons(ctx: Context, store: () => TemplateStore, config: () => LessonsConfig, systemLessons: () => boolean = () => false): void {
   const sessions = new Map<string, LessonState>()
   const stateOf = (id: string): LessonState => { let s = sessions.get(id); if (s === undefined) { s = newLessonState(); sessions.set(id, s) } return s }
   let faultReported = false
@@ -1097,7 +1097,7 @@ export function registerLessons(ctx: Context, store: () => TemplateStore, config
     try {
       if (!config().enabled) return decision
       const sessionId = String(agent.session.header.id)
-      const messages = prepareLessonMessages(store(), stateOf(sessionId), config(), sessionId, turn, step)
+      const messages = prepareLessonMessages(store(), stateOf(sessionId), config(), sessionId, turn, step, systemLessons())
       return messages.length === 0 ? decision : { ...decision, messages: [...decision.messages, ...messages] }
     } catch (error) {
       fault('skipped this step', error)

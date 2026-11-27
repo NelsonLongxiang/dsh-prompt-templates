@@ -55,7 +55,7 @@ import type { CategoryCreateRequest, CategoryView, PromptScope, TemplateCreateRe
  * v10 adds the wrap-up `self_check_log` (observer phase 2, PT-4),
  * v11 adds `lesson_cues` and `lesson_log` (体会, docs/spec-lesson-inject.md).
  */
-export const SCHEMA_VERSION = 11
+export const SCHEMA_VERSION = 12
 
 /** Upper bound of the inject interval when the deployment config omits one. */
 export const DEFAULT_INJECT_MAX_EVERY = 1000
@@ -65,6 +65,10 @@ const DESCRIPTION_MAX = 512
 const SESSION_ID_MAX = 128
 
 /** Business-rule violation surfaced to routes as HTTP 400. */
+export class ConfirmGlobalError extends Error {
+  constructor() { super('confirm_global: true is required to change a global system prompt'); this.name = 'ConfirmGlobalError' }
+}
+
 export class TemplateRuleError extends Error {
   constructor(message: string) {
     super(message)
@@ -83,6 +87,7 @@ export interface TemplateRow {
   position: number
   category: string | null
   /** Storage truth for the auto-inject switch: 1 = on, 0 = off. */
+  system_prompt?: 0 | 1
   inject_enabled: 0 | 1
   /** Injection interval in rounds; `null` when never configured. */
   inject_every: number | null
@@ -165,6 +170,7 @@ export class TemplateStore {
         this.db.exec(INTERVENTIONS_SQL)
         this.db.exec(SELF_CHECK_SQL)
         this.db.exec(LESSONS_SQL)
+        this.db.exec('ALTER TABLE templates ADD COLUMN system_prompt INTEGER NOT NULL DEFAULT 0')
         seedDefaultPolicies(this.db)
         this.db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`)
       } else if (onDisk >= 1 && onDisk < SCHEMA_VERSION) {
@@ -193,6 +199,7 @@ export class TemplateStore {
         }
         if (onDisk <= 9) this.db.exec(SELF_CHECK_SQL)
         if (onDisk <= 10) this.db.exec(LESSONS_SQL)
+        if (onDisk <= 11) this.db.exec('ALTER TABLE templates ADD COLUMN system_prompt INTEGER NOT NULL DEFAULT 0')
         this.db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`)
       } else if (onDisk !== SCHEMA_VERSION) {
         throw new Error(`${dbPath} has schema version ${onDisk}, incompatible with this build (expected ${SCHEMA_VERSION})`)
@@ -311,6 +318,18 @@ export class TemplateStore {
     })
   }
 
+  /** Revision observes writes from this connection and other profiles sharing the database. */
+  revision(): string {
+    const total = this.db.prepare('SELECT total_changes() AS n').get() as { n: number }
+    const other = this.db.prepare('PRAGMA data_version').get() as { data_version: number }
+    return String(other.data_version) + ':' + String(total.n)
+  }
+
+  /** Stored lesson texts only, newest first (not timeline events). */
+  textVersions(id: string): Array<{ content: string; content_sha256: string; stored_at: string }> {
+    return this.db.prepare('SELECT content, content_sha256, stored_at FROM template_versions WHERE template_id = ? ORDER BY stored_at DESC, rowid DESC').all(id) as unknown as Array<{ content: string; content_sha256: string; stored_at: string }>
+  }
+
   /** Fetch one template; `undefined` when absent. */
   get(id: string): TemplateView | undefined {
     const row = this.db.prepare('SELECT * FROM templates WHERE id = ?').get(id) as TemplateRow | undefined
@@ -381,7 +400,14 @@ export class TemplateStore {
   update(id: string, patch: TemplateUpdateRequest): TemplateView | undefined {
     const row = this.db.prepare('SELECT * FROM templates WHERE id = ?').get(id) as TemplateRow | undefined
     if (row === undefined) return undefined
-    const fields = Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined))
+    if (patch.system_prompt !== undefined && typeof patch.system_prompt !== 'boolean') throw new TemplateRuleError('system_prompt must be boolean')
+    if (patch.system_prompt === true && (row.category === '体会' || patch.category === '体会' || row.name.startsWith('体会·'))) throw new TemplateRuleError('lessons use lessonDepth, not per-template system_prompt')
+    const system = patch.system_prompt === undefined ? row.system_prompt === 1 : patch.system_prompt
+    if (row.scope === 'global' && patch.confirm_global !== true && (
+      system !== (row.system_prompt === 1) || (row.system_prompt === 1 &&
+      (['name', 'content', 'position', 'category'] as const).some(key => patch[key] !== undefined && patch[key] !== row[key]))
+    )) throw new ConfirmGlobalError()
+    const fields = Object.fromEntries(Object.entries(patch).filter(([key, v]) => v !== undefined && key !== 'confirm_global'))
     const newName = fields['name']
     if (newName !== undefined) {
       if (typeof newName !== 'string' || newName.length < 1 || newName.length > NAME_MAX) {
@@ -423,12 +449,13 @@ export class TemplateStore {
       const v = fields['version']
       if (v !== null && (typeof v !== 'string' || v.length < 1 || v.length > 64)) throw new TemplateRuleError('version must be a string of 1..64 characters or null')
     } else if (fields['content'] !== undefined && fields['content'] !== row.content) merged.version = null
+    merged.system_prompt = merged.category === '体会' ? 0 : system ? 1 : 0
     merged.inject_enabled = inject.enabled ? 1 : 0
     merged.inject_every = inject.every
     merged.updated_at = new Date().toISOString().replace('T', ' ').slice(0, 19)
     this.db.prepare(
-      'UPDATE templates SET name = ?, content = ?, description = ?, position = ?, category = ?, inject_enabled = ?, inject_every = ?, mode = ?, version = ?, updated_at = ? WHERE id = ?',
-    ).run(merged.name, merged.content, merged.description, merged.position, merged.category, merged.inject_enabled, merged.inject_every, merged.mode, merged.version ?? null, merged.updated_at, id)
+      'UPDATE templates SET name = ?, content = ?, description = ?, position = ?, category = ?, inject_enabled = ?, inject_every = ?, mode = ?, version = ?, system_prompt = ?, updated_at = ? WHERE id = ?',
+    ).run(merged.name, merged.content, merged.description, merged.position, merged.category, merged.inject_enabled, merged.inject_every, merged.mode, merged.version ?? null, merged.system_prompt, merged.updated_at, id)
     return rowToView(merged)
   }
 
@@ -504,12 +531,14 @@ export class TemplateStore {
       throw new TemplateRuleError(`template name '${row.name}' already exists in scope global`)
     }
     const updated = new Date().toISOString().replace('T', ' ').slice(0, 19)
-    this.db.prepare("UPDATE templates SET scope = 'global', session_id = NULL, updated_at = ? WHERE id = ?").run(updated, id)
-    return rowToView({ ...row, scope: 'global', session_id: null, updated_at: updated })
+    this.db.prepare("UPDATE templates SET scope = 'global', session_id = NULL, system_prompt = 0, updated_at = ? WHERE id = ?").run(updated, id)
+    return rowToView({ ...row, scope: 'global', session_id: null, system_prompt: 0, updated_at: updated })
   }
 
   /** Delete one template; `false` when absent. A lesson's cue row goes with it (v11). */
-  delete(id: string): boolean {
+  delete(id: string, confirmGlobal = false): boolean {
+    const current = this.get(id)
+    if (current?.scope === 'global' && current.system_prompt && !confirmGlobal) throw new ConfirmGlobalError()
     this.db.exec('BEGIN IMMEDIATE')
     try {
       const deleted = this.db.prepare('DELETE FROM templates WHERE id = ?').run(id).changes > 0
@@ -522,11 +551,13 @@ export class TemplateStore {
     }
   }
 
-  /** List user categories: global ones plus one session's, ordered by name. */
+  /** List all categories for the library, or globals plus one explicitly named session. */
   listCategories(sessionId?: string): CategoryView[] {
+    const filter = sessionId === undefined ? '' : ' WHERE session_id IS NULL OR session_id IS ?'
+    const args = sessionId === undefined ? [] : [sessionId]
     return (this.db.prepare(
-      "SELECT name, scope, session_id FROM categories WHERE session_id IS NULL OR session_id IS ? ORDER BY name",
-    ).all(sessionId ?? null) as unknown as Array<{ name: string, scope: PromptScope, session_id: string | null }>)
+      'SELECT name, scope, session_id FROM categories' + filter + ' ORDER BY name, scope, session_id',
+    ).all(...args) as unknown as Array<{ name: string, scope: PromptScope, session_id: string | null }>)
       .map(row => ({ ...row }))
   }
 
@@ -680,7 +711,7 @@ function parseLibraryPack(pack: unknown): { version: string; source: string | nu
 
 /** Map one database row to the wire view (field names are already snake_case). */
 function rowToView(row: TemplateRow): TemplateView {
-  return { ...row, inject_enabled: row.inject_enabled === 1 }
+  return { ...row, system_prompt: row.system_prompt === 1, inject_enabled: row.inject_enabled === 1 }
 }
 
 /** Validate the injection delivery mode; omitted or null keeps the default. */

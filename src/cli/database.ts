@@ -35,7 +35,7 @@ export interface ImportResult {
  * v5 event tables, v6 the stored master switch / evolution enrollment, and
  * v7 the combined migration all hold runtime state that is never exported.
  */
-const SUPPORTED_DB_VERSIONS: readonly number[] = [4, 5, 6, 7, 8, 9, 10, 11]
+const SUPPORTED_DB_VERSIONS: readonly number[] = [4, 5, 6, 7, 8, 9, 10, 11, 12]
 
 /** A valid operation blocked by a safety/business gate (CLI exit 1). */
 export class ImportBlockedError extends Error {
@@ -48,7 +48,7 @@ export function exportDatabase(dbPath: string, filters: { scope?: 'global' | 'se
   try {
     db.exec('PRAGMA query_only=ON')
     const version = Number((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
-    if (!SUPPORTED_DB_VERSIONS.includes(version)) throw new Error(`${path} has schema version ${version}, expected 4 to 11`)
+    if (!SUPPORTED_DB_VERSIONS.includes(version)) throw new Error(`${path} has schema version ${version}, expected 4 to 12`)
     const clauses: string[] = []
     const args: string[] = []
     if (filters.scope !== undefined) { clauses.push('scope = ?'); args.push(filters.scope) }
@@ -157,7 +157,7 @@ export async function importDatabase(dbPath: string, incoming: DataSnapshot, opt
   try {
     db.exec(`PRAGMA busy_timeout=${options.busyTimeoutMs ?? 5000}`)
     const version = Number((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
-    if (!SUPPORTED_DB_VERSIONS.includes(version)) throw new Error(`${path} has schema version ${version}, expected 4 to 11`)
+    if (!SUPPORTED_DB_VERSIONS.includes(version)) throw new Error(`${path} has schema version ${version}, expected 4 to 12`)
     backupPath = resolve(options.backupOut ?? `${path}.${timestampName()}.bak`)
     mkdirSync(dirname(backupPath), { recursive: true })
     await backup(db, backupPath)
@@ -175,6 +175,12 @@ export async function importDatabase(dbPath: string, incoming: DataSnapshot, opt
           insertCategory.run(item.name, item.scope, item.session_id)
         }
       }
+      // A bulk import has no per-global confirmation. Refuse changes to active global prompts.
+      if (version >= 12) {
+        const protectedIds = db.prepare("SELECT id FROM templates WHERE scope = 'global' AND system_prompt = 1").all() as Array<{ id: string }>
+        const importedIds = new Set(incoming.templates.map(item => item.id))
+        if (protectedIds.some(item => importedIds.has(item.id))) throw new ImportBlockedError('confirm-global: disable the global system prompt with confirmation before bulk import')
+      }
       const upsertTemplate = db.prepare(`INSERT INTO templates
         (id,name,content,scope,session_id,description,position,category,inject_enabled,inject_every,mode,created_at,updated_at)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
@@ -182,7 +188,10 @@ export async function importDatabase(dbPath: string, incoming: DataSnapshot, opt
         session_id=excluded.session_id,description=excluded.description,position=excluded.position,
         category=excluded.category,inject_enabled=excluded.inject_enabled,inject_every=excluded.inject_every,
         mode=excluded.mode,created_at=excluded.created_at,updated_at=excluded.updated_at`)
-      for (const item of incoming.templates) upsertTemplate.run(item.id, item.name, item.content, item.scope, item.session_id, item.description, item.position, item.category, item.inject_enabled ? 1 : 0, item.inject_every ?? null, item.mode, item.created_at, item.updated_at)
+      for (const item of incoming.templates) {
+        upsertTemplate.run(item.id, item.name, item.content, item.scope, item.session_id, item.description, item.position, item.category, item.inject_enabled ? 1 : 0, item.inject_every ?? null, item.mode, item.created_at, item.updated_at)
+        if (version >= 12) db.prepare('UPDATE templates SET system_prompt = 0 WHERE id = ?').run(item.id)
+      }
       db.exec('COMMIT')
     } catch (error) {
       db.exec('ROLLBACK')

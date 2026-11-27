@@ -30,6 +30,8 @@ export interface TemplateView {
   /** Category name; `null` = one of the default tabs (全局/会话模板). */
   readonly category: string | null
   /** Auto-inject switch: the host injects this template every N rounds. */
+  /** Owner opt-in to system prompt (v12); absent on older wire records means off. */
+  readonly system_prompt?: boolean
   readonly inject_enabled: boolean
   /** Injection interval in rounds; `null` when never configured. */
   readonly inject_every: number | null
@@ -79,6 +81,8 @@ export interface TemplateUpdateRequest {
   readonly mode?: TemplateInjectMode
   /** Version label of new content (v9); omitted with a content change clears the stored one. */
   readonly version?: string | null
+  readonly system_prompt?: boolean
+  readonly confirm_global?: boolean
 }
 
 /** Category create payload. */

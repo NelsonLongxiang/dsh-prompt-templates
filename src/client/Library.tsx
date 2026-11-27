@@ -9,7 +9,8 @@
  */
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { resolveLibraryTab } from './library-state.ts'
-import { IconCopyOutlineRegular, IconDownloadOutlineRegular, IconEditOutlineRegular, IconGlobeOutlineRegular, IconPlusOutlineRegular, IconQueueOutlineRegular, IconSendOutlineRegular, IconTrashOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
+import { planTemplateReorder } from './reorder.ts'
+import { RiskConfirmation, IconNewChatOutlineRegular, IconCopyOutlineRegular, IconDownloadOutlineRegular, IconEditOutlineRegular, IconGlobeOutlineRegular, IconPlusOutlineRegular, IconQueueOutlineRegular, IconSendOutlineRegular, IconTrashOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { CategoryView, InjectionHistoryEntry, InjectionStatusView, TemplateInjectMode, TemplateView } from '../types.ts'
 import type { EventEpisodeWire, EventPolicyWire } from './api.ts'
 import { decideLessonType, listCardStats, listLessonPins, listPendingLessonTypes, recordManualIntervention, type CardStatWire, type LessonPinWire, type PendingLessonTypeWire, type RecurrenceWire, type VerdictsWire, attachLessonVerdict, getServerVersion } from './api.ts'
@@ -45,6 +46,7 @@ interface RowProps {
   cardYield?: CardStatWire
   /** Flip the row's auto-inject switch (rows without an interval route to the edit form). */
   onToggleInject: (template: TemplateView) => void
+  onToggleSystem: (template: TemplateView) => void
   sortable: boolean
   onDragStart: (id: string) => void
   onDropOn: (id: string) => void
@@ -53,7 +55,7 @@ interface RowProps {
   compact?: boolean
 }
 
-function TemplateRow({ template, onInsert, onSend, onInterject, onEdit, onDelete, onShare, onMakeGlobal, pin, cardYield, onToggleInject, sortable, onDragStart, onDropOn, t, compact = false }: RowProps) {
+function TemplateRow({ template, onInsert, onSend, onInterject, onEdit, onDelete, onShare, onMakeGlobal, pin, cardYield, onToggleInject, onToggleSystem, sortable, onDragStart, onDropOn, t, compact = false }: RowProps) {
   const [more, setMore] = useState(false)
   const full = !compact || more
   const injectTitle = template.inject_enabled && template.inject_every !== null
@@ -78,6 +80,13 @@ function TemplateRow({ template, onInsert, onSend, onInterject, onEdit, onDelete
         <span className={css.name}>{template.name}</span>
         <span className={css.preview}>{template.content}</span>
       </button>
+      {template.category !== '体会' && (
+        <button type="button" className={css.systemSwitch} data-scope={template.scope}
+          aria-pressed={template.system_prompt === true} aria-label={t('panel.systemSwitch')}
+          title={t(template.scope === 'global' ? 'panel.systemGlobalHint' : 'panel.systemSessionHint')}
+          onClick={() => { onToggleSystem(template) }}>{t('panel.systemShort')}</button>
+      )}
+      {template.system_prompt && template.inject_enabled && <span title={t('panel.systemDuplicate')}>⚠</span>}
       {full && (
         <button
           type="button"
@@ -445,11 +454,12 @@ function TemplateForm({ initial, allowScope, sessionId, categories, t, submitLab
 }
 
 /** Inline form creating one category tab: name + scope (global, or the current session). */
-function CategoryForm({ sessionId, createCategory, t, onDone }: {
+function CategoryForm({ sessionId, createCategory, t, onDone, onCancel }: {
   sessionId: string | null
-  createCategory: (request: { name: string, scope: 'global' | 'session', session_id: string | null }) => Promise<{ ok: boolean }>
+  createCategory: TemplateLibraryFace['createCategory']
   t: (key: PromptTemplateKey) => string
-  onDone: () => void
+  onDone: (category: CategoryView) => void
+  onCancel: () => void
 }) {
   const [name, setName] = useState('')
   const [scope, setScope] = useState<'global' | 'session'>('global')
@@ -458,18 +468,20 @@ function CategoryForm({ sessionId, createCategory, t, onDone }: {
 
   const submit = async (): Promise<void> => {
     const trimmed = name.trim()
-    if (trimmed === '') return
+    if (trimmed === '' || busy) return
     if (scope === 'session' && sessionId === null) { setError(t('panel.error')); return }
     setBusy(true)
     setError(null)
-    const result = await createCategory({
-      name: trimmed,
-      scope,
-      session_id: scope === 'session' ? sessionId : null,
-    })
-    setBusy(false)
-    if (!result.ok) { setError(t('panel.error')); return }
-    onDone()
+    const category: CategoryView = { name: trimmed, scope, session_id: scope === 'session' ? sessionId : null }
+    try {
+      const result = await createCategory(category)
+      if (!result.ok) { setError(result.error.message); return }
+      onDone(category)
+    } catch (error) {
+      setError(String(error))
+    } finally {
+      setBusy(false)
+    }
   }
 
   return (
@@ -485,12 +497,15 @@ function CategoryForm({ sessionId, createCategory, t, onDone }: {
       <div className={css.addRow}>
         <label className={css.scopeLabel}>
           <select value={scope} onChange={(e) => { setScope(e.target.value as 'global' | 'session') }} aria-label="scope">
-            <option value="global">{t('panel.global')}</option>
-            <option value="session" disabled={sessionId === null}>{t('panel.session')}</option>
+            <option value="global">🟧 {t('panel.global')}</option>
+            <option value="session" disabled={sessionId === null}>🟦 {t('panel.session')}</option>
           </select>
         </label>
         <div className={css.addActions}>
           {error !== null && <span className={css.error} role="alert">{error}</span>}
+          <button type="button" className={css.cancelBtn} onClick={onCancel} disabled={busy}>
+            {t('panel.addCancel')}
+          </button>
           <button type="button" className={css.saveBtn} onClick={() => void submit()} disabled={busy || name.trim() === ''}>
             {t('panel.addSave')}
           </button>
@@ -537,6 +552,18 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
   const { refresh, refreshCategories, createCategory, removeCategory, create, update, remove, makeGlobal, insert, send, interject, injectStatus, injectionHistory, eventPolicies, setEventMaster, updateEventPolicy, eventEpisodes } = face
   const [templates, setTemplates] = useState<TemplateView[]>([])
   const [categories, setCategories] = useState<CategoryView[]>([])
+  const [globalConfirmation, setGlobalConfirmation] = useState<{ template: TemplateView; title: string; action: () => Promise<unknown> } | null>(null)
+  const [acknowledged, setAcknowledged] = useState(false)
+  const [confirmBusy, setConfirmBusy] = useState(false)
+  const [impact, setImpact] = useState<{ running: number | null; live: number | null }>({ running: null, live: null })
+  const requestGlobal = (template: TemplateView, title: string, action: () => Promise<unknown>) => {
+    setAcknowledged(false); setGlobalConfirmation({ template, title, action })
+    setImpact({ running: null, live: null })
+    void fetch('/plugins/dsh-prompt-templates/system-impact', { cache: 'no-store' }).then(r => r.ok ? r.json() : null).then(value => {
+      if (value && typeof value.running === 'number' && typeof value.live === 'number') setImpact(value)
+    }).catch(() => {})
+  }
+  const [globalOnly, setGlobalOnly] = useState(false)
   const [showAdd, setShowAdd] = useState(false)
   // Live search filter over name + content, case-insensitive.
   const [query, setQuery] = useState('')
@@ -804,8 +831,10 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
     }
     if (overwrite > 0) {
       for (const pair of plan.overwrite) {
+        if (pair.target.scope === 'global' && pair.target.system_prompt) { skipped += 1; continue }
         const result = await update(pair.target.id, {
           content: pair.incoming.content,
+          system_prompt: false,
           description: pair.incoming.description,
           category: pair.incoming.category,
           // Overwrite updates content and placement, never the inject switch:
@@ -872,14 +901,28 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
     void recordManualIntervention(sessionId, template.id, 'interject')
   }, [interject, sessionId])
 
+  const handleToggleSystem = async (template: TemplateView) => {
+    const change = async () => {
+      const result = await update(template.id, { system_prompt: !template.system_prompt, ...(template.scope === 'global' ? { confirm_global: true } : {}) })
+      if (result.ok) { setRowError(null); await load() } else setRowError(result.error.message)
+    }
+    if (template.scope === 'global') requestGlobal(template, t(template.system_prompt ? 'panel.systemOffTitle' : 'panel.systemOnTitle').replace('{name}', () => template.name), change)
+    else await change()
+  }
+
   const handleRemove = useCallback(async (id: string) => {
+    const template = templates.find(row => row.id === id)
+    if (template?.scope === 'global' && template.system_prompt) {
+      requestGlobal(template, t('panel.systemDeleteTitle').replace('{name}', () => template.name), async () => { const result = await remove(id, true); if (result.ok) await load(); else setRowError(result.error.message) })
+      return
+    }
     const result = await remove(id)
     if (result.ok) void load()
-  }, [remove, load])
+  }, [remove, load, templates])
 
   const handleMakeGlobal = useCallback(async (id: string) => {
     const result = await makeGlobal(id)
-    if (result.ok) void load()
+    if (result.ok) { setNotice(t('panel.systemPromoted')); void load() }
   }, [makeGlobal, load])
 
   // Flip one row's auto-inject switch. First-time setup (no interval yet)
@@ -914,7 +957,7 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
   // With no query the active tab owns the list. A query searches across every
   // category, but never leaks another session's private templates.
   const needle = query.trim().toLowerCase()
-  const filteredRows = filterTemplateRows(templates, query, effectiveTab, activeCategory, sessionId)
+  const filteredRows = globalOnly ? templates.filter(row => row.scope === 'global' && row.system_prompt) : filterTemplateRows(templates, query, effectiveTab, activeCategory, sessionId)
   // §5.16: in the 会话模板 tab the session's lessons come first, in the chain order; plain session templates follow.
   const lessonRank = (row: TemplateView): number => {
     const info = lessonInfo.get(row.id)
@@ -934,14 +977,13 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
     const draggedId = dragRowRef.current
     dragRowRef.current = null
     if (draggedId === null || draggedId === targetId) return
-    const ids = tabRows.map((row) => row.id)
-    const from = ids.indexOf(draggedId)
-    const to = ids.indexOf(targetId)
-    if (from === -1 || to === -1) return
-    ids.splice(to, 0, ...ids.splice(from, 1))
+    const plan = planTemplateReorder(tabRows, draggedId, targetId)
+    if (plan.blocked) { setRowError(t('panel.systemReorderBlocked')); return }
     void (async () => {
-      await Promise.all(ids.map((id, index) => update(id, { position: index })))
-      void load()
+      const results = await Promise.all(plan.changes.map(change => update(change.id, { position: change.position })))
+      const failure = results.find(result => !result.ok)
+      setRowError(failure && !failure.ok ? failure.error.message : null)
+      await load()
     })()
   }
 
@@ -959,13 +1001,21 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
           submitLabel={t('panel.addSave')}
           onSubmit={async (name, content, _scope, category, injectEnabled, injectEvery, mode) => {
             // Disabling keeps the stored interval: only enabling sends a new one.
-            const result = await update(row.id, {
+            const patch = {
               name,
               content,
               category,
               inject_enabled: injectEnabled,
               ...(injectEnabled ? { inject_every: injectEvery, mode } : {}),
-            })
+            }
+            if (row.scope === 'global' && row.system_prompt) {
+              requestGlobal(row, t('panel.systemEditWarn'), async () => {
+                const result = await update(row.id, { ...patch, confirm_global: true })
+                if (result.ok) { setEditingId(null); await load() } else setRowError(result.error.message)
+              })
+              return false
+            }
+            const result = await update(row.id, patch)
             return result.ok
           }}
           onDone={() => { setEditingId(null); void load() }}
@@ -999,6 +1049,7 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
           pin={lessonInfo.has(row.id) ? { onTasteAsk: () => { handleTasteAsk(row) }, onVerdict: () => { setVerdictFor(row); setVerdictRef('') }, verdicts: lessonVerdicts.get(row.id), rounds: lessonRounds.get(row.id), churn: lessonChurn.has(row.id), recurrence: lessonRecurrence.get(row.id), evidence: lessonEvidence.get(row.id) ?? null } : undefined}
           cardYield={cardYields.get(row.id)}
           onToggleInject={(tpl) => { void handleToggleInject(tpl) }}
+          onToggleSystem={(tpl) => { void handleToggleSystem(tpl) }}
           sortable={needle === ''}
           onDragStart={(id) => { dragRowRef.current = id }}
           onDropOn={(id) => { handleRowDrop(id) }}
@@ -1022,6 +1073,7 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
           <span className={css.countBadge} data-template-count title={needle !== '' ? t('panel.searchCount') : t('panel.tabCount')}>
             {countLabel}
           </span>
+          {templates.some(row => row.scope === 'global' && row.system_prompt) && <button type="button" className={css.globalBadge} aria-pressed={globalOnly} onClick={() => { setGlobalOnly(value => !value) }}>{t('panel.systemBadge').replace('{count}', String(templates.filter(row => row.scope === 'global' && row.system_prompt).length))}</button>}
           {injected !== null && (
             <button
               type="button"
@@ -1059,6 +1111,13 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
         </span>
         {headerExtra}
       </div>
+      {globalConfirmation !== null && <RiskConfirmation open title={globalConfirmation.title}
+        description={t('panel.systemImpact').replace('{running}', String(impact.running ?? t('panel.systemUnknown'))).replace('{live}', String(impact.live ?? t('panel.systemUnknown'))).replace('{chars}', String(globalConfirmation.template.content.length))}
+        acknowledgeLabel={t('panel.systemAcknowledge')} acknowledged={acknowledged} disabled={confirmBusy}
+        onAcknowledgedChange={setAcknowledged} cancelLabel={t('panel.addCancel')} closeLabel={t('panel.systemClose')} confirmLabel={t('panel.systemConfirm')}
+        onCancel={() => { if (!confirmBusy) setGlobalConfirmation(null) }}
+        onConfirm={() => { if (!acknowledged || confirmBusy) return; setConfirmBusy(true); void globalConfirmation.action().finally(() => { setConfirmBusy(false); setGlobalConfirmation(null) }) }} />}
+      {editingId !== null && templates.some(row => row.id === editingId && row.scope === 'global' && row.system_prompt) && <div className={css.notice}>{t('panel.systemEditWarn')}</div>}
       {notice !== null && <div className={css.notice} role="status">{notice}</div>}
       {manualShare !== null && (
         <section className={css.importForm} data-prompt-share-manual aria-label={t('panel.shareManualTitle')}>
@@ -1229,26 +1288,17 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
         />
       </div>
       <div className={css.tabsBar}>
-        <button
-          type="button"
-          className={effectiveTab === 'global' ? `${css.tab} ${css.tabActive}` : css.tab}
-          onClick={() => { setActiveTab('global') }}
-        >
-          {t('panel.global')}
-        </button>
-        <button
-          type="button"
-          className={effectiveTab === 'session' ? `${css.tab} ${css.tabActive}` : css.tab}
-          onClick={() => { setActiveTab('session') }}
-          disabled={sessionId === null}
-        >
-          {t('panel.session')}
-        </button>
-        {visibleCategories.map((cat) => {
+        {(['global', 'session'] as const).map(scopeGroup => <div key={scopeGroup} className={css.scopeGroup} data-scope={scopeGroup}>
+          <button type="button" className={effectiveTab === scopeGroup ? `${css.tab} ${css.tabActive}` : css.tab}
+            onClick={() => { setGlobalOnly(false); setActiveTab(scopeGroup) }} disabled={scopeGroup === 'session' && sessionId === null}>
+            {scopeGroup === 'global' ? <IconGlobeOutlineRegular size={12} /> : <IconNewChatOutlineRegular size={12} />}
+            {t(scopeGroup === 'global' ? 'panel.global' : 'panel.session')}
+          </button>
+        {visibleCategories.filter(cat => cat.scope === scopeGroup).map((cat) => {
           const key = `cat:${cat.scope}:${cat.name}`
           return (
-            <span key={key} className={effectiveTab === key ? `${css.tab} ${css.tabActive}` : css.tab}>
-              <button type="button" onClick={() => { setActiveTab(key) }}>
+            <span key={key} data-scope={cat.scope} className={effectiveTab === key ? `${css.tab} ${css.tabActive}` : css.tab}>
+              <button type="button" onClick={() => { setGlobalOnly(false); setActiveTab(key) }}>
                 {cat.name}
               </button>
               <button
@@ -1277,22 +1327,25 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
             </span>
           )
         })}
-        <button
-          type="button"
-          className={css.tabAdd}
-          aria-label={t('panel.newCategory')}
-          title={t('panel.newCategory')}
-          onClick={() => { setShowCatForm(v => !v) }}
-        >
-          <IconPlusOutlineRegular size={10} />
-        </button>
+        </div>)}
+        <button type="button" className={css.tabAdd} aria-label={t('panel.newCategory')} title={t('panel.newCategory')}
+          onClick={() => { setShowCatForm(v => !v) }}><IconPlusOutlineRegular size={10} /></button>
       </div>
       {showCatForm && (
         <CategoryForm
+          key={sessionId ?? 'no-session'}
           sessionId={sessionId}
           createCategory={createCategory}
           t={t}
-          onDone={() => { setShowCatForm(false); void loadCategories() }}
+          onCancel={() => { setShowCatForm(false) }}
+          onDone={(category) => {
+            setCategories(current => [...current.filter(cat => !(cat.scope === category.scope && cat.session_id === category.session_id && cat.name === category.name)), category])
+            setShowCatForm(false)
+            setQuery('')
+            setGlobalOnly(false)
+            setActiveTab(`cat:${category.scope}:${category.name}`)
+            void loadCategories()
+          }}
         />
       )}
       <div className={css.body}>
@@ -1316,11 +1369,17 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
         )}
         {tabRows.length > 0 && (
           <div className={css.group} onDragOver={(e) => { e.preventDefault() }}>
-            {tabRows.map(row => renderTemplateRow(row))}
+            {needle === '' ? tabRows.map(row => renderTemplateRow(row)) : [...new Set(tabRows.map(row => row.scope + ':' + (row.category ?? '')))].map(key => {
+              const group = tabRows.filter(row => row.scope + ':' + (row.category ?? '') === key)
+              const first = group[0]!
+              return <section key={key}><div className={css.searchGroup} data-scope={first.scope}>{first.category ?? t(first.scope === 'global' ? 'panel.global' : 'panel.session')}</div>{group.map(row => renderTemplateRow(row))}</section>
+            })}
           </div>
         )}
         {showAdd && (
           <TemplateForm
+            key={sessionId ?? 'no-session'}
+            initial={{ name: '', content: '', scope: activeCategory?.scope ?? (effectiveTab === 'session' ? 'session' : 'global'), category: activeCategory?.name ?? null }}
             sessionId={sessionId}
             categories={visibleCategories}
             t={t}

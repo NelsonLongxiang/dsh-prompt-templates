@@ -33,6 +33,7 @@
     "docs/evolution-default.md",
     "docs/library-packs.md",
     "docs/self-check.md",
+    "docs/system-prompt.md",
     "packs"
   ],
   "dsh": {

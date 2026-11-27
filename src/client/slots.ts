@@ -53,6 +53,8 @@ export interface PromptPanelFace {
   }) => Promise<TemplateActionResult>
   /** Patch one template by id (name/content/description/position/category/inject facts). */
   update: (id: string, request: {
+    system_prompt?: boolean
+    confirm_global?: boolean
     name?: string
     content?: string
     description?: string | null
@@ -63,7 +65,7 @@ export interface PromptPanelFace {
     mode?: TemplateInjectMode
   }) => Promise<TemplateActionResult>
   /** Delete one template by id. */
-  remove: (id: string) => Promise<TemplateActionResult>
+  remove: (id: string, confirmGlobal?: boolean) => Promise<TemplateActionResult>
   /** Promote one session template to the global partition. */
   makeGlobal: (id: string) => Promise<TemplateActionResult>
   /** The persisted panel placement; null = the right-anchored default. */
