@@ -109,6 +109,10 @@ export const SELF_CHECK_SQL = `CREATE TABLE IF NOT EXISTS self_check_log (
 );
 CREATE INDEX IF NOT EXISTS self_check_log_session ON self_check_log (session_id, seq)`
 
+/** Additive waiting register: one row per session, including the first suppressed stop. */
+export const SELF_CHECK_WAIT_SQL = `CREATE TABLE IF NOT EXISTS self_check_wait (session_id TEXT PRIMARY KEY, wake TEXT NOT NULL, deadline TEXT NOT NULL, deadline_at INTEGER, ticket TEXT, suppressed INTEGER NOT NULL DEFAULT 0, suppressed_at TEXT)`
+export interface SelfCheckWait { wake: string; deadline: string; deadline_at: number | null; ticket: string | null; suppressed: boolean; suppressed_at: string | null }
+
 /** One log row (wire shape). */
 export interface SelfCheckRow {
   readonly seq: number
@@ -135,6 +139,21 @@ export class SelfCheckLog {
   list(sessionId: string, limit = 100): SelfCheckRow[] {
     const rows = this.#db.prepare('SELECT * FROM (SELECT * FROM self_check_log WHERE session_id = ? ORDER BY seq DESC LIMIT ?) ORDER BY seq').all(sessionId, Math.max(1, Math.min(500, Math.trunc(limit)))) as unknown as Array<Omit<SelfCheckRow, 'present'> & { present: number | null }>
     return rows.map(r => ({ ...r, present: r.present === null ? null : r.present === 1 }))
+  }
+  waiting(sessionId: string): SelfCheckWait | undefined {
+    const row = this.#db.prepare('SELECT wake, deadline, deadline_at, ticket, suppressed, suppressed_at FROM self_check_wait WHERE session_id = ?').get(sessionId) as (Omit<SelfCheckWait, 'suppressed'> & { suppressed: number }) | undefined
+    return row ? { ...row, suppressed: row.suppressed === 1 } : undefined
+  }
+  setWaiting(sessionId: string, wake: string, deadline: string, ticket: string | null): void {
+    // Free-form legacy deadlines remain externally wakeable; never guess a timezone or create a schedule.
+    const instant = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})$/.test(deadline) ? Date.parse(deadline) : NaN
+    this.#db.prepare('INSERT INTO self_check_wait (session_id, wake, deadline, deadline_at, ticket, suppressed, suppressed_at) VALUES (?, ?, ?, ?, ?, 0, NULL) ON CONFLICT(session_id) DO UPDATE SET wake=excluded.wake, deadline=excluded.deadline, deadline_at=excluded.deadline_at, ticket=excluded.ticket, suppressed=0, suppressed_at=NULL')
+      .run(sessionId, wake, deadline, Number.isFinite(instant) ? instant : null, ticket)
+  }
+  clearWaiting(sessionId: string): void { this.#db.prepare('DELETE FROM self_check_wait WHERE session_id = ?').run(sessionId) }
+  suppressWaiting(sessionId: string): void {
+    if (this.waiting(sessionId)?.suppressed) return
+    this.#db.prepare('UPDATE self_check_wait SET suppressed = 1, suppressed_at = ? WHERE session_id = ? AND suppressed = 0').run(new Date().toISOString(), sessionId)
   }
   recordCard(row: Omit<SelfCheckCardRow, 'seq' | 'at'>): void {
     this.#db.prepare('INSERT INTO self_check_cards (session_id, turn, kind, card, reason, at) VALUES (?, ?, ?, ?, ?, ?)')
@@ -202,6 +221,7 @@ interface SessionState { injectedTurn?: number; concluded?: boolean; cardDue?: b
 type AgentLike = { id: unknown; session: { header: { id: unknown }; snapshotEvents?: () => ReadonlyArray<{ type?: string; data?: { source?: { kind?: string } } }> }; steer?: (message: UserMessage) => void }
 type AgentsLike = { roots?: () => unknown[]; turnBoundaryOf?: (session: unknown) => { openTurnStartSeq: number | null } }
 type GoalsLike = { get?: (agent: unknown) => { phase?: string } | undefined }
+const WAIT_READS = new Set(['read', 'glob', 'grep', 'get_goal', 'a2a_status', 'a2a_tasks', 'a2a_whoami', 'a2a_teams', 'job_output', 'job_list', 'working_directory'])
 /** a2a's optional read (dispatcher, PT-4 addition 1): whether a session holds an open a2a ticket. */
 type A2aTicketsLike = { hasOpenTicket?: (sessionId: string) => boolean | undefined }
 
@@ -245,16 +265,46 @@ export function isHumanSource(source: unknown): boolean {
  */
 export function registerSelfCheck(ctx: Context, store: () => TemplateStore, enabled: () => boolean): { log: () => SelfCheckLog } {
   const sessions = new Map<string, SessionState>()
+  const nested = new Map<symbol, { sessionId: string; maintenanceOnly: boolean; wakesWaiting: boolean }>()
   const state = (id: string): SessionState => { let s = sessions.get(id); if (s === undefined) { s = { actions: 0 }; sessions.set(id, s) } return s }
   const log = (): SelfCheckLog => store().selfChecks
 
   // "New action since the last check" is counted from tool results in the session (R104).
   ctx.on('tools/result', (exec: unknown) => {
     try {
-      const agent = (exec as { agent?: AgentLike }).agent
-      if (agent !== undefined) state(String(agent.session.header.id)).actions++
+      if (!enabled()) return
+      const { agent, name, parent, token } = exec as { agent?: AgentLike; name?: string; parent?: symbol; token?: symbol }
+      if (!agent) return
+      const sessionId = String(agent.session.header.id)
+      let maintenance = !!name && /^(selfcheck_|lesson_)/.test(name)
+      let wakesWaiting = !!name && !maintenance && !WAIT_READS.has(name)
+      if (name === 'run_code' && typeof token === 'symbol') {
+        const children = nested.get(token)
+        nested.delete(token)
+        maintenance = children?.sessionId === sessionId && children.maintenanceOnly
+        if (children?.sessionId === sessionId) wakesWaiting = children.wakesWaiting
+      }
+      if (typeof parent === 'symbol') {
+        const previous = nested.get(parent)
+        nested.set(parent, { sessionId, maintenanceOnly: maintenance && (!previous || (previous.sessionId === sessionId && previous.maintenanceOnly)), wakesWaiting: wakesWaiting || (previous?.sessionId === sessionId && previous.wakesWaiting) })
+        if (nested.size > 1024) nested.delete(nested.keys().next().value!)
+      }
+      // Do not inspect untrusted program text. Only observed same-session native children can prove a maintenance-only wrapper.
+      if (maintenance) return
+      state(sessionId).actions++
+      if (wakesWaiting) log().clearWaiting(sessionId)
     } catch { /* never in the way */ }
   })
+
+  ctx.on('session/event' as never, ((session: { header?: { id?: unknown }; id?: unknown }, event: { type?: string; data?: { source?: unknown } }) => {
+    if (!enabled() || event.type !== 'user/message') return
+    const source = event.data?.source as { kind?: string } | undefined
+    if (!isHumanSource(source) && source?.kind !== 'a2a' && source?.kind !== 'schedule') return
+    try {
+      const id = String(session.header?.id ?? session.id ?? '')
+      if (id) { log().clearWaiting(id); state(id).actions++ }
+    } catch { /* external input is never blocked by diagnostic persistence */ }
+  }) as never)
 
   let faultReported = false
   ctx.on('agent/turn-stopping', async ({ agent: a, turn, signal }: { agent: unknown; turn: number; signal: AbortSignal }) => {
@@ -267,6 +317,12 @@ export function registerSelfCheck(ctx: Context, store: () => TemplateStore, enab
       const work = workInHand(ctx.get('goals' as never) as GoalsLike | undefined, ctx.get('a2aTickets' as never) as A2aTicketsLike | undefined, agent, sessionId)
       if (!work.open) return
       const s = state(sessionId)
+      const waiting = log().waiting(sessionId)
+      const present = ownerPresent(agents, agent)
+      if (waiting) {
+        if (present || (waiting.deadline_at !== null && Date.now() >= waiting.deadline_at)) { log().clearWaiting(sessionId); s.actions++ }
+        else { log().suppressWaiting(sessionId); return }
+      }
       if (s.injectedTurn === turn) {
         // Asked this turn already: it may stop now; without a conclusion that stop is an orphan.
         if (s.concluded !== true && s.orphanLogged !== true) {
@@ -276,7 +332,6 @@ export function registerSelfCheck(ctx: Context, store: () => TemplateStore, enab
         return
       }
       if (s.actionsAtCheck !== undefined && s.actions <= s.actionsAtCheck) return
-      const present = ownerPresent(agents, agent)
       const domain = domainOf(store(), sessionId)
       s.actionsAtCheck = s.actions
       // The ticket source is noted when a2a gave no answer (it was judged on the goal alone).
@@ -369,6 +424,8 @@ export function registerSelfCheck(ctx: Context, store: () => TemplateStore, enab
         if (noCard !== '' && [...noCard].length > NO_CARD_MAX) return { ok: false, code: 'card', error: `no_card is 1..${String(NO_CARD_MAX)} characters` }
         const s = state(sessionId)
         if (s.cardDue === true && card === '' && noCard === '') return { ok: false, code: 'card', error: 'you hold an a2a ticket: give the decision card you submitted this round (card) or one sentence why none (no_card)' }
+        if (conclusion === 'waiting') log().setWaiting(sessionId, row.wake!, row.deadline!, row.ticket)
+        else log().clearWaiting(sessionId)
         s.concluded = true
         const turn = s.injectedTurn ?? null
         log().record({ session_id: sessionId, turn, kind: 'concluded', present: null, conclusion, ...row })

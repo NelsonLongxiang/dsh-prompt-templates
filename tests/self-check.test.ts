@@ -31,13 +31,15 @@ async function harness(o: { enabled?: boolean; goal?: string; ticket?: boolean; 
   const fiber = await ctx.plugin(host, { dbPath, ...(o.enabled === undefined ? {} : { selfCheck: { enabled: o.enabled } }) })
   const stop = async (turn: number, aborted = false) => { const ac = new AbortController(); if (aborted) ac.abort(); await ctx.serial('agent/turn-stopping' as never, { agent, turn, signal: ac.signal } as never) }
   const act = () => ctx.emit('tools/result' as never, { agent } as never, {} as never)
+  const result = (name: string, rootCallId = 'r', parent?: symbol, token?: symbol) => ctx.emit('tools/result' as never, { agent, name, rootCallId, ...(parent ? { parent } : {}), ...(token ? { token } : {}) } as never, {} as never)
+  const wake = (kind: string) => ctx.emit('session/event' as never, agent.session as never, { type: 'user/message', data: { source: { kind } } } as never)
   const call = async (name: string, args: Record<string, unknown>, as = agent) => await tools.get(name)!.execute(args, { agent: as })
   const read = () => { const s = new TemplateStore(dbPath); try { return s.selfChecks.list('sess-1') } finally { s.close() } }
   const humanTurn = () => { events.length = 0; events.push({ type: 'turn', data: { source: { kind: 'x' } } } as never, { type: 'user/message', data: { source: { kind: 'user' } } }) }
   const a2aTurn = () => { events.length = 0; events.push({ type: 'turn', data: { source: { kind: 'x' } } } as never, { type: 'user/message', data: { source: { kind: 'a2a' } } }) }
   const preStep = async (turn: number) => await ctx.waterfall('agent/pre-step' as never, { agent, messages: [{ role: 'user' }], turn, step: 1, signal: new AbortController().signal } as never, (async () => ({ kind: 'enter', messages: [{ id: 'downstream' }] })) as never) as unknown as { messages: Steered[] }
   const dispose = async () => { await fiber.dispose(); rmSync(dir, { recursive: true, force: true }) }
-  return { ctx, goal, steered, tools, stop, act, call, read, humanTurn, a2aTurn, preStep, dispose, dbPath }
+  return { ctx, goal, steered, tools, stop, act, result, wake, call, read, humanTurn, a2aTurn, preStep, dispose, dbPath }
 }
 
 test('the fixed part fits its budget', () => {
@@ -80,6 +82,85 @@ test('fires at the stop boundary only with an active goal and a new action; once
     h.act(); await h.stop(5)
     assert.equal(h.steered.filter(m => m.source?.kind === 'prompt-template-selfcheck').length, 2)
   } finally { await h.dispose() }
+})
+
+test('#100 maintenance tool results, including nested run_code, do not feed another self-check',async()=>{
+  const h=await harness()
+  try{
+    h.a2aTurn();h.act();await h.stop(1)
+    await h.call('selfcheck_conclude',{conclusion:'continue'})
+    for(const name of ['selfcheck_conclude','selfcheck_write','lesson_none','lesson_write','lesson_timeline'])h.result(name)
+    const nested=Symbol('nested')
+    h.result('lesson_none','nested',nested);h.result('selfcheck_conclude','nested',nested);h.result('run_code','nested',undefined,nested)
+    await h.stop(2)
+    assert.equal(h.steered.filter(m=>m.source?.kind==='prompt-template-selfcheck').length,1)
+    const mixed=Symbol('mixed')
+    h.result('read','mixed',mixed);h.result('lesson_none','mixed',mixed);h.result('run_code','mixed',undefined,mixed);await h.stop(3)
+    assert.equal(h.steered.filter(m=>m.source?.kind==='prompt-template-selfcheck').length,2)
+  }finally{await h.dispose()}
+})
+
+test('#100 waiting suppresses automatic self-check once until external input or business work',async()=>{
+  const h=await harness()
+  try{
+    h.a2aTurn();h.act();await h.stop(1)
+    assert.equal((await h.call('selfcheck_conclude',{conclusion:'waiting',wake:'a2a receipt',deadline:'2099-01-01T00:00:00Z',ticket:'direct-test'})).ok,true)
+    for(let turn=2;turn<7;turn++){
+      const root=Symbol('read-only composite')
+      h.result('get_goal','read-only',root);h.result('run_code','read-only',undefined,root);await h.stop(turn)
+    }
+    assert.equal(h.steered.filter(m=>m.source?.kind==='prompt-template-selfcheck').length,1)
+    const store=new TemplateStore(h.dbPath)
+    try{const waiting=store.selfChecks.waiting('sess-1');assert.equal(waiting?.suppressed,true);assert.ok(waiting?.suppressed_at);const revision=store.revision();store.selfChecks.suppressWaiting('sess-1');assert.deepEqual(store.selfChecks.waiting('sess-1'),waiting);assert.equal(store.revision(),revision,'suppression record is written once, not once per automatic round')}finally{store.close()}
+    h.wake('goal');h.wake('prompt-template-selfcheck');await h.stop(7)
+    assert.equal(h.steered.filter(m=>m.source?.kind==='prompt-template-selfcheck').length,1)
+    h.wake('a2a');h.act();await h.stop(8)
+    assert.equal(h.steered.filter(m=>m.source?.kind==='prompt-template-selfcheck').length,2)
+    await h.call('selfcheck_conclude',{conclusion:'waiting',wake:'schedule',deadline:'2099-01-01T00:00:00Z'})
+    h.result('write');await h.stop(9)
+    assert.equal(h.steered.filter(m=>m.source?.kind==='prompt-template-selfcheck').length,3)
+  }finally{await h.dispose()}
+})
+
+test('#100 unknown run_code bodies remain business actions; only proven maintenance-only wrappers are excluded',async()=>{
+  const h=await harness()
+  try{
+    h.act();h.a2aTurn();await h.stop(1)
+    await h.call('selfcheck_conclude',{conclusion:'waiting',wake:'a2a',deadline:'2099-01-01T00:00:00Z'})
+    h.result('run_code','pure',undefined,Symbol('pure'))
+    await h.stop(2)
+    assert.equal(h.steered.filter(m=>m.source?.kind==='prompt-template-selfcheck').length,2,'a wrapper without observed children may perform IO and must not be classified as maintenance')
+  }finally{await h.dispose()}
+})
+
+test('#100 waiting register survives reopen and malformed deadline remains externally wakeable',async()=>{
+  const h=await harness()
+  try{
+    h.act();h.a2aTurn();await h.stop(1)
+    await h.call('selfcheck_conclude',{conclusion:'waiting',wake:'a2a',deadline:'今晚'})
+    const s=new TemplateStore(h.dbPath)
+    try{assert.equal(s.selfChecks.waiting('sess-1')?.deadline_at,null);assert.equal(s.selfChecks.waiting('sess-1')?.wake,'a2a');assert.equal(s.selfChecks.waiting('other'),undefined)}finally{s.close()}
+    await h.stop(2);assert.equal(h.steered.filter(m=>m.source?.kind==='prompt-template-selfcheck').length,1)
+    h.wake('schedule');await h.stop(3)
+    assert.equal(h.steered.filter(m=>m.source?.kind==='prompt-template-selfcheck').length,2)
+  }finally{await h.dispose()}
+})
+
+test('#100 deadline, human input, and real schedule wake self-check without changing goal phase',async()=>{
+  const h=await harness()
+  try{
+    h.act();h.a2aTurn();await h.stop(1)
+    await h.call('selfcheck_conclude',{conclusion:'waiting',wake:'schedule',deadline:'2000-01-01T00:00:00Z'})
+    h.act();await h.stop(2)
+    assert.equal(h.steered.filter(m=>m.source?.kind==='prompt-template-selfcheck').length,2)
+    await h.call('selfcheck_conclude',{conclusion:'waiting',wake:'owner',deadline:'2099-01-01T00:00:00Z'})
+    h.humanTurn();h.wake('user');h.act();await h.stop(3)
+    assert.ok((await h.preStep(4)).messages.some(m=>m.source?.present===true))
+    await h.call('selfcheck_conclude',{conclusion:'waiting',wake:'schedule',deadline:'2099-01-01T00:00:00Z'})
+    h.a2aTurn();h.wake('schedule');h.act();await h.stop(4)
+    assert.equal(h.goal.phase,'active','plugin must not pause/resume/disarm goals behind human admission')
+    assert.equal(h.steered.filter(m=>m.source?.kind==='prompt-template-selfcheck').length,3)
+  }finally{await h.dispose()}
 })
 
 test('owner present: the turn is never extended; the one check rides along at the next step. Absent: steered, full', async () => {
