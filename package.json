@@ -34,6 +34,7 @@
     "docs/library-packs.md",
     "docs/self-check.md",
     "docs/system-prompt.md",
+    "docs/workshop-sync.md",
     "packs"
   ],
   "dsh": {

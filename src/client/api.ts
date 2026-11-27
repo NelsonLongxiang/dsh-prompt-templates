@@ -5,7 +5,7 @@
  * consumes, so callers never see transport details.
  */
 
-import type { CategoryView, InjectionHistoryEntry, InjectionStatusView, TemplateInjectMode, TemplateView, SystemPromptPreview } from '../types.ts'
+import type { CategoryView, InjectionHistoryEntry, InjectionStatusView, TemplateInjectMode, TemplateView, SystemPromptPreview, WorkshopSyncStatus } from '../types.ts'
 
 /** Business error carried by a failed call. */
 export interface TemplateError {
@@ -336,6 +336,18 @@ export async function getSystemPromptPreview(sessionId: string): Promise<SystemP
     const view = body.preview
     if (!view || view.session_id !== sessionId || typeof view.text !== 'string' || view.chars !== view.text.length || !Array.isArray(view.lessons) || !['ready','disabled','empty','unavailable'].includes(view.status)) return null
     return view
+  } catch { return null }
+}
+
+/** Read-only observation; never starts a synchronization run. */
+export async function getWorkshopSyncStatus(): Promise<WorkshopSyncStatus | null> {
+  try {
+    const response = await fetch(`${BASE}/workshop-sync`, { cache: 'no-store' })
+    if (!response.ok) return null
+    const body = await response.json() as WorkshopSyncStatus
+    if (typeof body.enabled !== 'boolean' || typeof body.running !== 'boolean') return null
+    if (body.last && (!Array.isArray(body.last.added) || !Array.isArray(body.last.updated) || !Array.isArray(body.last.skipped))) return null
+    return body
   } catch { return null }
 }
 

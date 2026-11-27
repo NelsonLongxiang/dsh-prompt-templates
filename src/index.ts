@@ -53,6 +53,8 @@ import { INTERVENTION_SOURCES, MANUAL_METHODS, contentDigest, type InterventionS
 import { registerCast, type PromptTemplatesService } from './cast.ts'
 import { registerEvidenceReady } from './evidence-ready.ts'
 import { registerSelfCheck } from './self-check.ts'
+import { registerWorkshopSync } from './workshop-sync-host.ts'
+import { DEFAULT_WORKSHOP_SYNC, type WorkshopSyncConfig } from './workshop-sync.ts'
 import { BUILTIN_LESSON_TYPES, DEFAULT_LESSONS_CONFIG, attachVerdict, decideLessonType, lessonChurn, lessonsOf, openCardRound, pinLesson, registerLessons, type LessonsConfig } from './lessons.ts'
 
 declare module '@deepseek-ai/cordis' {
@@ -92,6 +94,7 @@ export interface Config {
   readonly selfCheck?: { readonly enabled?: boolean }
   /** 体会 (docs/spec-lesson-inject.md): digest prompts, lesson_write and situational recall; on by default (owner decision 2026-11-21), `enabled: false` turns it off. */
   readonly systemPrompt?: Partial<SystemPromptConfig> | Volatile<Partial<SystemPromptConfig>>
+  readonly workshopSync?: Partial<WorkshopSyncConfig> | Volatile<Partial<WorkshopSyncConfig>>
   readonly lessons?: Partial<LessonsConfig>
 }
 
@@ -105,6 +108,12 @@ export const Config: s<Config> = s.object({
     lessonDepth: s.natural().min(0).max(20).default(0),
     maxChars: s.natural().min(500).max(20000).default(4000),
     order: s.natural().min(200).max(10199).default(9000),
+  }).default({}).volatile(),
+  workshopSync: s.object({
+    enabled: s.boolean().default(false),
+    repository: s.string().default(''),
+    intervalMinutes: s.natural().min(1).max(1440).default(30),
+    timeoutMs: s.natural().min(1000).max(120000).default(30000),
   }).default({}).volatile(),
   eventInject: s.object({
     enabled: s.boolean().default(DEFAULT_EVENT_INJECT_CONFIG.enabled),
@@ -229,6 +238,12 @@ export function apply(ctx: Context, config: Config): void {
     }
     return view
   }
+  const workshopConfig = () => {
+    const raw = config.workshopSync
+    const value = raw && 'get' in raw ? raw.get() : raw
+    return { ...DEFAULT_WORKSHOP_SYNC, ...value }
+  }
+  const workshop = registerWorkshopSync(ctx, client, workshopConfig)
   registerLessons(ctx, client, () => lessonsConfig, () => systemReady() && systemConfig().lessonDepth > 0)
   registerEventInject(ctx, eventInjectConfig, () => client().events, () => client().interventions)
   // #81: evidence-ready reminders at the next actionable step; off with casting (cast.enabled).
@@ -263,7 +278,7 @@ export function apply(ctx: Context, config: Config): void {
           const agents = registry?.list?.()
           return agents ? { running: agents.filter(a => a.status === 'running').length, live: agents.length } : { running: null, live: null }
         } catch { return { running: null, live: null } }
-      }, previewSystem) },
+      }, previewSystem, workshop.status) },
     }), 'prompt-templates: api routes')
   }
   registerRoutes()
@@ -286,6 +301,7 @@ async function handle(
   runtime?: () => RuntimeView,
   systemImpact?: () => { running: number | null; live: number | null },
   systemPreview?: (sessionId: string) => SystemPromptPreview,
+  workshopStatus?: ReturnType<typeof registerWorkshopSync>['status'],
 ): Promise<void> {
   const url = new URL(req.url ?? '/', 'http://x')
   const segments = url.pathname.split('/').filter(part => part !== '')
@@ -297,6 +313,10 @@ async function handle(
   const rest = segments.slice(3)
   const method = req.method ?? 'GET'
   try {
+    if (resource === 'workshop-sync' && rest.length === 0) {
+      if (method !== 'GET') return json(res, 405, errorBody('method-not-allowed', method))
+      return json(res, 200, workshopStatus?.() ?? { enabled: false, running: false, last: null })
+    }
     if (resource === 'system-preview' && rest.length === 0) {
       if (method !== 'GET') return json(res, 405, errorBody('method-not-allowed', method))
       const sessions = url.searchParams.getAll('session_id')

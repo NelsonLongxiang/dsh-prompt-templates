@@ -214,6 +214,18 @@ test('system preview reads only own contribution without changing templates or c
   })
 })
 
+test('workshop sync defaults off; GET is read-only and POST cannot trigger it',async()=>{
+  await withHost({}, {when:'before'}, async h=>{
+    assert.equal(existsSync(h.dbPath),false)
+    const url='/plugins/dsh-prompt-templates/workshop-sync'
+    const r=await request(h.handler(),'GET',url)
+    assert.equal(r.status,200);assert.deepEqual(r.body,{enabled:false,running:false,last:null})
+    assert.equal(existsSync(h.dbPath),false,'status must not initialize the store when disabled')
+    assert.equal((await request(h.handler(),'POST',url,{})).status,405)
+    assert.equal(existsSync(h.dbPath),false)
+  })
+})
+
 test('Config schema fills the inject defaults deployments may omit', () => {
   const decoded = host.Config({ dbPath: '/tmp/prompt-templates.sqlite3' }) as {
     dbPath?: string
