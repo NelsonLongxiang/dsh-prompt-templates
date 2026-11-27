@@ -6,13 +6,19 @@
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 subject="${1:-release}"
+# Opt-in requires a complete pinned identity; never infer it from a merge title.
+identity_args=()
+if [ "$#" -gt 1 ]; then
+  [ "$#" = 3 ] && [ "$2" = --merged-prepared ] && [ -n "$3" ] || { echo 'usage: release.sh "subject" [--merged-prepared identity.json]' >&2; exit 2; }
+  identity_args=("$3")
+fi
 dry="${DRYRUN:-0}"
 guard() { node scripts/release-guard.mjs "$@"; }
 guard master
 [ "$dry" = 0 ] || [ "$dry" = 1 ] || { echo "DRYRUN must be 0 or 1" >&2; exit 2; }
 
 echo "== release identity + tag preflight =="
-plan=$(guard inspect "$subject")
+plan=$(guard inspect "$subject" "${identity_args[@]}")
 ver=$(guard field "$plan" version)
 notes=$(guard field "$plan" notes)
 mode=$(guard field "$plan" mode)

@@ -72,13 +72,13 @@ function fixture(t: { after(fn: () => void): void }, space = false, removedGuard
   }
   const commit = (title = message, files = ['package.json', 'docs/release-notes-' + version + '.md']) => { git('add', ...files); git('commit', '-qm', title); return git('rev-parse', 'HEAD') }
   const run = (extra: Record<string, string> = {}, releaseSubject = subject) => {
-    const r = spawnSync('bash', ['scripts/release.sh', releaseSubject], { cwd: root, env: { ...env, ...extra }, encoding: 'utf8', timeout: 45_000, maxBuffer: 2 * 1024 * 1024 })
+    const r = spawnSync('bash', ['scripts/release.sh', releaseSubject, ...(extra.RELEASE_FIXTURE_IDENTITY ? ['--merged-prepared', extra.RELEASE_FIXTURE_IDENTITY] : [])], { cwd: root, env: { ...env, ...extra }, encoding: 'utf8', timeout: 45_000, maxBuffer: 2 * 1024 * 1024 })
     assert.equal(r.error, undefined, r.error?.message)
     return r
   }
   const calls = () => existsSync(trace) ? readFileSync(trace, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line)) as Array<{ tool: string; args: string[]; cwd: string }> : []
   const pubs = () => calls().filter(c => c.tool === 'npm' && c.args[0] === 'publish')
-  return { root, remote, base, git, prepare, commit, run, calls, pubs, dir }
+  return { root, remote, base, git, prepare, commit, run, calls, pubs, dir, env }
 }
 
 for (const detached of [false, true]) test('rejects ' + (detached ? 'detached HEAD' : 'feature branch') + ' before verify or publish', t => {
@@ -359,3 +359,115 @@ for (const releaseSubject of [' synthetic release', 'synthetic release ']) {
     assertIdentityRejected(f, result, f.base, f.base)
   })
 }
+
+// All URLs below are intercepted before execution; the fixture remote stays local.
+function mergedFixture(t: Parameters<typeof fixture>[0], kind = 'normal') {
+  const f = fixture(t)
+  f.git('checkout', '-qb', 'prepared')
+  f.prepare()
+  if (kind === 'dependency') {
+    const path = join(f.root, 'package.json'), pkg = JSON.parse(readFileSync(path, 'utf8'))
+    pkg.dependencies = { 'not-installed': '1.0.0' }; writeFileSync(path, JSON.stringify(pkg) + '\n')
+  }
+  if (kind === 'foreign') writeFileSync(join(f.root, 'foreign.txt'), 'not release material')
+  const prepared = f.commit('arbitrary prepared PR title', kind === 'foreign' ? ['package.json', 'docs/release-notes-1.1.0.md', 'foreign.txt'] : undefined)
+  f.git('checkout', '-q', 'master')
+  const tree = f.git('rev-parse', prepared + '^{tree}')
+  let parents = ['-p', f.base, '-p', prepared]
+  if (kind === 'swapped') parents = ['-p', prepared, '-p', f.base]
+  if (kind === 'three') {
+    const third = f.git('commit-tree', tree, '-p', f.base, '-m', 'third fixture parent')
+    parents.push('-p', third)
+  }
+  const merged = f.git('commit-tree', tree, ...parents, '-m', 'Merge pull request #7: not the single-parent release title')
+  f.git('reset', '--hard', merged); f.git('push', '-q', 'github', 'master')
+  const identity = { schema: 1, repository: 'example/templates', pullRequest: 7, expectedHead: merged, expectedTree: tree,
+    baseHead: f.base, preparedHead: prepared, preparedTree: tree, version }
+  const pr = { number: 7, state: 'closed', merged: true, merge_commit_sha: merged,
+    base: { ref: 'master', sha: f.base, repo: { full_name: identity.repository } },
+    head: { sha: prepared, repo: { full_name: identity.repository } } }
+  const path = join(f.root, 'tmp', 'identity.json'), prPath = join(f.dir, 'pr.json')
+  mkdirSync(join(f.root, 'tmp')); writeFileSync(path, JSON.stringify(identity)); writeFileSync(prPath, JSON.stringify(pr))
+  // Per-fixture URL rewrite keeps every Git transport local while preserving the declared repository identity.
+  f.git('remote', 'set-url', 'github', 'https://github.com/example/templates.git')
+  f.git('config', 'url.' + f.remote + '.insteadOf', 'https://github.com/example/templates.git')
+  const flags = { RELEASE_FIXTURE_IDENTITY: path, RELEASE_FIXTURE_PR: prPath }
+  const save = () => { writeFileSync(path, JSON.stringify(identity)); writeFileSync(prPath, JSON.stringify(pr)) }
+  return { ...f, identity, pr, path, prPath, flags, save, merged, prepared, tree }
+}
+
+test('merged-prepared opt-in verifies pinned PR graph and preserves the merge through the entire offline release', t => {
+  const f = mergedFixture(t), r = f.run(f.flags)
+  assert.equal(r.status, 0, r.stdout + r.stderr)
+  assert.equal(f.git('rev-parse', 'HEAD'), f.merged)
+  assert.equal(f.git('rev-parse', 'v1.1.0^{commit}'), f.merged)
+  assert.equal(f.pubs().length, 2)
+  assert.ok(f.calls().filter(c => c.tool === 'gh' && c.args[0] === 'api').length >= 4)
+})
+test('merged-prepared dryrun verifies but never commits publishes pushes or tags', t => {
+  const f = mergedFixture(t), before = remoteMaster(f), r = f.run({ ...f.flags, DRYRUN: '1' })
+  assert.equal(r.status, 0, r.stdout + r.stderr); assert.equal(f.pubs().length, 0)
+  assert.equal(f.git('rev-parse', 'HEAD'), before); assert.equal(remoteMaster(f), before)
+  assert.equal(f.git('tag'), '')
+})
+test('merge without explicit pinned identity still fails the original exact title gate', t => {
+  const f = mergedFixture(t), r = f.run({ DRYRUN: '1' })
+  assert.equal(r.status, 2); assert.match(r.stderr, /exact current-version release commit and subject/)
+  assert.equal(f.calls().length, 0)
+})
+for (const [name, mutate] of [
+  ['head', (f: ReturnType<typeof mergedFixture>) => { f.identity.expectedHead = f.base }],
+  ['tree', (f: ReturnType<typeof mergedFixture>) => { f.identity.expectedTree = f.base }],
+  ['prepared tree', (f: ReturnType<typeof mergedFixture>) => { f.identity.preparedTree = f.base }],
+  ['base parent', (f: ReturnType<typeof mergedFixture>) => { f.identity.baseHead = f.prepared }],
+  ['version', (f: ReturnType<typeof mergedFixture>) => { f.identity.version = '2.0.0' }],
+  ['PR number', (f: ReturnType<typeof mergedFixture>) => { f.pr.number = 8 }],
+  ['PR target branch', (f: ReturnType<typeof mergedFixture>) => { f.pr.base.ref = 'feature' }],
+  ['short object id', (f: ReturnType<typeof mergedFixture>) => { f.identity.expectedHead = f.merged.slice(0, 12) }],
+  ['PR not merged', (f: ReturnType<typeof mergedFixture>) => { f.pr.merged = false }],
+  ['PR head', (f: ReturnType<typeof mergedFixture>) => { f.pr.head.sha = f.base }],
+  ['PR repository', (f: ReturnType<typeof mergedFixture>) => { f.pr.base.repo.full_name = 'other/repo' }],
+  ['PR merge', (f: ReturnType<typeof mergedFixture>) => { f.pr.merge_commit_sha = f.base }],
+  ['PR base', (f: ReturnType<typeof mergedFixture>) => { f.pr.base.sha = f.prepared }],
+] as const) test('rejects merged-prepared wrong ' + name + ' before verify/publish', t => {
+  const f = mergedFixture(t); mutate(f); f.save()
+  const r = f.run({ ...f.flags, DRYRUN: '1' })
+  assert.equal(r.status, 2, r.stdout + r.stderr); assert.equal(f.pubs().length, 0)
+  assert.equal(f.calls().some(c => c.tool === 'pnpm'), false)
+})
+for (const kind of ['foreign', 'dependency', 'swapped', 'three']) test('rejects merged-prepared ' + kind + ' graph/material before verification', t => {
+  const f = mergedFixture(t, kind), r = f.run({ ...f.flags, DRYRUN: '1' })
+  assert.equal(r.status, 2, r.stdout + r.stderr); assert.equal(f.calls().some(c => c.tool === 'pnpm'), false)
+  assert.equal(f.pubs().length, 0)
+})
+for (const drift of ['head', 'remote', 'file', 'tag']) test('merged-prepared stops ' + drift + ' drift during verify before publish', t => {
+  const f = mergedFixture(t), r = f.run({ ...f.flags, RELEASE_FIXTURE_MUTATE: drift })
+  assert.equal(r.status, 2, r.stdout + r.stderr); assert.equal(f.pubs().length, 0)
+})
+test('merged-prepared API failure is closed before verification', t => {
+  const f = mergedFixture(t), r = f.run({ ...f.flags, RELEASE_FIXTURE_PR_EXIT: '1' })
+  assert.equal(r.status, 2); assert.equal(f.calls().some(c => c.tool === 'pnpm'), false)
+})
+test('merged-prepared rejects dirty allowed inputs and conflicting tags before verify', t => {
+  const f = mergedFixture(t); writeFileSync(join(f.root, 'docs/release-notes-1.1.0.md'), 'changed notes')
+  assert.equal(f.run({ ...f.flags, DRYRUN: '1' }).status, 2)
+  f.git('restore', 'docs/release-notes-1.1.0.md'); f.git('tag', 'v1.1.0', f.base)
+  assert.equal(f.run({ ...f.flags, DRYRUN: '1' }).status, 2)
+  assert.equal(f.calls().some(c => c.tool === 'pnpm'), false)
+})
+
+test('merged-prepared missing/extra identity fields and malformed API fail closed', t => {
+  const f = mergedFixture(t)
+  writeFileSync(f.path, JSON.stringify({ ...f.identity, skip: true }))
+  assert.equal(f.run({ ...f.flags, DRYRUN: '1' }).status, 2)
+  writeFileSync(f.path, JSON.stringify({ schema: 1 })); assert.equal(f.run({ ...f.flags, DRYRUN: '1' }).status, 2)
+  f.save(); writeFileSync(f.prPath, 'not-json'); assert.equal(f.run({ ...f.flags, DRYRUN: '1' }).status, 2)
+  assert.equal(f.calls().some(c => c.tool === 'pnpm'), false)
+})
+test('merged-prepared a real but unrelated single-parent commit cannot opt in', t => {
+  const f = mergedFixture(t)
+  f.git('reset', '--hard', f.prepared); f.git('push', '-q', '--force', 'github', 'master')
+  f.identity.expectedHead = f.prepared; f.save()
+  assert.equal(f.run({ ...f.flags, DRYRUN: '1' }).status, 2)
+  assert.equal(f.calls().some(c => c.tool === 'pnpm'), false)
+})
