@@ -6,6 +6,7 @@ import React from 'react'
 import type { ReactElement, ReactNode } from 'react'
 import type { TemplateLibraryFace } from '../src/client/slots.ts'
 import type { TemplateView } from '../src/types.ts'
+import { createLibrarySelection } from '../src/client/library-state.ts'
 
 register('./dsh-contract-loader.mjs', import.meta.url)
 const { TemplateLibrary } = await import('../src/client/Library.tsx')
@@ -54,9 +55,11 @@ for (const kind of ['template', 'category'] as const) {
       useRef(initial: unknown) { const key = index++; if (!(key in slots)) slots[key] = { current: initial }; return slots[key] },
       useCallback(callback: unknown) { return callback },
       useEffect() {},
+      useSyncExternalStore(_subscribe: unknown, read: () => unknown) { return read() },
     }
     const noop = async () => ({ ok: true as const, value: undefined })
     const face: TemplateLibraryFace = {
+      librarySelection: createLibrarySelection(),
       refresh: async () => [template], refreshCategories: async () => [{ name: 'synthetic category', scope: 'global', session_id: null }],
       createCategory: noop, removeCategory: noop, create: noop, update: noop, remove: noop, makeGlobal: noop,
       insert() {}, send() {}, interject() {}, injectStatus: async () => null, injectionHistory: async () => [],

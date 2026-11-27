@@ -8,6 +8,7 @@
  * entry carries the panel toggle plus that target attachment.
  */
 
+import type { LibrarySelection } from './library-state.ts'
 import type { EventEpisodeWire, EventPolicyPatch, EventPolicyWire, TemplateActionResult } from './api.ts'
 import type { CategoryView, InjectionHistoryEntry, InjectionStatusView, TemplateInjectMode, TemplateView } from '../types.ts'
 
@@ -24,6 +25,8 @@ export interface PanelPosition {
 
 /** The panel's injected business face: CRUD verbs + refresh + insert + placement. */
 export interface PromptPanelFace {
+  /** Shared, persisted per-session tab selection across both surfaces. */
+  librarySelection: LibrarySelection
   /** Load the full template set (global + every session's); the component groups rows. */
   refresh: () => Promise<TemplateView[]>
   /** Load every user category tab (global + all sessions'). */
@@ -136,7 +139,7 @@ export interface PromptPanelToggleFace {
  */
 export type TemplateLibraryFace = Pick<
   PromptPanelFace,
-  | 'refresh' | 'refreshCategories' | 'createCategory' | 'removeCategory'
+  | 'librarySelection' | 'refresh' | 'refreshCategories' | 'createCategory' | 'removeCategory'
   | 'create' | 'update' | 'remove' | 'makeGlobal'
   | 'insert' | 'send' | 'interject' | 'injectStatus' | 'injectionHistory'
   | 'eventPolicies' | 'setEventMaster' | 'updateEventPolicy' | 'eventEpisodes'

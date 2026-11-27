@@ -28,14 +28,14 @@ export type PromptTabProps =
 export function PromptTab(props: PromptTabProps) {
   const {
     sessionId, refresh, refreshCategories, createCategory, removeCategory,
-    create, update, remove, makeGlobal,
+    create, update, remove, makeGlobal, librarySelection,
     insert, send, interject, injectStatus, injectionHistory, eventPolicies, setEventMaster, updateEventPolicy, eventEpisodes, t,
   } = props
   return (
     <div className={css.tabBody} data-prompt-tab>
       <TemplateLibrary
         sessionId={sessionId}
-        face={{ refresh, refreshCategories, createCategory, removeCategory, create, update, remove, makeGlobal, insert, send, interject, injectStatus, injectionHistory, eventPolicies, setEventMaster, updateEventPolicy, eventEpisodes }}
+        face={{ librarySelection, refresh, refreshCategories, createCategory, removeCategory, create, update, remove, makeGlobal, insert, send, interject, injectStatus, injectionHistory, eventPolicies, setEventMaster, updateEventPolicy, eventEpisodes }}
         t={t}
       />
     </div>

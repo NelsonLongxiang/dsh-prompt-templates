@@ -47,6 +47,7 @@ import { LessonKnot, type LessonKnotFace } from './LessonKnot.tsx'
 import { LessonRibbon, type LessonRibbonFace } from './LessonRibbon.tsx'
 import { RibbonBus } from './ribbon.ts'
 import { PromptTab } from './PromptTab.tsx'
+import { createLibrarySelection } from './library-state.ts'
 import { PROMPT_TEMPLATES_ID, promptTemplatesTabDefinition } from './tab.ts'
 import { createPromptPanelPrefsStore, createPromptPanelStore } from './store.ts'
 
@@ -107,6 +108,7 @@ export function apply(ctx: ClientContext): void {
   // the component groups rows — a server-side session_id filter would hide
   // the global rows (their session_id is NULL and never matches).
   const verbs: TemplateLibraryFace = {
+    librarySelection: createLibrarySelection(),
     refresh: listTemplates,
     refreshCategories: listCategories,
     createCategory: (request) => {

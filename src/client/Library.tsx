@@ -7,7 +7,8 @@
  * passed in as `sessionId` (the overlay reads it from its composer-entry
  * attachment; the sidebar tab reads it straight from its standard props).
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { resolveLibraryTab } from './library-state.ts'
 import { IconCopyOutlineRegular, IconDownloadOutlineRegular, IconEditOutlineRegular, IconGlobeOutlineRegular, IconPlusOutlineRegular, IconQueueOutlineRegular, IconSendOutlineRegular, IconTrashOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { CategoryView, InjectionHistoryEntry, InjectionStatusView, TemplateInjectMode, TemplateView } from '../types.ts'
 import type { EventEpisodeWire, EventPolicyWire } from './api.ts'
@@ -543,7 +544,12 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
   const [editingId, setEditingId] = useState<string | null>(null)
   // Active tab: 'global' / 'session' (the implicit default tabs) or
   // `cat:<scope>:<name>` for one user-created category tab.
-  const [activeTab, setActiveTab] = useState<string>('global')
+  const selection = face.librarySelection
+  const readTab = useCallback(() => selection.tab(sessionId), [selection, sessionId])
+  const activeTab = useSyncExternalStore(selection.subscribe, readTab)
+  const setActiveTab = useCallback((tab: string) => selection.select(sessionId, tab), [selection, sessionId])
+  // A visit counts as recent use, even when the user does not change tabs.
+  useEffect(() => { selection.select(sessionId, selection.tab(sessionId)) }, [selection, sessionId])
   const [showCatForm, setShowCatForm] = useState(false)
   // Row drag-sort: the id currently being dragged (HTML5 DnD).
   const dragRowRef = useRef<string | null>(null)
@@ -903,7 +909,7 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
     ? visibleCategories.find((cat) => `cat:${cat.scope}:${cat.name}` === activeTab)
     : undefined
   // A deleted (or no-longer-visible) category tab falls back to 全局.
-  const effectiveTab = activeTab.startsWith('cat:') && activeCategory === undefined ? 'global' : activeTab
+  const effectiveTab = resolveLibraryTab(activeTab, visibleCategories, sessionId)
 
   // With no query the active tab owns the list. A query searches across every
   // category, but never leaks another session's private templates.
