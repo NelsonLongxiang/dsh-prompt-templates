@@ -9,6 +9,7 @@
  */
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { resolveLibraryTab } from './library-state.ts'
+import { planTemplateReorder } from './reorder.ts'
 import { RiskConfirmation, IconNewChatOutlineRegular, IconCopyOutlineRegular, IconDownloadOutlineRegular, IconEditOutlineRegular, IconGlobeOutlineRegular, IconPlusOutlineRegular, IconQueueOutlineRegular, IconSendOutlineRegular, IconTrashOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { CategoryView, InjectionHistoryEntry, InjectionStatusView, TemplateInjectMode, TemplateView } from '../types.ts'
 import type { EventEpisodeWire, EventPolicyWire } from './api.ts'
@@ -899,14 +900,14 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
       const result = await update(template.id, { system_prompt: !template.system_prompt, ...(template.scope === 'global' ? { confirm_global: true } : {}) })
       if (result.ok) { setRowError(null); await load() } else setRowError(result.error.message)
     }
-    if (template.scope === 'global') requestGlobal(template, t(template.system_prompt ? 'panel.systemOffTitle' : 'panel.systemOnTitle').replace('{name}', template.name), change)
+    if (template.scope === 'global') requestGlobal(template, t(template.system_prompt ? 'panel.systemOffTitle' : 'panel.systemOnTitle').replace('{name}', () => template.name), change)
     else await change()
   }
 
   const handleRemove = useCallback(async (id: string) => {
     const template = templates.find(row => row.id === id)
     if (template?.scope === 'global' && template.system_prompt) {
-      requestGlobal(template, t('panel.systemDeleteTitle').replace('{name}', template.name), async () => { const result = await remove(id, true); if (result.ok) await load(); else setRowError(result.error.message) })
+      requestGlobal(template, t('panel.systemDeleteTitle').replace('{name}', () => template.name), async () => { const result = await remove(id, true); if (result.ok) await load(); else setRowError(result.error.message) })
       return
     }
     const result = await remove(id)
@@ -970,14 +971,13 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
     const draggedId = dragRowRef.current
     dragRowRef.current = null
     if (draggedId === null || draggedId === targetId) return
-    const ids = tabRows.map((row) => row.id)
-    const from = ids.indexOf(draggedId)
-    const to = ids.indexOf(targetId)
-    if (from === -1 || to === -1) return
-    ids.splice(to, 0, ...ids.splice(from, 1))
+    const plan = planTemplateReorder(tabRows, draggedId, targetId)
+    if (plan.blocked) { setRowError(t('panel.systemReorderBlocked')); return }
     void (async () => {
-      await Promise.all(ids.map((id, index) => update(id, { position: index })))
-      void load()
+      const results = await Promise.all(plan.changes.map(change => update(change.id, { position: change.position })))
+      const failure = results.find(result => !result.ok)
+      setRowError(failure && !failure.ok ? failure.error.message : null)
+      await load()
     })()
   }
 
@@ -1108,7 +1108,7 @@ export function TemplateLibrary({ sessionId, face, t, header, headerExtra }: Tem
       {globalConfirmation !== null && <RiskConfirmation open title={globalConfirmation.title}
         description={t('panel.systemImpact').replace('{running}', String(impact.running ?? t('panel.systemUnknown'))).replace('{live}', String(impact.live ?? t('panel.systemUnknown'))).replace('{chars}', String(globalConfirmation.template.content.length))}
         acknowledgeLabel={t('panel.systemAcknowledge')} acknowledged={acknowledged} disabled={confirmBusy}
-        onAcknowledgedChange={setAcknowledged} cancelLabel={t('panel.addCancel')} closeLabel={t('panel.addCancel')} confirmLabel={t('panel.systemConfirm')}
+        onAcknowledgedChange={setAcknowledged} cancelLabel={t('panel.addCancel')} closeLabel={t('panel.systemClose')} confirmLabel={t('panel.systemConfirm')}
         onCancel={() => { if (!confirmBusy) setGlobalConfirmation(null) }}
         onConfirm={() => { if (!acknowledged || confirmBusy) return; setConfirmBusy(true); void globalConfirmation.action().finally(() => { setConfirmBusy(false); setGlobalConfirmation(null) }) }} />}
       {editingId !== null && templates.some(row => row.id === editingId && row.scope === 'global' && row.system_prompt) && <div className={css.notice}>{t('panel.systemEditWarn')}</div>}

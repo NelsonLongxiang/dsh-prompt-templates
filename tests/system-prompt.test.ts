@@ -69,6 +69,22 @@ test('actual Cordis registration binds scoped Agent session and disposes provide
   await fiber.dispose();assert.equal(variables.size,0);assert.equal(sections.length,0)
 })
 
+test('live config reconciliation enables from false, changes order, and disables without a plugin restart',async t=>{
+  const store=memory(t),ctx=new Context(),sections:any[]=[];const vars=new Map<string,unknown>()
+  ctx.provide('systemPrompt',{section:(s:unknown)=>{sections.push(s);return()=>{sections.splice(sections.indexOf(s),1)}},variable:(n:string,p:unknown)=>{vars.set(n,p);return()=>{vars.delete(n)}}})
+  let cfg={...DEFAULT_SYSTEM_PROMPT}
+  let ready:()=>boolean=()=>false
+  const fiber=ctx.plugin((c:Context)=>{ready=registerSystemPrompt(c,()=>store,()=>cfg)})
+  await fiber;assert.equal(ready(),false);assert.equal(sections.length,0)
+  cfg={...cfg,enabled:true};ctx.emit('settings/document-updated','test',1)
+  assert.equal(ready(),true);assert.equal(sections.length,1);assert.equal(sections[0].order,9000)
+  cfg={...cfg,order:9100};ctx.emit('settings/document-updated','test',2)
+  assert.equal(sections.length,1);assert.equal(sections[0].order,9100);assert.equal(vars.size,1)
+  cfg={...cfg,enabled:false};ctx.emit('settings/document-updated','test',3)
+  assert.equal(ready(),false);assert.equal(sections.length,0);assert.equal(vars.size,0)
+  await fiber.dispose()
+})
+
 test('v12 new records default off; global transitions and edits cannot bypass confirmation', t => {
   const store = memory(t)
   const row = store.create({ name:'global',content:'old' })

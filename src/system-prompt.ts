@@ -100,23 +100,33 @@ type PromptService = {
 /** Late-service registration; resolve the session from the real scoped Agent, never scope.toString(). */
 export function registerSystemPrompt(ctx: Context, store: () => TemplateStore, config: () => SystemPromptConfig): () => boolean {
   const provider = createSystemPromptProvider(store, config)
-  let registered = false
+  let registered: PromptService | undefined
+  let order: number | undefined
+  let dispose: (() => void) | undefined
   const register = () => {
     const service = ctx.get('systemPrompt') as PromptService | undefined
-    if (!service || registered || !config().enabled) return
+    const cfg = config()
+    if (registered === service && order === cfg.order && cfg.enabled) return
+    dispose?.(); dispose = undefined; registered = undefined; order = undefined
+    if (!service || !cfg.enabled) return
     if (typeof service.variable !== 'function' || typeof service.section !== 'function') {
       console.error('[dsh-prompt-templates] systemPrompt lacks section/variable support; system opt-in unavailable')
       return
     }
-    registered = true
-    ctx.effect(() => service.variable('prompt_templates', context => {
+    const removeVariable = service.variable('prompt_templates', context => {
       const c = context as { scope?: { session?: { header?: { id?: unknown } } } }
       const id = c?.scope?.session?.header?.id
       return provider(typeof id === 'string' ? id : undefined)
-    }), 'prompt-templates: system variable')
-    ctx.effect(() => service.section({ name: 'prompt-templates:system', order: config().order, text: '{{prompt_templates}}' }), 'prompt-templates: system section')
+    })
+    try {
+      const removeSection = service.section({ name: 'prompt-templates:system', order: cfg.order, text: '{{prompt_templates}}' })
+      dispose = () => { removeSection(); removeVariable() }
+    } catch (error) { removeVariable(); throw error }
+    registered = service; order = cfg.order
   }
+  ctx.effect(() => () => { dispose?.(); registered = undefined }, 'prompt-templates: live system providers')
   register()
   ctx.on('internal/service', name => { if (name === 'systemPrompt') register() })
-  return () => registered && config().enabled
+  ctx.on('settings/document-updated', () => { register() })
+  return () => { register(); return registered !== undefined && config().enabled }
 }

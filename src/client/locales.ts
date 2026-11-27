@@ -2,6 +2,8 @@
 
 /** Chinese dictionary. */
 export const zh = {
+  'panel.systemClose': '关闭',
+  'panel.systemReorderBlocked': '排序会影响已常驻的全局模板，请先经确认关闭它的常驻开关，再调整顺序。',
   'panel.systemSwitch': "加入系统提示词",
   'panel.systemShort': "常驻",
   'panel.systemGlobalHint': "加入所有会话的系统提示词：点击后需确认",
@@ -139,6 +141,8 @@ export const zh = {
 
 /** English dictionary. */
 export const en = {
+  'panel.systemClose': 'Close',
+  'panel.systemReorderBlocked': 'Reordering affects an active global system prompt. Disable it with confirmation before reordering.',
   'panel.systemSwitch': "Include in system prompt",
   'panel.systemShort': "System",
   'panel.systemGlobalHint': "Include in every session: confirmation required",

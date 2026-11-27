@@ -7,6 +7,7 @@ import type { TemplateView } from '../src/types.ts'
 import { createLibrarySelection } from '../src/client/library-state.ts'
 import type { TemplateLibraryFace } from '../src/client/slots.ts'
 import { en, zh } from '../src/client/locales.ts'
+import { planTemplateReorder } from '../src/client/reorder.ts'
 register('./dsh-contract-loader.mjs', import.meta.url)
 const { TemplateLibrary } = await import('../src/client/Library.tsx')
 type Element = ReactElement<Record<string, any>>
@@ -18,7 +19,7 @@ function elements(node: unknown): Element[] {
 
 for (const scope of ['global','session'] as const) {
   test(scope+' system opt-in executes only after its required acknowledgement',async t=>{
-    const template:TemplateView={id:'synthetic',name:'safe',content:'body',scope,session_id:scope==='session'?'a':null,description:null,position:0,category:null,inject_enabled:false,inject_every:null,mode:'inject',created_at:'2026',updated_at:'2026'}
+    const template:TemplateView={id:'synthetic',name:'safe$&$1',content:'body',scope,session_id:scope==='session'?'a':null,description:null,position:0,category:null,inject_enabled:false,inject_every:null,mode:'inject',created_at:'2026',updated_at:'2026'}
     const dispatcher=(React as any).__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED.ReactCurrentDispatcher
     const before=dispatcher.current,slots:unknown[]=[];let index=0
     dispatcher.current={
@@ -40,6 +41,7 @@ for (const scope of ['global','session'] as const) {
     }
     assert.deepEqual(changes,[])
     let risk=elements(render()).find(e=>typeof e.type==='function'&&e.type.name==='RiskConfirmation');assert.ok(risk)
+    assert.ok(risk.props.title.includes('safe$&$1'));
     assert.equal(risk.props.acknowledged,false);risk.props.onConfirm();assert.deepEqual(changes,[])
     risk.props.onCancel();assert.equal(elements(render()).some(e=>typeof e.type==='function'&&e.type.name==='RiskConfirmation'),false)
     row.props.onToggleSystem(template);risk=elements(render()).find(e=>typeof e.type==='function'&&e.type.name==='RiskConfirmation');assert.ok(risk)
@@ -48,6 +50,13 @@ for (const scope of ['global','session'] as const) {
     assert.deepEqual(changes,[{id:'synthetic',patch:{system_prompt:true,confirm_global:true}}])
   })
 }
+
+test('reordering active globals is rejected before any write; ordinary plans remain complete', () => {
+  const base = { content:'x',description:null,category:null,session_id:null,inject_enabled:false,inject_every:null,mode:'inject',created_at:'2026',updated_at:'2026',scope:'global' } as const
+  const a = { ...base,id:'a',name:'A',position:0 }, b = { ...base,id:'b',name:'B',position:1,system_prompt:true }
+  assert.deepEqual(planTemplateReorder([a,b],'a','b'),{blocked:true,changes:[]})
+  assert.deepEqual(planTemplateReorder([a,{...b,system_prompt:false}],'a','b'),{blocked:false,changes:[{id:'b',position:0},{id:'a',position:1}]})
+})
 
 test('system risk copy is available in both dictionaries with matching placeholders',()=>{
   for(const key of Object.keys(zh).filter(key=>key.startsWith('panel.system')) as Array<keyof typeof zh>){

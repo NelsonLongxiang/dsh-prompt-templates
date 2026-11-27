@@ -12,7 +12,7 @@ systemPrompt:
   order: 9000
 ```
 
-`lessonDepth` is0–20 per approved lesson type;0 disables the lesson contribution. `maxChars` is500–20000 and includes plugin labels/header; `order` is200–10199. Existing templates migrate to schema12 with `system_prompt = 0`. No template becomes active just because the plugin is upgraded.
+`lessonDepth` is0–20 per approved lesson type;0 disables the lesson contribution. `maxChars` is500–20000 and includes plugin labels/header; `order` is200–10199. The four fields are one declared volatile configuration object exposed in the host settings form: changes take effect on the next model assembly without a plugin restart, including enable-from-off and section order. Plain startup `--patch` file edits are not a live settings write. Existing templates migrate to schema12 with `system_prompt = 0`. No template becomes active just because the plugin is upgraded.
 
 ## Owner switches and risk gate
 

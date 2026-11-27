@@ -33,7 +33,7 @@
  * @module dsh-prompt-templates
  */
 
-import type { Context } from '@deepseek-ai/cordis'
+import type { Context, Volatile } from '@deepseek-ai/cordis'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { readFileSync } from 'node:fs'
 import s from '@deepseek-ai/schemastery'
@@ -91,7 +91,7 @@ export interface Config {
   /** Observer phase 2: the wrap-up self-check and its two tools; on by default (owner decision 2026-11-21), `enabled: false` turns it off. */
   readonly selfCheck?: { readonly enabled?: boolean }
   /** 体会 (docs/spec-lesson-inject.md): digest prompts, lesson_write and situational recall; on by default (owner decision 2026-11-21), `enabled: false` turns it off. */
-  readonly systemPrompt?: Partial<SystemPromptConfig>
+  readonly systemPrompt?: Partial<SystemPromptConfig> | Volatile<Partial<SystemPromptConfig>>
   readonly lessons?: Partial<LessonsConfig>
 }
 
@@ -105,7 +105,7 @@ export const Config: s<Config> = s.object({
     lessonDepth: s.natural().min(0).max(20).default(0),
     maxChars: s.natural().min(500).max(20000).default(4000),
     order: s.natural().min(200).max(10199).default(9000),
-  }).default({}),
+  }).default({}).volatile(),
   eventInject: s.object({
     enabled: s.boolean().default(DEFAULT_EVENT_INJECT_CONFIG.enabled),
     maxPerTurn: s.natural().min(1).default(DEFAULT_EVENT_INJECT_CONFIG.maxPerTurn),
@@ -212,7 +212,10 @@ export function apply(ctx: Context, config: Config): void {
   registerSelfCheck(ctx, client, () => config.selfCheck?.enabled !== false)
   // 体会 (docs/spec-lesson-inject.md, phase 1): on unless lessons.enabled is false (owner decision 2026-11-21).
   const lessonsConfig: LessonsConfig = { ...DEFAULT_LESSONS_CONFIG, ...config.lessons }
-  const systemConfig = (): SystemPromptConfig => ({ ...DEFAULT_SYSTEM_PROMPT, ...config.systemPrompt })
+  const systemConfig = (): SystemPromptConfig => {
+    const value = config.systemPrompt
+    return { ...DEFAULT_SYSTEM_PROMPT, ...(value && 'get' in value ? value.get() : value) }
+  }
   const systemReady = registerSystemPrompt(ctx, client, systemConfig)
   registerLessons(ctx, client, () => lessonsConfig, () => systemReady() && systemConfig().lessonDepth > 0)
   registerEventInject(ctx, eventInjectConfig, () => client().events, () => client().interventions)
