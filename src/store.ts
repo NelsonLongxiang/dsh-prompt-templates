@@ -25,7 +25,7 @@ import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { EVENT_MASTER_SQL, EVENT_REPEAT_AFTER_SQL, EVENT_SCHEMA_SQL, EventStore, seedDefaultPolicies } from './event-store.ts'
 import { INTERVENTIONS_SQL, InterventionLog, contentDigest } from './interventions.ts'
-import { SELF_CHECK_CARDS_SQL, SELF_CHECK_SQL, SelfCheckLog } from './self-check.ts'
+import { SELF_CHECK_CARDS_SQL, SELF_CHECK_SQL, SELF_CHECK_WAIT_SQL, SelfCheckLog } from './self-check.ts'
 import { LESSONS_SQL, LESSON_EVIDENCE_SQL, LESSON_HITS_SQL, LESSON_OUTCOME_SQL, LESSON_TYPES_SQL, LessonStore } from './lessons.ts'
 import { EVIDENCE_READY_SQL, EvidenceReadyStore } from './evidence-ready.ts'
 import { CAST_QUEUE_SQL, CastQueueStore } from './cast-queue.ts'
@@ -209,6 +209,7 @@ export class TemplateStore {
       this.db.exec(LESSON_HITS_SQL)
       this.db.exec(LESSON_EVIDENCE_SQL)
       this.db.exec(SELF_CHECK_CARDS_SQL)
+      this.db.exec(SELF_CHECK_WAIT_SQL)
       this.db.exec(LESSON_OUTCOME_SQL)
       this.db.exec(EVIDENCE_READY_SQL)
       // #902 S1: the durable cast queue, and the basis a cast was given (guarded: added once, older builds ignore both).
