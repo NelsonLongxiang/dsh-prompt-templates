@@ -186,6 +186,34 @@ test('system prompts: route enforces global confirmation, session switch and pro
   })
 })
 
+test('system preview GET never initializes a database and validates session/method', async () => {
+  await withHost({}, {when:'before'}, async handle => {
+    const route='/plugins/dsh-prompt-templates/system-preview'
+    assert.equal(existsSync(handle.dbPath),false)
+    for (const suffix of ['', '?session_id=', '?session_id=a&session_id=b']) assert.equal((await request(handle.handler(),'GET',route+suffix)).status,400)
+    assert.equal((await request(handle.handler(),'POST',route+'?session_id=a',{})).status,405)
+    const result=await request(handle.handler(),'GET',route+'?session_id=a')
+    assert.equal(result.status,200);assert.equal(result.body.preview.status,'unavailable')
+    assert.equal(result.body.preview.error_code,'store-uninitialized')
+    assert.equal(existsSync(handle.dbPath),false)
+  })
+})
+
+test('system preview reads only own contribution without changing templates or configuration', async () => {
+  await withHost({systemPrompt:{enabled:true}}, {when:'before'}, async handle => {
+    handle.ctx.provide('systemPrompt',{variable:()=>()=>{},section:()=>()=>{}})
+    const h=handle.handler()
+    const row=(await request(h,'POST',TEMPLATES,{name:'preview own',content:'PRIVATE_A',scope:'session',session_id:'a'})).body.template
+    await request(h,'PATCH',TEMPLATES+'/'+row.id,{system_prompt:true})
+    const before=await request(h,'GET',TEMPLATES)
+    const own=(await request(h,'GET','/plugins/dsh-prompt-templates/system-preview?session_id=a')).body.preview
+    const other=(await request(h,'GET','/plugins/dsh-prompt-templates/system-preview?session_id=b')).body.preview
+    assert.match(own.text,/PRIVATE_A/);assert.equal(own.chars,own.text.length);assert.equal(own.status,'ready')
+    assert.equal(other.text,'');assert.equal(other.status,'empty')
+    assert.deepEqual((await request(h,'GET',TEMPLATES)).body,before.body)
+  })
+})
+
 test('Config schema fills the inject defaults deployments may omit', () => {
   const decoded = host.Config({ dbPath: '/tmp/prompt-templates.sqlite3' }) as {
     dbPath?: string

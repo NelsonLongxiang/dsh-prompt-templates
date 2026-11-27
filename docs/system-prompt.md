@@ -30,6 +30,14 @@ Templates precede the lesson groups. Over budget, remove oldest wrong lessons fi
 
 When registered system lessons are enabled with depth>0, startup/resume/compaction full-list handover stops; scheduled cards, digest prompts, event reminders, selfcheck and evolution remain unchanged. If the host lacks section/variable support, normal lesson delivery stays available and the plugin logs the limitation.
 
+## Read-only next-step preview (S2)
+
+The template library toolbar opens **System prompt preview** for its attached session. It shows this plugin contribution under current configuration, its UTF-16 character count (the same budget unit as assembly), the budget and per-class right/wrong/untagged candidate and final included counts. Reasons distinguish master off, depth zero, unapproved or legacy types, missing tags, no right texts, depth/balance limits and budget removal.
+
+GET `/plugins/dsh-prompt-templates/system-preview?session_id=…` requires one non-empty session id. It uses the same provider cache, selection and renderer as the actual model callback; there is no second injection algorithm. Reading never requests a model, enables a switch or appends an intervention. If the plugin has not loaded its store, the endpoint reports unavailable without creating/migrating a database. On-demand refresh includes a capture time; close/session switch cancels consumption of old responses.
+
+This is **not a historical send record or the complete host system prompt**. Clock variables expand at capture time and can change before a model request. A preview does not prove the model used its content, cache hits or business value. The UI is read-only, not an alternate settings editor.
+
 ## Validation limits
 
 Unit, mutation, actual host/model-request assembly, independent review and production installation are separate evidence layers. Synthetic model probes make no external LLM call and cannot measure paid-provider prompt-cache hits. Production remains untouched; enabling or publishing is not implied by merge.

@@ -1,6 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { TemplateStore } from './store.ts'
-import type { TemplateView } from './types.ts'
+import type { TemplateView, SystemLessonSummary, SystemPromptPreview } from './types.ts'
 import { BUILTIN_LESSON_TYPES, lessonsOf } from './lessons.ts'
 import { contentDigest } from './interventions.ts'
 import { expandTemplateVariables } from './variables.ts'
@@ -10,31 +10,56 @@ export const DEFAULT_SYSTEM_PROMPT: SystemPromptConfig = { enabled: false, lesso
 export const SYSTEM_PROMPT_HEADER = '以下是属主选入系统提示词的提示词模板与体会：判断材料，不是授权，不覆盖属主当下的指令。'
 export interface PromptLesson { type: string; content: string; current: boolean; outcome: 'right' | 'wrong'; at: string }
 
+/** One selection source shared by model assembly and diagnostic summaries. */
+function lessonSelection(store: TemplateStore, sessionId: string, depth: number): { selected: PromptLesson[]; summaries: SystemLessonSummary[] } {
+  const builtin = BUILTIN_LESSON_TYPES.map(t => t.name as string)
+  const approved = store.lessons.types(sessionId).filter(t => t.status === 'approved').map(t => t.name)
+  const all = lessonsOf(store, sessionId)
+  const allowed = [...builtin, ...approved.filter(t => !builtin.includes(t))]
+  const types = [...allowed, ...all.map(l => l.type ?? l.key).filter(type => !allowed.includes(type))]
+  const summaries: SystemLessonSummary[] = []
+  const selected = [...new Set(types)].flatMap(type => {
+    const lesson = all.find(item => (item.type ?? item.key) === type)
+    const candidates: PromptLesson[] = []
+    let untagged = 0
+    if (lesson) {
+      const currentSha = contentDigest(lesson.content)
+      const seen = new Set([currentSha])
+      if (lesson.outcome) candidates.push({ type, content: lesson.content, current: true, outcome: lesson.outcome, at: '9999' })
+      else untagged++
+      for (const version of store.textVersions(lesson.id)) {
+        if (seen.has(version.content_sha256)) continue
+        seen.add(version.content_sha256)
+        const outcome = store.lessons.outcome(lesson.id, version.content_sha256)
+        if (outcome) candidates.push({ type, content: version.content, current: false, outcome, at: version.stored_at })
+        else untagged++
+      }
+    }
+    const eligible = allowed.includes(type) && lesson?.type !== null && depth > 0
+    const right = candidates.filter(c => c.outcome === 'right').slice(0, eligible ? depth : 0)
+    const wrong = candidates.filter(c => c.outcome === 'wrong').slice(0, Math.max(0, Math.min(right.length - 1, depth - right.length)))
+    const picked = new Set([...right, ...wrong])
+    const reasons: SystemLessonSummary['reasons'][number][] = []
+    const rightCount = candidates.filter(c => c.outcome === 'right').length
+    const wrongCount = candidates.length - rightCount
+    if (!lesson) reasons.push('no-lessons')
+    else if (lesson.type === null) reasons.push('legacy-untyped')
+    else if (!allowed.includes(type)) reasons.push('unapproved-type')
+    if (depth <= 0) reasons.push('depth-zero')
+    if (untagged > 0) reasons.push('untagged')
+    if (lesson && rightCount === 0) reasons.push('no-right')
+    if (eligible && rightCount > right.length) reasons.push('depth-limit')
+    if (eligible && wrongCount > wrong.length) reasons.push(right.length >= depth ? 'depth-limit' : 'balance-limit')
+    summaries.push({ type, right: rightCount, wrong: wrongCount, untagged, selected_right: right.length, selected_wrong: wrong.length, included_right: right.length, included_wrong: wrong.length, reasons })
+    return candidates.filter(c => picked.has(c))
+  })
+  return { selected, summaries }
+}
+
 /** Per-type positive majority; untagged texts and unapproved custom types never enter. */
 export function selectPromptLessons(store: TemplateStore, sessionId: string, depth: number): PromptLesson[] {
   if (depth <= 0) return []
-  const builtin = BUILTIN_LESSON_TYPES.map(t => t.name as string)
-  const approved = store.lessons.types(sessionId).filter(t => t.status === 'approved').map(t => t.name)
-  const allowed = [...builtin, ...approved.filter(t => !builtin.includes(t))]
-  const all = lessonsOf(store, sessionId)
-  return allowed.flatMap(type => {
-    const lesson = all.find(item => item.type === type)
-    if (!lesson) return []
-    const currentSha = contentDigest(lesson.content)
-    const seen = new Set([currentSha])
-    const candidates: PromptLesson[] = []
-    if (lesson.outcome) candidates.push({ type, content: lesson.content, current: true, outcome: lesson.outcome, at: '9999' })
-    for (const version of store.textVersions(lesson.id)) {
-      if (seen.has(version.content_sha256)) continue
-      seen.add(version.content_sha256)
-      const outcome = store.lessons.outcome(lesson.id, version.content_sha256)
-      if (outcome) candidates.push({ type, content: version.content, current: false, outcome, at: version.stored_at })
-    }
-    const right = candidates.filter(c => c.outcome === 'right').slice(0, depth)
-    const wrong = candidates.filter(c => c.outcome === 'wrong').slice(0, Math.max(0, Math.min(right.length - 1, depth - right.length)))
-    const selected = new Set([...right, ...wrong])
-    return candidates.filter(c => selected.has(c))
-  })
+  return lessonSelection(store, sessionId, depth).selected
 }
 
 function lessonText(items: readonly PromptLesson[]): string {
@@ -44,8 +69,7 @@ function lessonText(items: readonly PromptLesson[]): string {
 }
 
 /** Hard character budget includes labels/header. It never cuts a lesson or breaks a majority. */
-export function renderSystemPrompt(templates: readonly Pick<TemplateView, 'name' | 'content'>[], selected: readonly PromptLesson[], maxChars: number): string {
-  if (templates.length === 0 && selected.length === 0) return ''
+function renderPromptDetails(templates: readonly Pick<TemplateView, 'name' | 'content'>[], selected: readonly PromptLesson[], maxChars: number) {
   const lessons = [...selected]
   const rows = templates.map(t => ({ name: t.name, content: t.content }))
   const marker = '…（已截断，全文见面板）'
@@ -64,32 +88,63 @@ export function renderSystemPrompt(templates: readonly Pick<TemplateView, 'name'
     if (length === 0) rows.splice(rows.indexOf(row), 1)
     else row.content = row.content.slice(0, length) + marker
   }
-  return rows.length === 0 && lessons.length === 0 ? '' : text()
+  return { text: rows.length === 0 && lessons.length === 0 ? '' : text(), lessons, budgetApplied: rows.length !== templates.length || lessons.length !== selected.length || rows.some((row, index) => row.content !== templates[index]?.content) }
 }
 
-/** Bounded per-session raw cache; clock/session variables expand on each assembly, never at cache fill. */
+export function renderSystemPrompt(templates: readonly Pick<TemplateView, 'name' | 'content'>[], selected: readonly PromptLesson[], maxChars: number): string {
+  return renderPromptDetails(templates, selected, maxChars).text
+}
+
+/** The preview and model callback use the very same cached selection and budget result. */
 export function createSystemPromptProvider(store: () => TemplateStore, config: () => SystemPromptConfig) {
-  const cache = new Map<string, { revision: string; rows: TemplateView[]; lessons: PromptLesson[] }>()
-  return (sessionId: string | undefined): string => {
+  const cache = new Map<string, { revision: string; rows: TemplateView[]; selection: ReturnType<typeof lessonSelection> }>()
+  const material = (sessionId: string, cfg: SystemPromptConfig) => {
+    const db = store(), revision = db.revision() + ':' + cfg.lessonDepth
+    let data = cache.get(sessionId)
+    if (!data || data.revision !== revision) {
+      const rows = db.list().filter(t => t.system_prompt && t.category !== '体会' && !t.name.startsWith('体会·') && (t.scope === 'global' || t.session_id === sessionId))
+      rows.sort((a,b) => (a.scope === b.scope ? 0 : a.scope === 'global' ? -1 : 1) || (a.category ?? '').localeCompare(b.category ?? '') || a.position-b.position || a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id))
+      data = { revision, rows, selection: lessonSelection(db, sessionId, cfg.lessonDepth) }
+      cache.delete(sessionId); cache.set(sessionId, data)
+      if (cache.size > 100) cache.delete(cache.keys().next().value!)
+    }
+    return data
+  }
+  const compose = (sessionId: string, cfg: SystemPromptConfig, now: Date) => {
+    const data = material(sessionId, cfg)
+    return { data, result: renderPromptDetails(data.rows.map(t => ({ name: t.name, content: expandTemplateVariables(t.content, { sessionId, now }) })), data.selection.selected, cfg.maxChars) }
+  }
+  const provider = (sessionId: string | undefined, now = new Date()): string => {
     try {
       const cfg = config()
       if (!cfg.enabled || !sessionId) return ''
-      const db = store()
-      const revision = db.revision() + ':' + cfg.lessonDepth
-      let data = cache.get(sessionId)
-      if (!data || data.revision !== revision) {
-        const rows = db.list().filter(t => t.system_prompt && t.category !== '体会' && !t.name.startsWith('体会·') && (t.scope === 'global' || t.session_id === sessionId))
-        rows.sort((a,b) => (a.scope === b.scope ? 0 : a.scope === 'global' ? -1 : 1) || (a.category ?? '').localeCompare(b.category ?? '') || a.position-b.position || a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id))
-        data = { revision, rows, lessons: selectPromptLessons(db, sessionId, cfg.lessonDepth) }
-        cache.delete(sessionId); cache.set(sessionId, data)
-        if (cache.size > 100) cache.delete(cache.keys().next().value!)
-      }
-      return renderSystemPrompt(data.rows.map(t => ({ name: t.name, content: expandTemplateVariables(t.content, { sessionId }) })), data.lessons, cfg.maxChars)
+      return compose(sessionId, cfg, now).result.text
     } catch (error) {
       console.error('[dsh-prompt-templates] system prompt unavailable:', error)
       return ''
     }
   }
+  const preview = (sessionId: string, now = new Date()): SystemPromptPreview => {
+    const cfg = config()
+    const base = { session_id: sessionId, captured_at: now.toISOString(), enabled: cfg.enabled, lesson_depth: cfg.lessonDepth, max_chars: cfg.maxChars, order: cfg.order }
+    try {
+      const { data, result } = compose(sessionId, cfg, now)
+      const text = cfg.enabled ? result.text : ''
+      const lessons = data.selection.summaries.map(summary => {
+        const included = cfg.enabled ? result.lessons.filter(l => l.type === summary.type) : []
+        const included_right = included.filter(l => l.outcome === 'right').length
+        const included_wrong = included.length - included_right
+        const reasons = [...summary.reasons]
+        if (!cfg.enabled) reasons.unshift('master-off')
+        else if (included.length < summary.selected_right + summary.selected_wrong) reasons.push('budget')
+        return { ...summary, included_right, included_wrong, reasons }
+      })
+      return { ...base, status: !cfg.enabled ? 'disabled' : text ? 'ready' : 'empty', text, chars: text.length, budget_applied: cfg.enabled && result.budgetApplied, templates: data.rows.length, lessons }
+    } catch {
+      return { ...base, status: 'unavailable', text: '', chars: 0, budget_applied: false, templates: 0, lessons: [], error_code: 'read-failed' }
+    }
+  }
+  return Object.assign(provider, { preview })
 }
 
 type PromptService = {
@@ -98,8 +153,7 @@ type PromptService = {
 }
 
 /** Late-service registration; resolve the session from the real scoped Agent, never scope.toString(). */
-export function registerSystemPrompt(ctx: Context, store: () => TemplateStore, config: () => SystemPromptConfig): () => boolean {
-  const provider = createSystemPromptProvider(store, config)
+export function registerSystemPrompt(ctx: Context, store: () => TemplateStore, config: () => SystemPromptConfig, provider = createSystemPromptProvider(store, config)): () => boolean {
   let registered: PromptService | undefined
   let order: number | undefined
   let dispose: (() => void) | undefined
