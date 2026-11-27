@@ -200,7 +200,9 @@ test('preview distinguishes no-right, depth exclusion and absent types',t=>{
   const p=createSystemPromptProvider(()=>store,()=>({...DEFAULT_SYSTEM_PROMPT,enabled:true,lessonDepth:3}))
   const v=p.preview('a');assert.equal(v.lessons.find(l=>l.type==='收')!.included_right,0)
   assert.ok(v.lessons.find(l=>l.type==='收')!.reasons.includes('no-right'))
-  assert.ok(v.lessons.find(l=>l.type==='放')!.reasons.includes('depth-limit'))
+  const depthReasons=v.lessons.find(l=>l.type==='放')!.reasons
+  assert.ok(depthReasons.includes('depth-limit'))
+  assert.equal(depthReasons.length,new Set(depthReasons).size,'a diagnostic reason is displayed only once per class')
   assert.ok(v.lessons.find(l=>l.type==='找')!.reasons.includes('no-lessons'))
   assert.deepEqual(v.lessons.map(l=>l.type),['收','放','找','落','验','记','续'])
 })

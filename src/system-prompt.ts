@@ -50,7 +50,7 @@ function lessonSelection(store: TemplateStore, sessionId: string, depth: number)
     if (lesson && rightCount === 0) reasons.push('no-right')
     if (eligible && rightCount > right.length) reasons.push('depth-limit')
     if (eligible && wrongCount > wrong.length) reasons.push(right.length >= depth ? 'depth-limit' : 'balance-limit')
-    summaries.push({ type, right: rightCount, wrong: wrongCount, untagged, selected_right: right.length, selected_wrong: wrong.length, included_right: right.length, included_wrong: wrong.length, reasons })
+    summaries.push({ type, right: rightCount, wrong: wrongCount, untagged, selected_right: right.length, selected_wrong: wrong.length, included_right: right.length, included_wrong: wrong.length, reasons: [...new Set(reasons)] })
     return candidates.filter(c => picked.has(c))
   })
   return { selected, summaries }
