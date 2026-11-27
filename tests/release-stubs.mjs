@@ -1,5 +1,5 @@
 /** Offline command doubles used only by release-script.test.ts; never contacts a registry. */
-import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 
@@ -41,4 +41,9 @@ if (tool === 'npm' && args[0] === 'pack') {
 }
 if (tool === 'npm' && args[0] === 'view') console.log('1.1.0')
 if (tool === 'curl') process.stdout.write('200')
+if (tool === 'gh' && args[0] === 'api') {
+  if (args[1] !== 'repos/example/templates/pulls/7' || !process.env.RELEASE_FIXTURE_PR) process.exit(90)
+  if (process.env.RELEASE_FIXTURE_PR_EXIT) process.exit(Number(process.env.RELEASE_FIXTURE_PR_EXIT))
+  process.stdout.write(readFileSync(process.env.RELEASE_FIXTURE_PR, 'utf8'))
+}
 if (tool === 'gh' && args[0] === 'release' && args[1] === 'view') process.exit(1)

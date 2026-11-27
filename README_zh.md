@@ -171,6 +171,8 @@ GitHub Actions（`.github/workflows/verify.yml`）在指向 `master` 的 push / 
 
 首次发布前续接必须传相同主题。主题首尾空白在 verify／提交前直接拒绝，不静默修剪，以免 Git 修剪标题后造成身份不一致。生成发布提交前会核对暂存路径与 Git 规范化后的 blob，提交命令限定为本版两个路径，不吸收外来暂存；启用 CRLF 规范化时仍用原始工作文件摘要检测材料漂移。脚本在 verify／publish 之前核对分支、包身份、允许路径、实际远端 master、本地／远端版本标签剥离后的目标，并在 verify 后重查 HEAD、材料与暂存 blob。冲突即拒绝，不自行切分支、不改写已有标签；远端标签已指向验证提交时无需推送，即使两端标签对象不同。
 
+另获授权的 prepared PR 合并发布可显式使用 `bash scripts/release.sh "<主题>" --merged-prepared <identity.json>`。身份文件须为普通 JSON 文件且恰含：`schema: 1`、`repository`（GitHub owner/repo）、正整数 `pullRequest`、完整 40 位 `expectedHead`/`expectedTree`/`baseHead`/`preparedHead`/`preparedTree`、精确 `version`。当前必须是干净 master 且等于钉住的远端 HEAD/tree；合并提交恰有这两个有序父，准备头须直接基于第一父、只有版本字段和本版新增说明一个提交，准备树与合并结果完全相同。实时 GitHub API 须核同实际已关闭且已合并 PR 的仓库、master 基线、准备头与 merge SHA；不按标题猜测或通用跳过。身份/API 失败在 verify 前停止，后续每个断言重核；本地/远端 tag 冲突仍失败关闭。dryrun 可带同样显式参数。适配合入后仍由统筹另指定唯一发布身份，不自动替换原发布源，也不授权发布。
+
 `DRYRUN=1 bash scripts/release.sh "<主题>"` 只走预检和正常 verify／构建门，不生成发布提交、不 publish／tag／push／创建 GitHub Release。它不是“零落盘”：常规构建与测试临时物仍会生成。
 
 拉回直验只用本次拥有的忽略目录 `tmp/release/run-*/`；EXIT／INT／TERM 仅清理路径与所有权标记均相符的目录，身份不符则保留排查。这是拒绝式预检，不是文件系统沙箱，也不是阻止并发写入的锁。
